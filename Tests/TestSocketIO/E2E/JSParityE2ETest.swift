@@ -754,4 +754,34 @@ final class JSParityE2ETest: XCTestCase {
 
         XCTAssertEqual(attempts, 2, "Opening a second socket must not change the first socket's attempt budget")
     }
+
+    // MARK: connection.ts — "should reopen a cached socket"
+
+    /// With `autoConnect` on, asking for a namespace whose cached socket was
+    /// disconnected re-connects it and hands back the same instance.
+    func testReopenACachedSocket() {
+        let manager = makeManager(.autoConnect(true))
+        let socket = manager.socket(forNamespace: "/")
+
+        let connected = expectation(description: "connect")
+        connected.assertForOverFulfill = false
+        socket.on(clientEvent: .connect) { _, _ in connected.fulfill() }
+        wait(for: [connected], timeout: 5)
+
+        let disconnected = expectation(description: "disconnect")
+        disconnected.assertForOverFulfill = false
+        socket.on(clientEvent: .disconnect) { _, _ in disconnected.fulfill() }
+        socket.disconnect()
+        wait(for: [disconnected], timeout: 5)
+
+        let reconnected = expectation(description: "reconnect")
+        reconnected.assertForOverFulfill = false
+        socket.on(clientEvent: .connect) { _, _ in reconnected.fulfill() }
+
+        let again = manager.socket(forNamespace: "/")
+        XCTAssertTrue(again === socket, "The manager has to hand back the cached socket")
+        XCTAssertTrue(again.active, "Fetching an inactive socket with autoConnect must reactivate it")
+
+        wait(for: [reconnected], timeout: 5)
+    }
 }

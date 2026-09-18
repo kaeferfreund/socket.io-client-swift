@@ -718,6 +718,10 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         assert(nsp.hasPrefix("/"), "forNamespace must have a leading /")
 
         if let socket = nsps[nsp] {
+            // JS-aligned with `Manager.socket()` in `socket.io-client/lib/manager.ts`.
+            if autoConnect && !socket.active {
+                socket.connect()
+            }
             return socket
         }
 

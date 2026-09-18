@@ -273,6 +273,12 @@ io.on("connection", (socket) => {
     }
   });
 
+  // JS parity: `socket.on("false", () => socket.emit("false", false))` from the
+  // JS support server. Pins that a JSON `false` survives the round trip.
+  socket.on("false", () => {
+    socket.emit("false", false);
+  });
+
   // JS parity: `socket.on("echo", (arg, cb) => cb(arg))` from the JS support
   // server. Used by the ported ack scenarios.
   socket.on("echo", (...args) => {

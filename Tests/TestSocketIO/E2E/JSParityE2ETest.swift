@@ -39,6 +39,36 @@ final class JSParityE2ETest: XCTestCase {
         return manager
     }
 
+    /// Connects and waits for it. The handler stays registered, so reconnects
+    /// later in a test do not trip the over-fulfil check.
+    @discardableResult
+    private func connect(_ socket: SocketIOClient) -> SocketIOClient {
+        let connected = expectation(description: "connect \(socket.nsp)")
+        connected.assertForOverFulfill = false
+        socket.on(clientEvent: .connect) { _, _ in connected.fulfill() }
+        socket.connect()
+        wait(for: [connected], timeout: 5)
+
+        return socket
+    }
+
+    /// Waits a fixed interval, for assertions that nothing *further* happens.
+    private func settle(_ seconds: TimeInterval) {
+        let done = expectation(description: "settled")
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { done.fulfill() }
+        wait(for: [done], timeout: seconds + 5)
+    }
+
+    /// Raw socket.io CONNECT frames the server has seen, counted at the
+    /// engine.io layer so duplicates cannot be deduplicated away.
+    private func connectFrameCount() throws -> Int {
+        let (status, body) = try server.admin("/admin/connect-frame-count", method: "GET")
+        XCTAssertEqual(status, 200)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+
+        return json?["count"] as? Int ?? -1
+    }
+
     /// Drops the engine from the server side, the way `StateRecoveryE2ETest`
     /// does. The JS tests call `socket.io.engine.close()`, but a client-initiated
     /// close is a *clean* shutdown here and does not reliably trigger a
@@ -296,5 +326,124 @@ final class JSParityE2ETest: XCTestCase {
             }
             wait(for: [acked], timeout: 5)
         }
+    }
+
+    // MARK: connection.ts — "should work with false"
+
+    func testFalseSurvivesTheRoundTrip() {
+        let socket = connect(makeManager().socket(forNamespace: "/"))
+
+        let received = expectation(description: "false comes back")
+        socket.on("false") { data, _ in
+            XCTAssertEqual(data.first as? Bool, false, "A falsy value must not be lost or turned into nil")
+            received.fulfill()
+        }
+        socket.emit("false")
+
+        wait(for: [received], timeout: 5)
+    }
+
+    // MARK: connection.ts — "should connect to a namespace after connection established"
+
+    func testJoinANamespaceAfterTheConnectionIsEstablished() {
+        let manager = makeManager()
+        connect(manager.socket(forNamespace: "/"))
+
+        let foo = connect(manager.socket(forNamespace: "/foo"))
+
+        XCTAssertEqual(foo.status, .connected)
+    }
+
+    // MARK: connection.ts — "should open a new namespace after connection gets closed"
+
+    func testJoinANewNamespaceAfterTheConnectionWasClosed() {
+        let manager = makeManager()
+        let root = connect(manager.socket(forNamespace: "/"))
+
+        let disconnected = expectation(description: "disconnect")
+        disconnected.assertForOverFulfill = false
+        root.on(clientEvent: .disconnect) { _, _ in disconnected.fulfill() }
+        root.disconnect()
+        wait(for: [disconnected], timeout: 5)
+
+        let foo = connect(manager.socket(forNamespace: "/foo"))
+
+        XCTAssertEqual(foo.status, .connected)
+    }
+
+    // MARK: connection.ts — "should not reopen a cached but active socket"
+
+    /// Asking the manager for the same namespace twice must hand back the same
+    /// socket and put exactly one CONNECT on the wire. A second frame is a
+    /// duplicate session the server has to clean up.
+    func testFetchingTheSameNamespaceTwiceSendsOneConnectFrame() throws {
+        let manager = makeManager()
+
+        let socket = manager.socket(forNamespace: "/")
+        let again = manager.socket(forNamespace: "/")
+        XCTAssertTrue(socket === again, "The manager has to hand back the cached socket")
+
+        connect(socket)
+        settle(1)
+
+        XCTAssertEqual(try connectFrameCount(), 1)
+    }
+
+    // MARK: connection.ts — "should not reopen an already active socket"
+
+    func testTwoNamespacesSendOneConnectFrameEach() throws {
+        let manager = makeManager()
+
+        connect(manager.socket(forNamespace: "/"))
+        connect(manager.socket(forNamespace: "/foo"))
+        settle(1)
+
+        XCTAssertEqual(try connectFrameCount(), 2)
+    }
+
+    // MARK: socket.ts — "should have an accessible socket id equal to the server-side socket id (custom namespace)"
+
+    func testSocketIdOnACustomNamespace() {
+        let manager = makeManager()
+        let root = connect(manager.socket(forNamespace: "/"))
+        let foo = connect(manager.socket(forNamespace: "/foo"))
+
+        XCTAssertFalse(foo.sid?.isEmpty ?? true)
+        XCTAssertNotEqual(foo.sid, root.sid, "Each namespace gets its own server-side id")
+    }
+
+    // MARK: socket.ts — "doesn't fire an error event if we force disconnect in opening state"
+
+    func testNoErrorWhenDisconnectingWhileStillOpening() {
+        let manager = makeManager()
+        let socket = manager.socket(forNamespace: "/")
+
+        var errors = [[Any]]()
+        socket.on(clientEvent: .error) { data, _ in errors.append(data) }
+
+        socket.connect()
+        socket.disconnect()
+
+        settle(1.5)
+
+        XCTAssertTrue(errors.isEmpty, "Tearing down an in-flight connect is not an error: \(errors)")
+    }
+
+    // MARK: socket.ts — "doesn't fire a connect_error event when the connection is already established"
+
+    /// A transport that drops under an established connection is a disconnect,
+    /// not a connection error. Reporting it as an error is what makes an app
+    /// tell the user the server is unreachable when it is merely reconnecting.
+    func testNoErrorEventWhenAnEstablishedConnectionDrops() throws {
+        let manager = makeManager(.reconnectWait(1))
+        let socket = connect(manager.socket(forNamespace: "/"))
+
+        var errors = [[Any]]()
+        socket.on(clientEvent: .error) { data, _ in errors.append(data) }
+
+        try killTransport(ofSocketWithId: XCTUnwrap(socket.sid))
+        settle(3)
+
+        XCTAssertTrue(errors.isEmpty, "A dropped transport must surface as a disconnect: \(errors)")
     }
 }

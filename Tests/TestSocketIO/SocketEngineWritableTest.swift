@@ -6,7 +6,6 @@
 //
 
 import XCTest
-import Starscream
 @testable import SocketIO
 
 /// A minimal `SocketEngineSpec` conformer that does NOT override `writable`.
@@ -32,7 +31,7 @@ private final class StubEngine: NSObject, SocketEngineSpec {
     var urlWebSocket: URL = URL(string: "ws://localhost/")!
     var version: SocketIOVersion = .three
     var websocket: Bool = true
-    var ws: WebSocket? = nil
+
 
     required convenience init(client: SocketEngineClient, url: URL, options: [String: Any]?) {
         self.init()

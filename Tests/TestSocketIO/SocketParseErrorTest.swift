@@ -1,7 +1,6 @@
 import Foundation
 import XCTest
 @testable import SocketIO
-import Starscream
 
 /// JS parity: `Manager.ondata` in `socket.io-client/lib/manager.ts` wraps
 /// `decoder.add(data)` in try/catch and calls `onclose("parse error")` — an
@@ -100,7 +99,7 @@ private class FakeParseErrorEngine: SocketEngineSpec {
     private(set) var urlPolling = URL(string: "http://localhost/")!
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
     private(set) var websocket = false
-    private(set) var ws: WebSocket? = nil
+
     private(set) var version = SocketIOVersion.three
 
     private(set) var disconnectReasons = [String]()

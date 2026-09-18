@@ -1,6 +1,5 @@
 import XCTest
 @testable import SocketIO
-import Starscream
 
 /// Manager-level connection timeout (`SocketManager.connectTimeout`), JS-aligned with
 /// `Manager.open()` in `socket.io-client/lib/manager.ts`. Unit tests only: the fake
@@ -45,7 +44,7 @@ final class SocketConnectTimeoutTest: XCTestCase {
         let timedOut = expectation(description: "timeout error")
         timedOut.assertForOverFulfill = false
         var message: String?
-        socket.on(clientEvent: .error) { data, _ in
+        socket.on(clientEvent: .connectError) { data, _ in
             message = data.first as? String
             timedOut.fulfill()
         }
@@ -67,7 +66,7 @@ final class SocketConnectTimeoutTest: XCTestCase {
 
         let timedOut = expectation(description: "timeout error")
         timedOut.assertForOverFulfill = false
-        socket.on(clientEvent: .error) { _, _ in timedOut.fulfill() }
+        socket.on(clientEvent: .connectError) { _, _ in timedOut.fulfill() }
 
         let attempted = expectation(description: "reconnect attempt")
         attempted.assertForOverFulfill = false
@@ -130,7 +129,7 @@ final class SocketConnectTimeoutTest: XCTestCase {
 
         let errored = expectation(description: "must not error")
         errored.isInverted = true
-        socket.on(clientEvent: .error) { _, _ in errored.fulfill() }
+        socket.on(clientEvent: .connectError) { _, _ in errored.fulfill() }
 
         let connected = expectation(description: "socket connected")
         connected.assertForOverFulfill = false
@@ -150,7 +149,7 @@ final class SocketConnectTimeoutTest: XCTestCase {
 
         let errored = expectation(description: "must not error")
         errored.isInverted = true
-        socket.on(clientEvent: .error) { _, _ in errored.fulfill() }
+        socket.on(clientEvent: .connectError) { _, _ in errored.fulfill() }
 
         let disconnected = expectation(description: "disconnect")
         disconnected.assertForOverFulfill = false
@@ -173,7 +172,7 @@ final class SocketConnectTimeoutTest: XCTestCase {
 
         let errored = expectation(description: "must not error")
         errored.isInverted = true
-        socket.on(clientEvent: .error) { _, _ in errored.fulfill() }
+        socket.on(clientEvent: .connectError) { _, _ in errored.fulfill() }
 
         socket.connect()
 
@@ -191,7 +190,7 @@ final class SocketConnectTimeoutTest: XCTestCase {
 
         let timedOut = expectation(description: "timeout error")
         timedOut.assertForOverFulfill = false
-        socket.on(clientEvent: .error) { _, _ in timedOut.fulfill() }
+        socket.on(clientEvent: .connectError) { _, _ in timedOut.fulfill() }
 
         socket.connect()
 
@@ -230,7 +229,7 @@ private final class TimeoutTestEngine: SocketEngineSpec {
     private(set) var urlPolling = URL(string: "http://localhost/")!
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
     private(set) var websocket = false
-    private(set) var ws: WebSocket? = nil
+
     private(set) var version = SocketIOVersion.three
 
     var onConnect: (() -> Void)?

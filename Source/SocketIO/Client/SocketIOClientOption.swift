@@ -23,7 +23,6 @@
 //  THE SOFTWARE.
 
 import Foundation
-import Starscream
 
 /// The socket.io version being used.
 public enum SocketIOVersion: Int {
@@ -58,7 +57,7 @@ public enum SocketIOClientOption : ClientOption {
     /// listeners, but be aware of the ordering. JS-aligned with `Manager` constructor.
     case autoConnect(Bool)
 
-    /// If given, the WebSocket transport will attempt to use compression.
+    /// Legacy option. Fails connection validation because native compression controls are unavailable.
     case compress
 
     /// A dictionary of GET parameters that will be included in the connect url.
@@ -85,7 +84,7 @@ public enum SocketIOClientOption : ClientOption {
     /// If passed `true`, the only transport that will be used will be WebSockets.
     case forceWebsockets(Bool)
 
-    /// If passed `true`, the WebSocket stream will be configured with the enableSOCKSProxy `true`.
+    /// Legacy option. `true` fails before connecting; it never silently bypasses the requested proxy.
     case enableSOCKSProxy(Bool)
 
     /// The queue that all interaction with the client should occur on. This is the queue that event handlers are
@@ -133,17 +132,26 @@ public enum SocketIOClientOption : ClientOption {
     /// Default `"t"`. JS-aligned with `timestampParam` in engine.io-client.
     case timestampParam(String)
 
-    /// Allows you to set which certs are valid. Useful for SSL pinning.
-    case security(CertificatePinning)
+    /// Shared native TLS policy for polling and WebSocket. Normal system trust is the default.
+    case security(SocketTLSConfiguration)
 
-    /// If you're using a self-signed set. Only use for development.
+    /// Legacy option. `true` fails; use an explicit customTrust anchor instead of trust-all.
     case selfSigned(Bool)
 
-    /// Sets an NSURLSessionDelegate for the underlying engine. Useful if you need to handle self-signed certs.
+    /// Forwards authentication (except server trust), redirect, lifecycle and metrics events.
+    /// Server trust is always controlled by `security`, never by this delegate.
     case sessionDelegate(URLSessionDelegate)
 
-    /// If passed `false`, the WebSocket stream will be configured with the useCustomEngine `false`.
+    /// Deprecated compatibility option. Both values use native URLSession.
+    @available(*, deprecated, message: "URLSession is the only WebSocket backend; remove this option")
     case useCustomEngine(Bool)
+
+    /// Native incoming-message and outgoing-queue limits.
+    case webSocketOptions(SocketWebSocketOptions)
+
+    /// Carries a dictionary conversion failure to connection validation. No
+    /// network request is started when this option is present.
+    case invalidConfiguration(String)
 
     /// The version of socket.io being used. This should match the server version. Default is 3.
     case version(SocketIOVersion)
@@ -155,6 +163,10 @@ public enum SocketIOClientOption : ClientOption {
         let description: String
 
         switch self {
+        case .webSocketOptions:
+            description = "webSocketOptions"
+        case .invalidConfiguration:
+            description = "invalidConfiguration"
         case .ackTimeout:
             description = "ackTimeout"
         case .autoConnect:
@@ -220,6 +232,10 @@ public enum SocketIOClientOption : ClientOption {
         let value: Any
 
         switch self {
+        case let .webSocketOptions(options):
+            value = options
+        case let .invalidConfiguration(reason):
+            value = reason
         case let .ackTimeout(timeout):
             value = timeout
         case let .autoConnect(autoConnect):

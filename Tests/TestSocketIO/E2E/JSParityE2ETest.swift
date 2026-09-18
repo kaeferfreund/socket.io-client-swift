@@ -79,9 +79,9 @@ final class JSParityE2ETest: XCTestCase {
         XCTAssertEqual(status, 200)
     }
 
-    /// CONNECT_ERROR arrives as the `error` client event here; JS calls it
-    /// `connect_error`. What has to match is that the server's message reaches
-    /// the application at all.
+    /// CONNECT_ERROR arrives as the `connect_error` client event, JS-aligned.
+    /// What has to match is that the server's message reaches the application
+    /// at all.
     private func errorMessage(from data: [Any]) -> String? {
         if let payload = data.first as? [String: Any] {
             return payload["message"] as? String
@@ -99,7 +99,7 @@ final class JSParityE2ETest: XCTestCase {
         // A refused namespace may be retried; only the first report is under test.
         failed.assertForOverFulfill = false
         var message: String?
-        socket.on(clientEvent: .error) { data, _ in
+        socket.on(clientEvent: .connectError) { data, _ in
             message = self.errorMessage(from: data)
             failed.fulfill()
         }
@@ -117,7 +117,7 @@ final class JSParityE2ETest: XCTestCase {
         let failed = expectation(description: "connect error")
         failed.assertForOverFulfill = false
         var payload: [String: Any]?
-        socket.on(clientEvent: .error) { data, _ in
+        socket.on(clientEvent: .connectError) { data, _ in
             payload = data.first as? [String: Any]
             failed.fulfill()
         }
@@ -159,7 +159,7 @@ final class JSParityE2ETest: XCTestCase {
         var errorCount = 0
         let firstError = expectation(description: "first connect error")
         firstError.assertForOverFulfill = false
-        refused.on(clientEvent: .error) { _, _ in
+        refused.on(clientEvent: .connectError) { _, _ in
             errorCount += 1
             firstError.fulfill()
         }
@@ -421,6 +421,7 @@ final class JSParityE2ETest: XCTestCase {
 
         var errors = [[Any]]()
         socket.on(clientEvent: .error) { data, _ in errors.append(data) }
+        socket.on(clientEvent: .connectError) { data, _ in errors.append(data) }
 
         socket.connect()
         socket.disconnect()
@@ -441,6 +442,7 @@ final class JSParityE2ETest: XCTestCase {
 
         var errors = [[Any]]()
         socket.on(clientEvent: .error) { data, _ in errors.append(data) }
+        socket.on(clientEvent: .connectError) { data, _ in errors.append(data) }
 
         try killTransport(ofSocketWithId: XCTUnwrap(socket.sid))
         settle(3)
@@ -686,6 +688,10 @@ final class JSParityE2ETest: XCTestCase {
             terminalReason = self.errorMessage(from: data)
             terminal.fulfill()
         }
+        socket.on(clientEvent: .connectError) { data, _ in
+            terminalReason = self.errorMessage(from: data)
+            terminal.fulfill()
+        }
         socket.on(clientEvent: .disconnect) { data, _ in
             terminalReason = self.errorMessage(from: data)
             terminal.fulfill()
@@ -778,7 +784,7 @@ final class JSParityE2ETest: XCTestCase {
         let failed = expectation(description: "connect error")
         failed.assertForOverFulfill = false
         var message: String?
-        socket.on(clientEvent: .error) { data, _ in
+        socket.on(clientEvent: .connectError) { data, _ in
             message = data.first as? String
             failed.fulfill()
         }
@@ -797,7 +803,7 @@ final class JSParityE2ETest: XCTestCase {
         let failed = expectation(description: "connect error")
         failed.assertForOverFulfill = false
         var message: String?
-        socket.on(clientEvent: .error) { data, _ in
+        socket.on(clientEvent: .connectError) { data, _ in
             message = data.first as? String
             failed.fulfill()
         }
@@ -875,7 +881,7 @@ final class JSParityE2ETest: XCTestCase {
         var errors = 0
         var attempts = 0
         var closed = false
-        socket.on(clientEvent: .error) { _, _ in
+        socket.on(clientEvent: .connectError) { _, _ in
             errors += 1
             if !closed {
                 closed = true

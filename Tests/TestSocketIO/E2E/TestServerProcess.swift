@@ -36,7 +36,8 @@ final class TestServerProcess {
     static func start(
         serverScript: String = "server.js",
         recoveryWindowMs: Int? = nil,
-        maxHttpBufferSize: Int? = nil
+        maxHttpBufferSize: Int? = nil,
+        extraEnvironment: [String: String] = [:]
     ) throws -> TestServerProcess {
         try ensureNodeModules()
 
@@ -47,6 +48,7 @@ final class TestServerProcess {
         var env = ProcessInfo.processInfo.environment
         if let w = recoveryWindowMs { env["RECOVERY_WINDOW_MS"] = String(w) }
         if let m = maxHttpBufferSize { env["MAX_HTTP_BUFFER_SIZE"] = String(m) }
+        env.merge(extraEnvironment) { _, value in value }
         p.environment = env
 
         let out = Pipe()

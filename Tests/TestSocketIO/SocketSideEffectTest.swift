@@ -8,7 +8,6 @@
 
 import XCTest
 @testable import SocketIO
-import Starscream
 
 class SocketSideEffectTest: XCTestCase {
     func testInitialCurrentAck() {
@@ -148,7 +147,7 @@ class SocketSideEffectTest: XCTestCase {
 
     func testHandlesErrorPacket() {
         let expect = expectation(description: "Handled error")
-        socket.on("error") {data, ack in
+        socket.on(clientEvent: .connectError) {data, ack in
             if let error = data[0] as? String, error == "test error" {
                 expect.fulfill()
             }
@@ -484,7 +483,7 @@ class TestEngine: SocketEngineSpec {
     private(set) var urlPolling = URL(string: "http://localhost/")!
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
     private(set) var websocket = false
-    private(set) var ws: WebSocket? = nil
+
     private(set) var version = SocketIOVersion.three
 
     internal var onConnect: (() -> ())?

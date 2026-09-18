@@ -62,7 +62,7 @@ final class JSParityRetryE2ETest: XCTestCase {
 
         var outgoing = [String]()
         socket.addAnyOutgoingListener { event in
-            outgoing.append("\(event.event) \(event.items.first ?? 0)")
+            outgoing.append("\(event.event) \(event.items?.first ?? 0)")
         }
 
         var acks = [Int]()

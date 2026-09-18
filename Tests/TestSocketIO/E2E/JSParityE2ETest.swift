@@ -722,6 +722,46 @@ final class JSParityE2ETest: XCTestCase {
         XCTAssertEqual(attempts, 2)
     }
 
+    // MARK: connection.ts — "should close the engine upon decoding exception"
+
+    func testParseErrorClosesEngineAndReconnectsWithFreshSession() {
+        makeManager(.reconnectWait(1))
+        let socket = manager.socket(forNamespace: "/")
+        connect(socket)
+        let oldSid = socket.sid
+        XCTAssertNotNil(oldSid)
+
+        var parseErrorSeen = false
+        let disconnected = expectation(description: "disconnect with parse error")
+        disconnected.assertForOverFulfill = false
+        socket.on(clientEvent: .disconnect) { data, _ in
+            if data.first as? String == "parse error" {
+                parseErrorSeen = true
+                disconnected.fulfill()
+            }
+        }
+
+        let reconnected = expectation(description: "reconnect")
+        reconnected.assertForOverFulfill = false
+        var newSid: String?
+        socket.on(clientEvent: .connect) { _, _ in
+            newSid = socket.sid
+            reconnected.fulfill()
+        }
+
+        // The entry point the engine calls with incoming data, i.e. the same
+        // injection point as the JS test's `engine.emit("data", "bad")`.
+        manager.parseEngineMessage("bad")
+
+        wait(for: [disconnected, reconnected], timeout: 15)
+        XCTAssertTrue(parseErrorSeen, "A .disconnect with reason \"parse error\" must be observed in between")
+        XCTAssertNotNil(newSid)
+        // A fresh engine.io session: this client reuses the engine object, so
+        // the new sid (not object identity) is what proves the old engine was
+        // closed and a new one connected.
+        XCTAssertNotEqual(newSid, oldSid)
+    }
+
     // MARK: connection.ts — "should still try to reconnect twice after opening another socket asynchronously"
 
     func testReconnectTwiceAfterOpeningAnotherSocketAsynchronously() {

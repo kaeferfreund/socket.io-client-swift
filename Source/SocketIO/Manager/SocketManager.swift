@@ -551,7 +551,16 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     }
 
     private func _parseEngineMessage(_ msg: String) {
-        guard let packet = parseSocketMessage(msg) else { return }
+        guard let packet = parseSocketMessage(msg) else {
+            // `parseSocketMessage` returns nil for an empty message (nothing to
+            // decode, legitimately ignorable) and for genuinely malformed
+            // packets. Only the latter is fatal here.
+            if !msg.isEmpty {
+                engineDidReceiveUndecodableData("Undecodable socket.io packet: \(msg)")
+            }
+
+            return
+        }
         guard !packet.type.isBinary else {
             waitingPackets.append(packet)
 
@@ -571,9 +580,33 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     }
 
     private func _parseEngineBinaryData(_ data: Data) {
-        guard let packet = parseBinaryData(data) else { return }
+        guard let packet = parseBinaryData(data) else {
+            // `parseBinaryData` returns nil both while a multi-attachment packet
+            // is still incomplete (benign: more chunks are on the way) and when
+            // binary arrives with no packet waiting for it (the stream is out of
+            // step). Only the latter is fatal here.
+            if waitingPackets.isEmpty {
+                engineDidReceiveUndecodableData("Undecodable binary data (\(data.count) bytes) with no packet waiting for it")
+            }
+
+            return
+        }
 
         nsps[packet.nsp]?.handlePacket(packet)
+    }
+
+    /// Closes the engine after undecodable data arrived, JS-aligned with
+    /// `Manager.ondata`/`onclose("parse error")` in
+    /// `socket.io-client/lib/manager.ts`: an undecodable packet means the
+    /// stream is out of step, so the session cannot continue. Closing the
+    /// engine is enough: `closeOutEngine` → `client?.engineDidClose(reason:)`
+    /// → `_engineDidClose` tells the sockets and starts the reconnect loop
+    /// when `reconnects` is on.
+    private func engineDidReceiveUndecodableData(_ description: String) {
+        guard status != .disconnected else { return }
+
+        DefaultSocketLogger.Logger.error(description, type: SocketManager.logType)
+        engine?.disconnect(reason: "parse error")
     }
 
     /// Tries to reconnect to the server.

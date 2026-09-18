@@ -2,6 +2,7 @@
 
 ## Fixes
 
+- Emits made while disconnected are no longer lost: they are buffered and flushed in order on the next CONNECT, with the outgoing any-listeners firing at flush time as they do in JS `emitBuffered()`. Acks behave as in JS `_clearAcks`: an ack whose packet is still buffered survives the disconnect, while a timed-out ack drops its packet from the buffer so a reconnect does not deliver an emit the caller already gave up on. The legacy `emitWithAck(...).timingOut(after:)` path keeps its documented behavior.
 - The polling transport is paused before the WebSocket upgrade. Previously only the outstanding long-poll was awaited; a POST still on the wire reached the server after it had switched transports, which answers it with HTTP 400 and drops the packet without surfacing an error. JS-aligned with `pause()` in engine.io-client's polling transport.
 - Polling POSTs now respect the `maxPayload` the server advertises in the handshake. Previously the whole queue went out in one request; above the limit the server answers HTTP 413 and discards every packet it carried, while the session stays open. The batch is now cut at the limit and the rest follows in the next POST, JS-aligned with `getWritablePackets()` in engine.io-client. A single packet larger than the limit is still sent on its own, as in the reference client. engine.io v3 is unaffected — those servers advertise no limit.
 - New `SocketEnginePollable.maxPayload: Int?` — additive protocol requirement with a `nil` default, so existing conformers keep the previous unbounded behavior.
@@ -26,6 +27,10 @@
 - Async/throws overload of `SocketTimedEmitter.emit(...)` (iOS 13+ / macOS 10.15+) with `Task.cancel()` support — cancellation surfaces as `CancellationError` thrown from the await.
 - `SocketAckManager` parallel `timedAcks` storage and 4 internal APIs (`addTimedAck` / `executeTimedAck` / `cancelTimedAck(fireWith:)` / `clearTimedAcks(reason:)`). Legacy `acks` storage and `emitWithAck.timingOut(after:)` path are untouched.
 - `SocketIOClient.didDisconnect` clears `timedAcks` with `.disconnected` (matches JS `_clearAcks` for `withError` callbacks).
+
+## Breaking
+
+- An `emit` made while the socket is not connected is now **buffered and sent on the next CONNECT** instead of being dropped with a `Tried emitting when not connected` `.error`. JS-aligned with `sendBuffer` in `socket.io-client/lib/socket.ts` (`emit()` / `emitBuffered()`). Callers that treated that `.error` as "this event is lost, handle it yourself" will no longer see it, and the event will arrive after the reconnect. Like JS, the buffer has no upper bound. Ack *responses* (`emitAck`) are unaffected and still report the error.
 
 ## Breaking (.three managers only)
 

@@ -131,6 +131,27 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     private lazy var logType = "SocketIOClient{\(nsp)}"
     private var bufferedRecoveryReplayEvents = [(event: String, data: [Any], ack: Int)]()
 
+    // MARK: Send buffer
+
+    private struct BufferedEmit {
+        let data: [Any]
+        let ack: Int?
+        let binary: Bool
+        let completion: (() -> ())?
+    }
+
+    /// Emits made while the socket was not connected, in the order they were made.
+    ///
+    /// JS `socket.sendBuffer`. It deliberately survives a disconnect: the whole
+    /// point is that these packets go out once the socket is connected again.
+    /// Like JS it has no upper bound, so a socket that never connects keeps
+    /// accumulating.
+    ///
+    /// Guarded by a lock rather than a queue because `emit` runs on the caller's
+    /// thread while the flush runs on `handleQueue`.
+    private var sendBuffer = [BufferedEmit]()
+    private let sendBufferLock = NSLock()
+
     // MARK: Auth provider state
 
     /// Installed auth provider (callback-form, or async-form wrapped to callback).
@@ -299,8 +320,13 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // mirrors that behavior for the identity-swap path so a session-bound
         // ack id issued before the swap cannot dangle waiting on a successor
         // session that would never reuse it.
+        // JS `_clearAcks` skips acks whose packet is still in the send buffer:
+        // that packet has not been sent yet, so its ack is still owed once the
+        // socket reconnects and the buffer is flushed.
+        let stillBuffered = bufferedAckIds
+
         manager?.handleQueue.async { [weak self] in
-            self?.ackHandlers.clearTimedAcks(reason: .disconnected)
+            self?.ackHandlers.clearTimedAcks(reason: .disconnected, keeping: stillBuffered)
         }
     }
 
@@ -403,6 +429,9 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         status = .connected
         flushBufferedRecoveryReplayEvents()
         guard status == .connected else { return }
+        // JS `onconnect()`: buffered packets go out before the `connect` event,
+        // so a handler that emits does not overtake what was queued before it.
+        flushSendBuffer()
         handleClientEvent(.connect, data: connectData)
     }
 
@@ -628,20 +657,53 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             return
         }
 
+        // JS buffers an emit made while disconnected and sends it on the next
+        // CONNECT (`sendBuffer` in `socket.io-client/lib/socket.ts` `emit()`)
+        // instead of dropping it.
+        //
+        // Ack *responses* are left alone: JS does not buffer them either, and
+        // this fork deliberately reports them as an error rather than dropping
+        // them silently. Replaying an ack for an event the server handled in a
+        // session that no longer exists would be meaningless anyway.
         guard status == .connected else {
-            wrappedCompletion?()
-            handleClientEvent(.error, data: ["Tried emitting when not connected"])
+            guard !isAck else {
+                wrappedCompletion?()
+                handleClientEvent(.error, data: ["Tried emitting when not connected"])
+                return
+            }
+
+            DefaultSocketLogger.Logger.log("Buffering emit until connected: \(data)", type: logType)
+
+            sendBufferLock.lock()
+            sendBuffer.append(BufferedEmit(data: data, ack: ack, binary: binary, completion: wrappedCompletion))
+            sendBufferLock.unlock()
+
             return
         }
 
+        sendPacket(data, ack: ack, binary: binary, isAck: isAck, completion: wrappedCompletion)
+    }
+
+    /// Writes a packet that is cleared to go out now.
+    ///
+    /// Split out of `emit` so a buffered packet takes exactly the same path when
+    /// it is eventually flushed, down to when the outgoing listeners fire.
+    private func sendPacket(_ data: [Any],
+                            ack: Int?,
+                            binary: Bool,
+                            isAck: Bool,
+                            completion: (() -> ())?
+    ) {
         let packet = SocketPacket.packetFromEmit(data, id: ack ?? -1, nsp: nsp, ack: isAck, checkForBinary: binary)
         let str = packet.packetString
 
         DefaultSocketLogger.Logger.log("Emitting: \(str), Ack: \(isAck)", type: logType)
 
         // Fire any-outgoing listeners — JS-aligned per `socket.io-client/lib/socket.ts`
-        // `emit()` body (~`:443-454`): fires AFTER connected guard, ONLY on actual send.
-        // Ack response frames bypass: their first item is the ack id, not an event name.
+        // `emit()` body (~`:443-454`): fires ONLY on actual send. For a buffered
+        // packet that is at flush time, which is where JS fires them too
+        // (`emitBuffered()`). Ack response frames bypass: their first item is the
+        // ack id, not an event name.
         if !isAck, let event = data.first as? String {
             let snapshot = anyOutgoingListeners
             let items = Array(data.dropFirst())
@@ -650,7 +712,47 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             }
         }
 
-        manager?.engine?.send(str, withData: packet.binary, completion: wrappedCompletion)
+        manager?.engine?.send(str, withData: packet.binary, completion: completion)
+    }
+
+    /// Sends everything that was emitted while the socket was not connected, in
+    /// the order it was emitted. JS `emitBuffered()`.
+    private func flushSendBuffer() {
+        sendBufferLock.lock()
+        let buffered = sendBuffer
+        sendBuffer.removeAll(keepingCapacity: false)
+        sendBufferLock.unlock()
+
+        guard !buffered.isEmpty else { return }
+
+        DefaultSocketLogger.Logger.log("Flushing \(buffered.count) buffered emit(s)", type: logType)
+
+        for entry in buffered {
+            sendPacket(entry.data,
+                       ack: entry.ack,
+                       binary: entry.binary,
+                       isAck: false,
+                       completion: entry.completion)
+        }
+    }
+
+    /// The ack ids of the packets still sitting in the send buffer.
+    private var bufferedAckIds: Set<Int> {
+        sendBufferLock.lock()
+        defer { sendBufferLock.unlock() }
+
+        return Set(sendBuffer.compactMap({ $0.ack }))
+    }
+
+    /// Drops a buffered packet whose ack will never be waited on again.
+    ///
+    /// JS does this inside the ack timeout (`_registerAckCallback`), so an emit
+    /// that already timed out is not delivered later by a reconnect.
+    func dropBufferedEmit(ack: Int) {
+        sendBufferLock.lock()
+        defer { sendBufferLock.unlock() }
+
+        sendBuffer.removeAll(where: { $0.ack == ack })
     }
 
     /// Returns `true` if the first element of `data` is a reserved event name.
@@ -1190,7 +1292,14 @@ extension SocketIOClient {
         queue.async { [weak self] in
             guard let self = self else { return }
             let id = ackId ?? self.allocateAckId()
-            self.ackHandlers.addTimedAck(id, on: queue, callback: ack, timeout: timeout)
+            // Any error outcome ends this emit for good, so it must not linger in
+            // the send buffer and go out on a later reconnect. `.disconnected`
+            // cannot reach a buffered packet — `didDisconnect` keeps those acks.
+            let ackDroppingBuffered: (Error?, [Any]) -> Void = { [weak self] err, data in
+                if err != nil { self?.dropBufferedEmit(ack: id) }
+                ack(err, data)
+            }
+            self.ackHandlers.addTimedAck(id, on: queue, callback: ackDroppingBuffered, timeout: timeout)
             do {
                 let mapped = [event] + (try items.map { try $0.socketRepresentation() })
                 self.emit(mapped, ack: id, binary: true, isAck: false)

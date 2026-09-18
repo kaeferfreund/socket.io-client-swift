@@ -170,9 +170,16 @@ class SocketAckManager {
     /// Caller MUST be on the owning queue. Snapshot-and-clear before iterating
     /// so any timer body that races between the snapshot and its own
     /// `removeValue` short-circuits (its lookup will return nil).
-    func clearTimedAcks(reason: SocketAckError) {
-        let snapshot = timedAcks
-        timedAcks.removeAll(keepingCapacity: false)
+    ///
+    /// - parameter keeping: ack ids to leave registered, with their timers still
+    ///   running. JS `_clearAcks` skips acks whose packet is still in the send
+    ///   buffer: that packet has not reached the server yet, so its ack is still
+    ///   owed once the socket reconnects.
+    func clearTimedAcks(reason: SocketAckError, keeping: Set<Int> = []) {
+        let snapshot = timedAcks.filter({ !keeping.contains($0.key) })
+        for id in snapshot.keys {
+            timedAcks.removeValue(forKey: id)
+        }
         for (_, entry) in snapshot {
             entry.timer?.cancel()
             entry.callback(reason, [])

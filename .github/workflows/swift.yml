@@ -4,7 +4,7 @@ on:
   push:
     branches: [ "master", "development" ]
   pull_request:
-    branches: [ "master", "development" ]
+    branches: [ "master", "development", "feat/connect-timeout" ]
   workflow_dispatch:
 
 jobs:

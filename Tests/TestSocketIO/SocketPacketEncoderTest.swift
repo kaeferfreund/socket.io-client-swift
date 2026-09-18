@@ -392,6 +392,28 @@ final class SocketPacketEncoderTest: XCTestCase {
         }
     }
 
+    // MARK: socket.io-parser/test/parser.js — "throws an error when encoding circular objects"
+
+    /// JS `encoder.encode()` throws on `a.b = a`. This encoder has no cycle
+    /// detector; the depth limit is what turns a cyclic Foundation graph into a
+    /// thrown error instead of unbounded recursion. The contract the JS test
+    /// asserts still holds: encoding fails and nothing is written.
+    func testThrowsWhenEncodingCircularObjects() {
+        let cyclic = NSMutableDictionary()
+        cyclic["b"] = cyclic
+
+        var reported: Error?
+        socket.on(clientEvent: .error) { data, _ in reported = data.last as? Error }
+
+        socket.emit("cycle", cyclic)
+        drain()
+
+        XCTAssertTrue(engine.sentPackets.isEmpty)
+        guard case .nestingTooDeep? = reported as? SocketPacketError else {
+            return XCTFail("Expected a SocketPacketError.nestingTooDeep, got \(String(describing: reported))")
+        }
+    }
+
     /// A custom `SocketData` whose conversion throws still reports through the
     /// same `.error` channel, and sends nothing.
     func testThrowingSocketRepresentationIsReportedAndSendsNothing() {

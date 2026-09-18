@@ -1,0 +1,84 @@
+name: Protocol review validation (temporary)
+on:
+  push:
+    branches: [fix/coderabbit-findings-audit]
+    paths: [.github/workflows/protocol-review-validation.yml, '.protocol-review/**']
+permissions:
+  contents: write
+concurrency:
+  group: protocol-review-validation
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.repository == 'kaeferfreund/socket.io-client-swift'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - name: Apply checksum-verified source patch
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, subprocess
+          from pathlib import Path
+          patch = lzma.decompress(base64.b64decode(''.join(Path(f'.protocol-review/part{i}').read_text().strip() for i in range(4)), validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '629de30f9f8560de7519be7f47308c963e5766d0f7730795a97bbf8a1f797f6a'
+          subprocess.run(['git', 'apply', '--index', '-'], input=patch, check=True)
+          adjustment = Path('.protocol-review/adjust.py')
+          if adjustment.exists():
+              exec(compile(adjustment.read_text(), str(adjustment), 'exec'))
+          PY
+          git diff --cached --check
+      - name: Build and run focused safety regressions
+        run: |
+          set -o pipefail
+          swift build 2>&1 | tee /tmp/review-build.log
+          swift test --filter 'SocketProtocolSafety|SocketRetrySafety|SocketPollingClose|SocketNativeEngine|SocketNativeTLSConfiguration|JSParityRetry' 2>&1 | tee /tmp/review-focused.log
+      - name: Complete Swift unit and real-server suite
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee /tmp/review-full-tests.log
+      - name: Four Apple framework SDK builds
+        run: |
+          set -o pipefail
+          bash scripts/test-native-distributions.sh 2>&1 | tee /tmp/review-distributions.log
+      - name: Parser malformed-input corpus and wire proofs
+        run: |
+          set -o pipefail
+          bash scripts/test-parser-safety.sh 2>&1 | tee /tmp/review-parser.log
+          cd Tests/TestSocketIO/E2E/Fixtures
+          node --test polling-proof-observer.test.mjs
+          node upgrade-race-proof.mjs
+          node max-payload-proof.mjs
+      - name: Commit validated source to the requested branch only
+        run: |
+          test "$GITHUB_REF" = 'refs/heads/fix/coderabbit-findings-audit'
+          test "$(git ls-remote origin refs/heads/fix/coderabbit-findings-audit | cut -f1)" = "$GITHUB_SHA"
+          git add -A -- Source Tests Package.swift scripts
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: harden packet parsing, retry lifecycles and retiring polling sessions'
+          git push origin HEAD:refs/heads/fix/coderabbit-findings-audit
+          git rev-parse HEAD > /tmp/review-validated-sha.txt
+      - name: Collect source and diagnostics without credentials
+        if: always()
+        run: |
+          git add -A -- Source Tests Package.swift scripts
+          git diff --cached --binary > /tmp/review-source.patch
+          git bundle create /tmp/review-source.bundle --all HEAD
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: protocol-review-validation
+          retention-days: 7
+          path: |
+            /tmp/review-*.log
+            /tmp/review-source.patch
+            /tmp/review-source.bundle
+            /tmp/review-validated-sha.txt

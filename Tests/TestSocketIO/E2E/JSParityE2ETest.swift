@@ -722,6 +722,51 @@ final class JSParityE2ETest: XCTestCase {
         XCTAssertEqual(attempts, 2)
     }
 
+    // MARK: connection.ts — "should close the engine upon decoding exception"
+
+    /// Proves the engine is closed and re-opened on a decoding exception: after injecting bad data the socket connects again with a different sid. The socket-level `.disconnect("parse error")` that JS also emits on this path arrives with the reconnect-event semantics change (`.reconnect` currently marks the start of reconnection here).
+    func testParseErrorClosesEngineAndReconnectsWithFreshSession() {
+        makeManager(.reconnectWait(1))
+        let socket = manager.socket(forNamespace: "/")
+        connect(socket)
+        let oldSid = socket.sid
+        XCTAssertNotNil(oldSid)
+
+        var sawReconnectSignal = false
+        let signal = expectation(description: "reconnect signal")
+        signal.assertForOverFulfill = false
+        socket.on(clientEvent: .reconnect) { _, _ in
+            sawReconnectSignal = true
+            signal.fulfill()
+        }
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in
+            sawReconnectSignal = true
+            signal.fulfill()
+        }
+
+        let reconnected = expectation(description: "reconnect")
+        reconnected.assertForOverFulfill = false
+        var newSid: String?
+        var sawSignalBeforeReconnect = false
+        socket.on(clientEvent: .connect) { _, _ in
+            sawSignalBeforeReconnect = sawReconnectSignal
+            newSid = socket.sid
+            reconnected.fulfill()
+        }
+
+        // The entry point the engine calls with incoming data, i.e. the same
+        // injection point as the JS test's `engine.emit("data", "bad")`.
+        manager.parseEngineMessage("bad")
+
+        wait(for: [signal, reconnected], timeout: 15)
+        XCTAssertTrue(sawSignalBeforeReconnect, "A .reconnect or .reconnectAttempt must be observed before the second .connect")
+        XCTAssertNotNil(newSid)
+        // A fresh engine.io session: this client reuses the engine object, so
+        // the new sid (not object identity) is what proves the old engine was
+        // closed and a new one connected.
+        XCTAssertNotEqual(newSid, oldSid)
+    }
+
     // MARK: connection.ts — "should still try to reconnect twice after opening another socket asynchronously"
 
     func testReconnectTwiceAfterOpeningAnotherSocketAsynchronously() {

@@ -91,6 +91,11 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     /// in `socket.io-client/lib/socket.ts`.
     public var ackTimeout: Double? = nil
 
+    /// How many times an emit is re-sent when the server does not acknowledge it
+    /// in time. `0` (the default) disables retries. Matches JS `retries: 0`
+    /// (falsy → no retry queue) in `socket.io-client/lib/socket.ts`.
+    public var retries = 0
+
     /// Whether the manager should automatically call `connect()` at the end of `init`.
     /// Default `false`. See `SocketIOClientOption.autoConnect` for full semantics.
     /// **Note:** when `true`, engine I/O begins before `init` returns. Attach
@@ -766,6 +771,8 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             switch option {
             case let .ackTimeout(value):
                 ackTimeout = max(0, value)
+            case let .retries(count):
+                retries = max(0, count)
             case let .forceNew(new):
                 forceNew = new
             case let .autoConnect(value):

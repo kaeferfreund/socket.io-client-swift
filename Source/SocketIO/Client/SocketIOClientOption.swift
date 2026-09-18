@@ -60,6 +60,17 @@ public enum SocketIOClientOption : ClientOption {
     /// Legacy option. Fails connection validation because native compression controls are unavailable.
     case compress
 
+    /// How many times an emit is re-sent when the server does not acknowledge
+    /// it in time, JS-aligned with the `retries` option in
+    /// `socket.io-client/lib/socket.ts`. Default `0` (retries disabled).
+    ///
+    /// When set, every event emit (plain, err-first ack, and
+    /// `timeout(after:).emit`) goes through an ordered queue: each attempt
+    /// waits `ackTimeout` (or the per-emit `timeout(after:)`) for the ack and
+    /// is re-sent on failure until the budget is exhausted, in strict queue
+    /// order. The final ack callback then fires with `SocketAckError.timeout`.
+    case retries(Int)
+
     /// A dictionary of GET parameters that will be included in the connect url.
     case connectParams([String: Any])
 
@@ -173,6 +184,8 @@ public enum SocketIOClientOption : ClientOption {
             description = "autoConnect"
         case .compress:
             description = "compress"
+        case .retries:
+            description = "retries"
         case .connectParams:
             description = "connectParams"
         case .connectTimeout:
@@ -244,6 +257,8 @@ public enum SocketIOClientOption : ClientOption {
             value = true
         case let .connectParams(params):
             value = params
+        case let .retries(count):
+            value = count
         case let .connectTimeout(timeout):
             value = timeout
         case let .cookies(cookies):

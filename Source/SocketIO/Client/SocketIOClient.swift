@@ -144,6 +144,32 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         let completion: (() -> ())?
     }
 
+    /// A queued packet awaiting acknowledgement, retried until the budget is
+    /// exhausted. JS `_queue` entries in `socket.io-client/lib/socket.ts`.
+    private struct RetriableEmit {
+        let queueId: Int
+        let data: [Any]
+        let userAck: ((Error?, [Any]) -> Void)?
+        /// Per-attempt ack timeout. `nil` means wait indefinitely for the ack
+        /// (the attempt can still be interrupted by a disconnect).
+        let attemptTimeout: Double?
+        var tryCount = 0
+        var pending = false
+    }
+
+    /// Emits made while `retries` is active, in the order they were made.
+    ///
+    /// JS `socket._queue` (`_addToQueue`/`_drainQueue` in
+    /// `socket.io-client/lib/socket.ts`): only the head packet is in flight;
+    /// an attempt that is not acknowledged within the attempt timeout is
+    /// re-sent until `retries` is exhausted, then discarded with an error.
+    /// The queue survives a disconnect and drains (force) on the next CONNECT.
+    ///
+    /// Guarded by a lock for the same reason as `sendBuffer`.
+    private var retryQueue = [RetriableEmit]()
+    private let retryQueueLock = NSLock()
+    private var retryQueueSeq = 0
+
     /// Emits made while the socket was not connected, in the order they were made.
     ///
     /// JS `socket.sendBuffer`. It deliberately survives a disconnect: the whole
@@ -329,6 +355,12 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // queued events into the successor session would leak them across
         // identities. Their acks are therefore failed like any other.
         clearSendBuffer()
+        // The retry queue follows the same rule: the previous identity's
+        // unacknowledged emits must not be delivered (or retried) under the
+        // successor's session. Each entry's ack callback is failed with
+        // `.disconnected` — JS has no identity-swap concept; this follows the
+        // Swift `clearRecoveryState` contract for the send buffer.
+        clearRetriableQueue()
 
         manager?.handleQueue.async { [weak self] in
             self?.ackHandlers.clearTimedAcks(reason: .disconnected)
@@ -437,6 +469,10 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // JS `onconnect()`: buffered packets go out before the `connect` event,
         // so a handler that emits does not overtake what was queued before it.
         flushSendBuffer()
+        // JS `onconnect()` also drains the retry queue (force) here — a packet
+        // whose ack was lost with the previous session is resent, and an emit
+        // from a connect handler queues behind the drain instead of racing it.
+        drainRetriableQueueOnConnect()
         handleClientEvent(.connect, data: connectData)
     }
 
@@ -511,9 +547,15 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// - parameter items: The items to send with this event. May be left out.
     /// - parameter completion: Callback called on transport write completion.
     open func emit(_ event: String, with items: [SocketData], completion: (() -> ())?) {
-        
+
         do {
-            emit([event] + (try items.map({ try $0.socketRepresentation() })), completion: completion)
+            let mapped = [event] + (try items.map({ try $0.socketRepresentation() }))
+
+            // JS `emit()`: with `retries` set, EVERY emit goes through the
+            // queue (`_addToQueue`), ack or not.
+            if enqueueRetriableIfActive(mapped, userAck: nil) { return }
+
+            emit(mapped, completion: completion)
         } catch {
             DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event), \(items)",
                                              type: logType)
@@ -552,14 +594,23 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// - parameter items: The items to send with this event. May be left out.
     /// - parameter ack: The err-first ack callback.
     open func emit(_ event: String, with items: [SocketData], ack: @escaping (Error?, [Any]) -> Void) {
-        if let defaultTimeout = (manager as? SocketManager)?.ackTimeout {
-            timeout(after: defaultTimeout).emit(event, with: items, ack: ack)
-
-            return
-        }
-
         do {
             let mapped = [event] + (try items.map({ try $0.socketRepresentation() }))
+
+            // JS `emit()`: with `retries` set, the queue takes over and the
+            // per-attempt timeout is `flags.timeout ?? ackTimeout`. The
+            // `flags.timeout` variant arrives through `emitTimed` below.
+            if let defaultTimeout = (manager as? SocketManager)?.ackTimeout {
+                if enqueueRetriableIfActive(mapped, userAck: ack, attemptTimeout: defaultTimeout) { return }
+            } else {
+                if enqueueRetriableIfActive(mapped, userAck: ack) { return }
+            }
+
+            if let defaultTimeout = (manager as? SocketManager)?.ackTimeout {
+                timeout(after: defaultTimeout).emit(event, with: items, ack: ack)
+
+                return
+            }
 
             createOnAck(mapped).timingOut(after: 0) { data in
                 ack(nil, data)
@@ -821,6 +872,159 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         defer { sendBufferLock.unlock() }
 
         sendBuffer.removeAll(where: { $0.ack == ack })
+    }
+
+    // MARK: - Retry queue (JS `retries` option)
+
+    /// JS `this._opts.retries` — falsy disables the retry queue entirely.
+    private var activeRetries: Int {
+        (manager as? SocketManager)?.retries ?? 0
+    }
+
+    /// JS `_opts.retries && !flags.fromQueue && !flags.volatile`. Enqueues the
+    /// emit instead of sending it and returns `true` if the queue took over.
+    ///
+    /// Called from the public emit wrappers BEFORE any ack registration, since
+    /// each retry attempt re-registers a fresh ack — the caller's ack is stored
+    /// on the queue entry and fired once on final success or discard.
+    func enqueueRetriableIfActive(_ data: [Any], userAck: ((Error?, [Any]) -> Void)?,
+                                  attemptTimeout: Double? = nil) -> Bool {
+        guard activeRetries > 0, !data.isEmpty else { return false }
+
+        DefaultSocketLogger.Logger.log("Queueing retriable emit: \(data)", type: logType)
+
+        retryQueueLock.lock()
+        retryQueueSeq += 1
+        let queueId = retryQueueSeq
+        retryQueue.append(RetriableEmit(queueId: queueId, data: data, userAck: userAck,
+                                        attemptTimeout: attemptTimeout))
+        retryQueueLock.unlock()
+
+        // JS `_addToQueue` ends with `_drainQueue()`; the drain itself gates on
+        // `connected`, so queueing while disconnected simply parks the packet
+        // here (JS retry.ts "should not drain the queue while the socket is
+        // disconnected").
+        manager?.handleQueue.async { [weak self] in
+            self?.drainRetriableQueue(force: false)
+        }
+
+        return true
+    }
+
+    /// JS `_drainQueue(force)` — sends the head packet, and only the head,
+    /// when the socket is connected. A pending (unacknowledged) head is
+    /// skipped unless `force` is set, which is what a CONNECT uses to resend
+    /// a packet whose ack may have been lost with the previous session.
+    private func drainRetriableQueue(force: Bool) {
+        guard status == .connected else { return }
+
+        retryQueueLock.lock()
+        guard !retryQueue.isEmpty else {
+            retryQueueLock.unlock()
+            return
+        }
+
+        var head = retryQueue[0]
+        if head.pending && !force {
+            retryQueueLock.unlock()
+            return
+        }
+
+        head.pending = true
+        head.tryCount += 1
+        retryQueue[0] = head
+        retryQueueLock.unlock()
+
+        // Each attempt is a fresh packet with a fresh ack id, exactly like the
+        // JS re-emit through `emit()` with the `fromQueue` flag: the id is
+        // allocated per attempt, the ack callback fires once (timeout / server
+        // ack / disconnect), and a late ack for a superseded attempt is a
+        // no-op because its entry is gone.
+        let id = allocateAckId()
+
+        DefaultSocketLogger.Logger.log(
+            "Sending retriable emit [\(head.queueId)] (try #\(head.tryCount))", type: logType
+        )
+
+        let queueId = head.queueId
+        let internalAck: (Error?, [Any]) -> Void = { [weak self] err, data in
+            self?.handleQueueAck(queueId: queueId, ackId: id, error: err, data: data)
+        }
+        if let manager = manager {
+            // An absent timeout (`nil`) registers an ack timer that never
+            // fires: JS registers a plain ack then, which also never times out
+            // — but a disconnect still interrupts it (JS `_clearAcks`), which
+            // the timed-ack clearing provides.
+            ackHandlers.addTimedAck(id, on: manager.handleQueue, callback: internalAck,
+                                    timeout: head.attemptTimeout ?? .infinity)
+        }
+        sendPacket(head.data, ack: id, binary: true, isAck: false, completion: nil)
+    }
+
+    /// The queue's internal ack — JS `_addToQueue`'s appended callback.
+    /// Only the head packet is in flight, so an ack for anything else is stale.
+    private func handleQueueAck(queueId: Int, ackId: Int, error: Error?, data: [Any]) {
+        retryQueueLock.lock()
+        guard let head = retryQueue.first, head.queueId == queueId else {
+            retryQueueLock.unlock()
+            DefaultSocketLogger.Logger.log("Retriable emit [\(queueId)] already acknowledged", type: logType)
+            return
+        }
+
+        if let err = error {
+            // JS: `packet.tryCount > this._opts.retries` — the first attempt
+            // counts as one, so a total of `retries + 1` sends happen.
+            guard head.tryCount > activeRetries else {
+                var retried = head
+                retried.pending = false
+                retryQueue[0] = retried
+                retryQueueLock.unlock()
+                drainRetriableQueue(force: false)
+                return
+            }
+
+            DefaultSocketLogger.Logger.log(
+                "Retriable emit [\(queueId)] discarded after \(head.tryCount) tries", type: logType
+            )
+            retryQueue.removeFirst()
+            let userAck = head.userAck
+            retryQueueLock.unlock()
+
+            userAck?(err, [])
+        } else {
+            retryQueue.removeFirst()
+            let userAck = head.userAck
+            retryQueueLock.unlock()
+
+            userAck?(nil, data)
+        }
+
+        drainRetriableQueue(force: false)
+    }
+
+    /// JS `onconnect()`: `emitBuffered(); _drainQueue(true); emitReserved("connect")`
+    /// — the retry queue drains between the send-buffer flush and the
+    /// `connect` event, so an emit from inside a connect handler queues
+    /// behind the drain instead of racing it (JS retry.ts "should not emit a
+    /// packet twice in the 'connect' handler").
+    private func drainRetriableQueueOnConnect() {
+        manager?.handleQueue.async { [weak self] in
+            self?.drainRetriableQueue(force: true)
+        }
+    }
+
+    /// Drops every queued retriable emit, failing its user ack with
+    /// `.disconnected`. Identity-swap path only — a session-bound queued
+    /// packet must not reach the successor session.
+    private func clearRetriableQueue() {
+        retryQueueLock.lock()
+        let dropped = retryQueue
+        retryQueue.removeAll(keepingCapacity: false)
+        retryQueueLock.unlock()
+
+        for entry in dropped {
+            entry.userAck?(SocketAckError.disconnected, [])
+        }
     }
 
     /// Returns `true` if the first element of `data` is a reserved event name.
@@ -1172,6 +1376,14 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         status = .connected
     }
 
+    /// The number of packets currently sitting in the retry queue
+    /// (JS `socket._queue.length`). Test accessor only.
+    var testRetryQueueCount: Int {
+        retryQueueLock.lock()
+        defer { retryQueueLock.unlock() }
+        return retryQueue.count
+    }
+
     func setTestStatus(_ status: SocketIOStatus) {
         self.status = status
     }
@@ -1382,6 +1594,22 @@ extension SocketIOClient {
                 if err != nil { self?.dropBufferedEmit(ack: id) }
                 ack(err, data)
             }
+
+            // JS `emit()`: with `retries` set, the timed chain queues too; the
+            // captured `timeout` is the per-attempt timeout for every try. The
+            // async overload (`ackId != nil`) does NOT queue — its eager ack id
+            // and continuation contract have no queue equivalent, and a queued
+            // path would leave that continuation hanging forever.
+            do {
+                let mapped = [event] + (try items.map { try $0.socketRepresentation() })
+                if ackId == nil, self.enqueueRetriableIfActive(mapped, userAck: ack, attemptTimeout: timeout) {
+                    return
+                }
+            } catch {
+                ack(error, [])
+                return
+            }
+
             self.ackHandlers.addTimedAck(id, on: queue, callback: ackDroppingBuffered, timeout: timeout)
             do {
                 let mapped = [event] + (try items.map { try $0.socketRepresentation() })

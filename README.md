@@ -1,6 +1,6 @@
 > **Native transport prerelease:** This fork now uses Apple's `URLSessionWebSocketTask` directly. There is no Starscream dependency or runtime fallback. Requires iOS 13 / macOS 10.15 / tvOS 13 / watchOS 6. See [migration and compatibility notes](Documentation/NativeWebSocketTransport.md) before adopting this major prerelease.
 
-[![Build Status](https://travis-ci.org/socketio/socket.io-client-swift.svg?branch=master)](https://travis-ci.org/socketio/socket.io-client-swift)
+[![Swift validation](https://github.com/kaeferfreund/socket.io-client-swift/actions/workflows/swift.yml/badge.svg?branch=feat/native-urlsession-transport)](https://github.com/kaeferfreund/socket.io-client-swift/actions/workflows/swift.yml)
 
 # Socket.IO-Client-Swift
 Socket.IO-client for iOS/OS X.
@@ -9,7 +9,7 @@ Socket.IO-client for iOS/OS X.
 ```swift
 import SocketIO
 
-let manager = SocketManager(socketURL: URL(string: "http://localhost:8080")!, config: [.log(true), .compress])
+let manager = SocketManager(socketURL: URL(string: "http://localhost:8080")!, config: [.log(true)])
 let socket = manager.defaultSocket
 
 socket.on(clientEvent: .connect) {data, ack in
@@ -99,78 +99,90 @@ Checkout the [12to13](https://nuclearace.github.io/Socket.IO-Client-Swift/12to13
 Checkout the [15to16](https://nuclearace.github.io/Socket.IO-Client-Swift/15to16.html) guide for migrating to v16+ from v15.
 
 ## Installation
-Requires Swift 4/5 and Xcode 10.x
+
+This native prerelease requires iOS 13, macOS 10.15, tvOS 13 or watchOS 6,
+and a Swift 5-compatible toolchain supporting the package's Swift tools 5.4
+manifest. The checked-in framework project builds against all four Apple SDKs.
+Device/runtime support, particularly watchOS, must still be exercised by adopters.
+
+Use **this fork**, not an upstream 16.x dependency. No native release tag has
+been published yet. The examples below select the development branch; pin the
+reviewed commit in application lockfiles or dependency declarations before use.
 
 ### Swift Package Manager
-Add the project as a dependency to your Package.swift:
+
+Add this dependency to your package:
+
 ```swift
-// swift-tools-version:4.2
-
-import PackageDescription
-
-let package = Package(
-    name: "socket.io-test",
-    products: [
-        .executable(name: "socket.io-test", targets: ["YourTargetName"])
-    ],
-    dependencies: [
-        .package(url: "https://github.com/socketio/socket.io-client-swift", .upToNextMinor(from: "16.1.1"))
-    ],
-    targets: [
-        .target(name: "YourTargetName", dependencies: ["SocketIO"], path: "./Path/To/Your/Sources")
-    ]
+.package(
+    url: "https://github.com/kaeferfreund/socket.io-client-swift.git",
+    .branch("feat/native-urlsession-transport")
 )
 ```
 
-Then import `import SocketIO`.
+Add `.product(name: "SocketIO", package: "socket.io-client-swift")` to your
+target dependencies, and ensure your package declares the appropriate deployment
+minimum. In Xcode, add the same repository URL and select this branch or a
+reviewed commit. Import the module using `import SocketIO`.
 
 ### Carthage
-Add this line to your `Cartfile`:
+
+Use this fork in the application's `Cartfile`:
+
+```text
+github "kaeferfreund/socket.io-client-swift" "feat/native-urlsession-transport"
 ```
-github "socketio/socket.io-client-swift" ~> 16.1.1
-```
 
-Run `carthage update --platform ios,macosx`.
+Build with your supported Carthage/Xcode toolchain. Add **only SocketIO** to the
+application. Remove any former Starscream linkage, copy-frameworks entry or
+embedded framework that no other dependency needs. The repository's `Cartfile`
+has no transitive framework dependencies.
 
-Add the `Starscream` and `SocketIO` frameworks to your projects and follow the usual Carthage process.
+### CocoaPods
 
-### CocoaPods 1.0.0 or later
-Create `Podfile` and add `pod 'Socket.IO-Client-Swift'`:
+Select the fork explicitly instead of the upstream published pod:
 
 ```ruby
 use_frameworks!
 
 target 'YourApp' do
-    pod 'Socket.IO-Client-Swift', '~> 16.1.1'
+    pod 'Socket.IO-Client-Swift',
+        :git => 'https://github.com/kaeferfreund/socket.io-client-swift.git',
+        :branch => 'feat/native-urlsession-transport'
 end
 ```
 
-Install pods:
+Run `pod install` and import `SocketIO` from Swift. The prerelease podspec and
+SPM manifest use the same deployment minimums. The fork has not been published
+to the CocoaPods registry. The API is Swift-only; Objective-C integration is
+not supported.
 
-```
-$ pod install
-```
+## Native transport configuration and documentation
 
-Import the module:
+Read [NativeWebSocketTransport.md](Documentation/NativeWebSocketTransport.md)
+for the actual runtime architecture, TLS migration, resource limits and breaking
+changes. No configuration flag is needed to activate the native backend.
+Remove `.compress` and `.useCustomEngine(...)` from normal configurations. Migrate
+custom `.security(...)` values to `SocketTLSConfiguration`; unsupported legacy
+SOCKS and trust-all requests are explicitly rejected rather than ignored.
 
-Swift:
-```swift
-import SocketIO
-```
+The checked-in generated `docs/` HTML and the
+[upstream API reference](https://nuclearace.github.io/Socket.IO-Client-Swift/index.html)
+are **historical 16.x documentation**, not an API contract for this prerelease.
+In particular, their concrete `ws`, pinning and compression examples do not
+apply. Use this fork's Swift source documentation and migration guide for the
+changed APIs; generated HTML will need regeneration for a tagged release.
 
-Objective-C:
+## Validation
 
-```Objective-C
-@import SocketIO;
-```
-
-
-# [Docs](https://nuclearace.github.io/Socket.IO-Client-Swift/index.html)
-
-- [Client](https://nuclearace.github.io/Socket.IO-Client-Swift/Classes/SocketIOClient.html)
-- [Manager](https://nuclearace.github.io/Socket.IO-Client-Swift/Classes/SocketManager.html)
-- [Engine](https://nuclearace.github.io/Socket.IO-Client-Swift/Classes/SocketEngine.html)
-- [Options](https://nuclearace.github.io/Socket.IO-Client-Swift/Enums/SocketIOClientOption.html)
+`swift test` executes the complete unit and real-server suite. Node is required
+for Socket.IO fixture servers, and OpenSSL generates temporary TLS certificates.
+No roots are installed in the system trust store. `scripts/test-native-transport.sh`
+provides an isolated transport regression suite. On macOS,
+`scripts/test-native-distributions.sh` verifies dependency removal and builds the
+framework with the macOS, iOS Simulator, tvOS Simulator and watchOS Simulator SDKs.
+The CI runs these checks without writing source files or requiring a migration
+step before building.
 
 ## Detailed Example
 A more detailed example can be found [here](https://github.com/nuclearace/socket.io-client-swift-example)

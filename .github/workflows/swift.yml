@@ -7,29 +7,59 @@ on:
     branches: [ "master", "development", "feat/connect-timeout" ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: swift-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-
+    name: Native library and full Socket.IO regression suite
     runs-on: macos-latest
-
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      # The E2E tests spawn the Node fixture server from PATH, so pin it here
-      # instead of inheriting whatever the runner image happens to ship.
+        with:
+          persist-credentials: false
+      # E2E tests start their localhost fixtures using Node from PATH. TLS tests
+      # generate ephemeral private PKI with the runner's OpenSSL, not OS roots.
       - uses: actions/setup-node@v7
         with:
           node-version: 26
-      - name: Build
+      - name: Build without third-party Swift dependencies
         run: swift build -v
-      - name: Run tests
-        run: swift test -v
+      - name: Run complete unit and real-server test suite
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee "$RUNNER_TEMP/native-swift-tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-swift-test-log-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-swift-tests.log
+          retention-days: 7
+
+  apple-frameworks:
+    name: Native framework distribution builds (four Apple SDKs)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify dependency removal and all framework build targets
+        run: bash scripts/test-native-distributions.sh
 
   protocol-proofs:
     name: Protocol proofs (wire-level, no Swift toolchain)
     runs-on: ubuntu-latest
-
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 26

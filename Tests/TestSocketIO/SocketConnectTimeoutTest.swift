@@ -86,6 +86,39 @@ final class SocketConnectTimeoutTest: XCTestCase {
         wait(for: [timedOut, attempted, failed], timeout: 8)
     }
 
+    func testAFailedReconnectCycleCanBeStartedAgain() {
+        makeManager(.connectTimeout(0.1), .reconnects(true), .reconnectAttempts(1), .reconnectWait(1))
+        installFake()
+
+        let firstFailed = expectation(description: "first reconnect failed")
+        firstFailed.assertForOverFulfill = false
+        let secondAttempt = expectation(description: "new reconnect attempt after connect()")
+        secondAttempt.assertForOverFulfill = false
+        let secondFailed = expectation(description: "second reconnect failed")
+        secondFailed.assertForOverFulfill = false
+
+        var failures = 0
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in
+            if failures >= 1 {
+                secondAttempt.fulfill()
+            }
+        }
+        socket.on(clientEvent: .disconnect) { data, _ in
+            guard data.first as? String == "Reconnect Failed" else { return }
+            failures += 1
+            if failures == 1 {
+                firstFailed.fulfill()
+                self.socket.connect()
+            } else if failures == 2 {
+                secondFailed.fulfill()
+            }
+        }
+
+        socket.connect()
+
+        wait(for: [firstFailed, secondAttempt, secondFailed], timeout: 8)
+    }
+
     func testNoTimeoutWhenEngineOpensInTime() {
         makeManager(.connectTimeout(1))
         installFake {

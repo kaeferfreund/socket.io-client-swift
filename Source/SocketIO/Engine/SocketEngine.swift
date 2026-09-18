@@ -249,6 +249,12 @@ open class SocketEngine: NSObject, WebSocketDelegate, URLSessionDelegate,
     }
 
     private func closeOutEngine(reason: String) {
+        // JS-aligned (`_onClose` in engine.io-client/lib/socket.ts only fires
+        // from opening/open/closing): the close notification is one-shot per
+        // session. A late transport callback (e.g. a handshake that finished
+        // after a timeout-close) must not re-notify the client.
+        let wasClosed = closed
+
         sid = ""
         closed = true
         invalidated = true
@@ -256,7 +262,10 @@ open class SocketEngine: NSObject, WebSocketDelegate, URLSessionDelegate,
 
         ws?.disconnect()
         stopPolling()
-        client?.engineDidClose(reason: reason)
+
+        if !wasClosed {
+            client?.engineDidClose(reason: reason)
+        }
     }
 
     /// Starts the connection to the server.
@@ -542,6 +551,12 @@ open class SocketEngine: NSObject, WebSocketDelegate, URLSessionDelegate,
     ///
     /// - parameter data: The data to parse.
     open func parseEngineData(_ data: Data) {
+        guard !closed else {
+            DefaultSocketLogger.Logger.log("Ignoring binary data received after close", type: SocketEngine.logType)
+
+            return
+        }
+
         DefaultSocketLogger.Logger.log("Got binary data: \(data)", type: SocketEngine.logType)
 
         lastCommunication = Date()
@@ -553,6 +568,16 @@ open class SocketEngine: NSObject, WebSocketDelegate, URLSessionDelegate,
     ///
     /// - parameter message: The message to parse.
     open func parseEngineMessage(_ message: String) {
+        // JS-aligned (`_onPacket` in engine.io-client/lib/socket.ts ignores
+        // packets unless readyState is opening/open/closing): after close the
+        // session is over, so late packets — e.g. a handshake that finished
+        // after a timeout-close — must not revive the engine.
+        guard !closed else {
+            DefaultSocketLogger.Logger.log("Ignoring packet received after close: \(message)", type: SocketEngine.logType)
+
+            return
+        }
+
         lastCommunication = Date()
 
         DefaultSocketLogger.Logger.log("Got message: \(message)", type: SocketEngine.logType)
@@ -771,6 +796,10 @@ open class SocketEngine: NSObject, WebSocketDelegate, URLSessionDelegate,
         connected = value
     }
 
+    func setClosed(_ value: Bool) {
+        closed = value
+    }
+
     func setFastUpgrade(_ value: Bool) {
         fastUpgrade = value
     }
@@ -802,6 +831,15 @@ extension SocketEngine {
     ///   - event: WS Event
     ///   - _:
     public func didReceive(event: Starscream.WebSocketEvent, client: Starscream.WebSocketClient) {
+        // Same stale-transport idea as the polling `doRequest` guard: the engine object
+        // is reused across reconnects while each attempt gets a fresh WebSocket, so events
+        // from a previous socket must not reach the new state.
+        guard (client as? WebSocket) === ws else {
+            DefaultSocketLogger.Logger.log("Ignoring WebSocket event for a previous socket", type: SocketEngine.logType)
+
+            return
+        }
+
         switch event {
         case let .connected(headers):
             wsConnected = true

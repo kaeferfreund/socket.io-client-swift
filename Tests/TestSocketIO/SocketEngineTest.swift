@@ -455,6 +455,69 @@ class SocketEngineTest: XCTestCase {
         XCTAssertEqual(ws["foo"], "bar")
     }
 
+    /// A handshake that finishes after the engine was closed (e.g. the GET
+    /// still in flight when `.connectTimeout(0)` closed it) must not revive
+    /// the engine. JS-aligned with the `readyState` guard in `_onPacket`.
+    func testOpenPacketArrivingAfterCloseIsIgnored() {
+        manager.reconnects = false
+        engine.disconnect(reason: "timeout")
+        engine.engineQueue.sync {}
+        XCTAssertTrue(engine.closed, "disconnect must close the engine")
+
+        engine.parseEngineMessage("0{\"sid\":\"x\",\"upgrades\":[],\"pingInterval\":25000,\"pingTimeout\":20000}")
+
+        XCTAssertFalse(engine.connected, "A late OPEN packet must not reopen a closed engine")
+        XCTAssertTrue(engine.closed)
+
+        // Pump handleQueue so a stray engineDidOpen would have run by now.
+        let settled = expectation(description: "queues settle")
+        manager.handleQueue.async { settled.fulfill() }
+        wait(for: [settled], timeout: 3)
+
+        XCTAssertFalse(engine.connected)
+        XCTAssertNotEqual(manager.status, .connected, "The manager must not see an open from a closed engine")
+    }
+
+    /// The close notification is one-shot per session: closing twice still
+    /// clears state twice but tells the manager only once. Otherwise the
+    /// zombie engine's eventual failure delivers a second close that can
+    /// start a spurious reconnect cycle.
+    func testClosingTwiceNotifiesTheClientOnce() {
+        let countingManager = CloseCountingManager(socketURL: URL(string: "http://localhost")!)
+        countingManager.reconnects = false
+        let testEngine = SocketEngine(client: countingManager, url: URL(string: "http://localhost")!, options: nil)
+
+        testEngine.disconnect(reason: "a")
+        testEngine.disconnect(reason: "b")
+        testEngine.engineQueue.sync {}
+
+        let settled = expectation(description: "close notifications settle")
+        countingManager.handleQueue.async { settled.fulfill() }
+        wait(for: [settled], timeout: 3)
+
+        XCTAssertEqual(countingManager.closeCount, 1, "closeOutEngine must notify exactly once per session")
+    }
+
+    /// `doRequest` binds every polling request to the URLSession it was issued on and
+    /// drops responses from a previous session. A fresh engine has no session at all —
+    /// `session` is only created in `resetEngine`, which runs inside `_connect` and does
+    /// networking — so the stale-session half cannot be driven without a network round
+    /// trip and is covered by `testOpenPacketArrivingAfterCloseIsIgnored` plus the E2E
+    /// `testAttemptReconnectsAfterAFailedReconnect`. This pins the no-session half: with
+    /// no session no request starts and the callback never fires.
+    func testDoRequestWithoutSessionNeverCallsBack() {
+        XCTAssertNil(engine.session, "Fresh engine has no session without networking (resetEngine runs only in _connect)")
+
+        let never = expectation(description: "callback for a request that never started must not fire")
+        never.isInverted = true
+
+        engine.doRequest(for: URLRequest(url: URL(string: "http://localhost/")!)) { _, _, _ in
+            never.fulfill()
+        }
+
+        waitForExpectations(timeout: 0.5, handler: nil)
+    }
+
     var manager: SocketManager!
     var socket: SocketIOClient!
     var engine: SocketEngine!
@@ -467,5 +530,14 @@ class SocketEngineTest: XCTestCase {
         engine = SocketEngine(client: manager, url: URL(string: "http://localhost")!, options: nil)
 
         socket.setTestable()
+    }
+}
+
+private class CloseCountingManager: SocketManager {
+    var closeCount = 0
+
+    override func engineDidClose(reason: String) {
+        closeCount += 1
+        super.engineDidClose(reason: reason)
     }
 }

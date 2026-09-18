@@ -174,17 +174,31 @@ extension SocketEnginePollable {
 
     func doRequest(for req: URLRequest, callbackWith callback: @escaping (Data?, URLResponse?, Error?) -> ()) {
         guard polling && !closed && !invalidated && !fastUpgrade else { return }
+        // The engine object is reused across reconnects (`resetEngine` swaps in a NEW
+        // URLSession), while an invalidated session still lets in-flight tasks finish.
+        // Bind each request to the session it was issued on, so a late response (e.g.
+        // the pre-timeout handshake) cannot reach the new session's state. JS gets this
+        // by creating a fresh transport per attempt.
+        guard let issuedSession = session else { return }
 
         DefaultSocketLogger.Logger.log("Doing polling \(req.httpMethod ?? "") \(req)", type: "SocketEnginePolling")
 
-        session?.dataTask(with: req, completionHandler: callback).resume()
+        issuedSession.dataTask(with: req) {[weak self] data, res, err in
+            guard let this = self, this.session === issuedSession else {
+                DefaultSocketLogger.Logger.log("Ignoring response for an invalidated session", type: "SocketEnginePolling")
+
+                return
+            }
+
+            callback(data, res, err)
+        }.resume()
     }
 
     func doLongPoll(for req: URLRequest) {
         waitingForPoll = true
 
         doRequest(for: req) {[weak self] data, res, err in
-            guard let this = self, this.polling else { return }
+            guard let this = self, this.polling, !this.closed else { return }
             guard let data = data, let res = res as? HTTPURLResponse, res.statusCode == 200 else {
                 if let err = err {
                     DefaultSocketLogger.Logger.error(err.localizedDescription, type: "SocketEnginePolling")
@@ -192,7 +206,7 @@ extension SocketEnginePollable {
                     DefaultSocketLogger.Logger.error("Error during long poll request", type: "SocketEnginePolling")
                 }
 
-                if this.polling {
+                if this.polling && !this.closed {
                     this.didError(reason: err?.localizedDescription ?? "Error")
                 }
 
@@ -238,7 +252,7 @@ extension SocketEnginePollable {
         DefaultSocketLogger.Logger.log("POSTing", type: "SocketEnginePolling")
 
         doRequest(for: req) {[weak self] _, res, err in
-            guard let this = self else { return }
+            guard let this = self, !this.closed else { return }
             guard let res = res as? HTTPURLResponse, res.statusCode == 200 else {
                 if let err = err {
                     DefaultSocketLogger.Logger.error(err.localizedDescription, type: "SocketEnginePolling")
@@ -246,7 +260,7 @@ extension SocketEnginePollable {
                     DefaultSocketLogger.Logger.error("Error flushing waiting posts", type: "SocketEnginePolling")
                 }
 
-                if this.polling {
+                if this.polling && !this.closed {
                     this.didError(reason: err?.localizedDescription ?? "Error")
                 }
 

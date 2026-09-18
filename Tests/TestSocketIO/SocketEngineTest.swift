@@ -498,6 +498,26 @@ class SocketEngineTest: XCTestCase {
         XCTAssertEqual(countingManager.closeCount, 1, "closeOutEngine must notify exactly once per session")
     }
 
+    /// `doRequest` binds every polling request to the URLSession it was issued on and
+    /// drops responses from a previous session. A fresh engine has no session at all —
+    /// `session` is only created in `resetEngine`, which runs inside `_connect` and does
+    /// networking — so the stale-session half cannot be driven without a network round
+    /// trip and is covered by `testOpenPacketArrivingAfterCloseIsIgnored` plus the E2E
+    /// `testAttemptReconnectsAfterAFailedReconnect`. This pins the no-session half: with
+    /// no session no request starts and the callback never fires.
+    func testDoRequestWithoutSessionNeverCallsBack() {
+        XCTAssertNil(engine.session, "Fresh engine has no session without networking (resetEngine runs only in _connect)")
+
+        let never = expectation(description: "callback for a request that never started must not fire")
+        never.isInverted = true
+
+        engine.doRequest(for: URLRequest(url: URL(string: "http://localhost/")!)) { _, _, _ in
+            never.fulfill()
+        }
+
+        waitForExpectations(timeout: 0.5, handler: nil)
+    }
+
     var manager: SocketManager!
     var socket: SocketIOClient!
     var engine: SocketEngine!

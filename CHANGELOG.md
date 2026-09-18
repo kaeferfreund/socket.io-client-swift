@@ -12,7 +12,7 @@
 - New `SocketEnginePollable.maxPayload: Int?` — additive protocol requirement with a `nil` default, so existing conformers keep the previous unbounded behavior.
 - With `.autoConnect(true)`, `socket(forNamespace:)` now re-connects a cached socket that is no longer active, JS-aligned with `Manager.socket()`; without `autoConnect` nothing changes.
 - After the reconnect budget is exhausted, a later `connect()` starts a fresh reconnection cycle with a fresh budget (previously the manager stayed flagged as reconnecting forever). JS-aligned with `Manager.reconnect()`; found via the JS scenario "should attempt reconnects after a failed reconnect".
-- A closed engine now ignores late packets and notifies the manager of its close only once, JS-aligned with the `readyState` guards in engine.io-client's `_onClose`/`_onPacket`. Previously a handshake completing after a timeout-close revived the engine, and its eventual failure delivered a second close that could start a spurious reconnect cycle. Found via the JS scenario "should attempt reconnects after a failed reconnect".
+- The engine now ignores responses and packets that belong to a previous session and reports its close only once; previously a handshake completing after a timeout-close re-opened the reused engine with a stale sid, so the manager saw two "opened" sessions and started a spurious reconnect cycle (JS-aligned: engine.io-client uses a fresh transport per attempt). Found via the JS scenario "should attempt reconnects after a failed reconnect".
 
 ## Features
 

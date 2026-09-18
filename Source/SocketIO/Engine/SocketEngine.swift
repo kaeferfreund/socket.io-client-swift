@@ -831,6 +831,15 @@ extension SocketEngine {
     ///   - event: WS Event
     ///   - _:
     public func didReceive(event: Starscream.WebSocketEvent, client: Starscream.WebSocketClient) {
+        // Same stale-transport idea as the polling `doRequest` guard: the engine object
+        // is reused across reconnects while each attempt gets a fresh WebSocket, so events
+        // from a previous socket must not reach the new state.
+        guard (client as? WebSocket) === ws else {
+            DefaultSocketLogger.Logger.log("Ignoring WebSocket event for a previous socket", type: SocketEngine.logType)
+
+            return
+        }
+
         switch event {
         case let .connected(headers):
             wsConnected = true

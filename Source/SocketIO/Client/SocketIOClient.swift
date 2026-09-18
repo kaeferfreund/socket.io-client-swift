@@ -522,6 +522,56 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         }
     }
 
+    /// Send an event to the server, requesting an ack with an err-first callback.
+    ///
+    /// JS-aligned with `socket.emit("ev", ..., (err, ...args) => {})` and
+    /// `_registerAckCallback` in `socket.io-client/lib/socket.ts` with
+    /// `flags.timeout` unset:
+    /// - when `SocketManager.ackTimeout` is set, behaves exactly like
+    ///   `timeout(after: ackTimeout).emit(...)` — the callback fires with
+    ///   `SocketAckError.timeout` on timeout (and the packet is dropped from
+    ///   the send buffer) or `SocketAckError.disconnected` on disconnect.
+    /// - when it is `nil`, the callback is a plain ack registered with no
+    ///   timer: it fires as `ack(nil, data)` on the server ack and is never
+    ///   called with an error — not on disconnect either.
+    ///
+    /// If an error occurs trying to transform `items` into their socket representation, a `SocketClientEvent.error`
+    /// will be emitted. The structure of the error data is `[eventName, items, theError]`
+    ///
+    /// - parameter event: The event to send.
+    /// - parameter items: The items to send with this event. May be left out.
+    /// - parameter ack: The err-first ack callback.
+    open func emit(_ event: String, _ items: SocketData..., ack: @escaping (Error?, [Any]) -> Void) {
+        emit(event, with: items, ack: ack)
+    }
+
+    /// Array form of `emit(_:_:ack:)`. See above for the exact semantics of
+    /// each branch.
+    ///
+    /// - parameter event: The event to send.
+    /// - parameter items: The items to send with this event. May be left out.
+    /// - parameter ack: The err-first ack callback.
+    open func emit(_ event: String, with items: [SocketData], ack: @escaping (Error?, [Any]) -> Void) {
+        if let defaultTimeout = (manager as? SocketManager)?.ackTimeout {
+            timeout(after: defaultTimeout).emit(event, with: items, ack: ack)
+
+            return
+        }
+
+        do {
+            let mapped = [event] + (try items.map({ try $0.socketRepresentation() }))
+
+            createOnAck(mapped).timingOut(after: 0) { data in
+                ack(nil, data)
+            }
+        } catch {
+            DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event), \(items)",
+                                             type: logType)
+
+            handleClientEvent(.error, data: [event, items, error])
+        }
+    }
+
     /// Sends a message to the server, requesting an ack.
     ///
     /// **NOTE**: It is up to the server send an ack back, just calling this method does not mean the server will ack.

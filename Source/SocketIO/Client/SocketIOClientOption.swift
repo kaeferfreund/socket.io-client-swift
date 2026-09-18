@@ -40,6 +40,12 @@ protocol ClientOption : CustomStringConvertible, Equatable {
 
 /// The options for a client.
 public enum SocketIOClientOption : ClientOption {
+    /// The default timeout in seconds used when waiting for an acknowledgement
+    /// from `emit(_:_:ack:)` / `emit(_:with:ack:)`. `nil` (unset) means no
+    /// default — a plain ack that never times out. JS-aligned with the
+    /// `ackTimeout` (milliseconds) option in `socket.io-client/lib/socket.ts`.
+    case ackTimeout(Double)
+
     /// Whether the manager should automatically call `connect()` at the end of `init`.
     /// Default `false` to preserve existing behavior. JS `Manager` defaults to `true`;
     /// Swift inverts the default. When `true`, only the `defaultSocket` is auto-CONNECTed
@@ -144,6 +150,8 @@ public enum SocketIOClientOption : ClientOption {
         let description: String
 
         switch self {
+        case .ackTimeout:
+            description = "ackTimeout"
         case .autoConnect:
             description = "autoConnect"
         case .compress:
@@ -205,6 +213,8 @@ public enum SocketIOClientOption : ClientOption {
         let value: Any
 
         switch self {
+        case let .ackTimeout(timeout):
+            value = timeout
         case let .autoConnect(autoConnect):
             value = autoConnect
         case .compress:

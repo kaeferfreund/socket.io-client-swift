@@ -851,4 +851,47 @@ final class JSParityE2ETest: XCTestCase {
         XCTAssertNotNil(t, "Polling requests must carry the t= cache buster (saw query: \(query ?? "nil"))")
         XCTAssertFalse(t?.isEmpty ?? true)
     }
+
+    // MARK: socket.ts — "should use the default timeout value"
+
+    func testDefaultAckTimeoutApplies() {
+        let socket = connect(makeManager(.ackTimeout(0.05)).socket(forNamespace: "/"))
+
+        let timedOut = expectation(description: "default timeout fires")
+        socket.emit("never_ack", ack: { err, _ in
+            XCTAssertEqual(err as? SocketAckError, .timeout)
+            timedOut.fulfill()
+        })
+        wait(for: [timedOut], timeout: 5)
+    }
+
+    // MARK: socket.ts — "should ack with an error upon disconnection (callback & ackTimeout)"
+
+    func testAckTimeoutFailsWithErrorOnDisconnect() {
+        let socket = connect(makeManager(.ackTimeout(10)).socket(forNamespace: "/"))
+
+        let disconnected = expectation(description: "ack fails on disconnect")
+        socket.emit("never_ack", ack: { err, _ in
+            XCTAssertEqual(err as? SocketAckError, .disconnected)
+            disconnected.fulfill()
+        })
+        socket.disconnect()
+        wait(for: [disconnected], timeout: 5)
+    }
+
+    // MARK: socket.ts — "should use the default timeout value" (positive round trip)
+
+    /// The default must not break the happy path: a server ack still arrives
+    /// as `(nil, data)`.
+    func testEmitWithDefaultAckTimeoutRoundTrip() {
+        let socket = connect(makeManager(.ackTimeout(5)).socket(forNamespace: "/"))
+
+        let acked = expectation(description: "server ack")
+        socket.emit("echo", "a", ack: { err, data in
+            XCTAssertNil(err)
+            XCTAssertEqual(data.first as? String, "a")
+            acked.fulfill()
+        })
+        wait(for: [acked], timeout: 5)
+    }
 }

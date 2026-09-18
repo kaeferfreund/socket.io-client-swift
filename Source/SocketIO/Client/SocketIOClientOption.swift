@@ -111,6 +111,17 @@ public enum SocketIOClientOption : ClientOption {
     /// Set `true` if your server is using secure transports.
     case secure(Bool)
 
+    /// Whether to add a cache-busting timestamp query parameter with each
+    /// transport request. `nil` (default, JS `timestampRequests` unset):
+    /// polling requests carry it, WebSocket URLs do not. `true`: both carry
+    /// it. `false`: neither does. JS-aligned with `timestampRequests` in
+    /// engine.io-client (`Polling.uri()` vs `WS.uri()`).
+    case timestampRequests(Bool)
+
+    /// The query parameter name used for the cache-busting timestamp.
+    /// Default `"t"`. JS-aligned with `timestampParam` in engine.io-client.
+    case timestampParam(String)
+
     /// Allows you to set which certs are valid. Useful for SSL pinning.
     case security(CertificatePinning)
 
@@ -169,6 +180,10 @@ public enum SocketIOClientOption : ClientOption {
             description = "randomizationFactor"
         case .secure:
             description = "secure"
+        case .timestampRequests:
+            description = "timestampRequests"
+        case .timestampParam:
+            description = "timestampParam"
         case .selfSigned:
             description = "selfSigned"
         case .security:
@@ -226,6 +241,10 @@ public enum SocketIOClientOption : ClientOption {
             value = factor
         case let .secure(secure):
             value = secure
+        case let .timestampRequests(timestampRequests):
+            value = timestampRequests
+        case let .timestampParam(timestampParam):
+            value = timestampParam
         case let .security(security):
             value = security
         case let .selfSigned(signed):

@@ -389,6 +389,72 @@ class SocketEngineTest: XCTestCase {
         XCTAssertEqual("World", req.allHTTPHeaderFields?["Hello"])
     }
 
+    // MARK: engine.io-client — Polling.uri() / WS.uri() cache buster
+
+    private func queryItems(of url: URL) -> [String: String] {
+        var dict = [String: String]()
+        for item in URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? [] {
+            dict[item.name] = item.value ?? ""
+        }
+
+        return dict
+    }
+
+    func testPollingUrlsCarryADifferentCacheBusterEachTime() {
+        let first = queryItems(of: engine.urlPollingWithSid)
+        let second = queryItems(of: engine.urlPollingWithSid)
+
+        XCTAssertNotNil(first["t"], "Polling requests must carry the cache-busting parameter by default")
+        XCTAssertNotNil(second["t"])
+        XCTAssertFalse(first["t"]!.isEmpty)
+        XCTAssertNotEqual(first["t"], second["t"], "The value must be unique per request")
+    }
+
+    func testWebSocketUrlHasNoCacheBusterByDefault() {
+        XCTAssertNil(queryItems(of: engine.urlWebSocketWithSid)["t"],
+                     "The WebSocket URL is only stamped when timestampRequests is explicitly true")
+    }
+
+    func testTimestampRequestsTrueStampsWebSocketAndFalseDisablesPolling() {
+        engine.setConfigs([.timestampRequests(true)])
+
+        XCTAssertNotNil(queryItems(of: engine.urlWebSocketWithSid)["t"])
+        XCTAssertNotNil(queryItems(of: engine.urlPollingWithSid)["t"])
+
+        engine.setConfigs([.timestampRequests(false)])
+
+        XCTAssertNil(queryItems(of: engine.urlPollingWithSid)["t"])
+        XCTAssertNil(queryItems(of: engine.urlWebSocketWithSid)["t"])
+    }
+
+    func testTimestampParamRenamesTheCacheBuster() {
+        engine.setConfigs([.timestampParam("ts")])
+
+        let items = queryItems(of: engine.urlPollingWithSid)
+
+        XCTAssertNotNil(items["ts"])
+        XCTAssertNil(items["t"], "A renamed parameter must not also appear under the default name")
+    }
+
+    func testCacheBusterLeavesExistingQueryParametersUnchanged() {
+        engine.connectParams = ["foo": "bar"]
+
+        let polling = queryItems(of: engine.urlPollingWithSid)
+
+        XCTAssertEqual(polling["transport"], "polling")
+        XCTAssertEqual(polling["b64"], "1")
+        XCTAssertEqual(polling["EIO"], "4")
+        XCTAssertNotNil(polling["sid"], "The sid parameter must still be present")
+        XCTAssertEqual(polling["foo"], "bar", "connectParams must survive the appended parameter")
+        XCTAssertNotNil(polling["t"])
+
+        let ws = queryItems(of: engine.urlWebSocketWithSid)
+
+        XCTAssertEqual(ws["transport"], "websocket")
+        XCTAssertEqual(ws["EIO"], "4")
+        XCTAssertEqual(ws["foo"], "bar")
+    }
+
     var manager: SocketManager!
     var socket: SocketIOClient!
     var engine: SocketEngine!

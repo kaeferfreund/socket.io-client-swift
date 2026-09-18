@@ -829,4 +829,26 @@ final class JSParityE2ETest: XCTestCase {
 
         wait(for: [reconnected], timeout: 5)
     }
+
+    // MARK: engine.io-client — Polling.uri() cache buster
+
+    /// Every polling request has to carry a unique `t=` parameter so that
+    /// intermediaries never serve a cached long-poll response, JS-aligned
+    /// with `Polling.uri()` in engine.io-client. The fixture taps the HTTP
+    /// layer because poll URLs never reach the packet layer.
+    func testPollingRequestsCarryCacheBustingTimestamp() throws {
+        connect(makeManager(.forcePolling(true)).socket(forNamespace: "/"))
+        settle(0.5)
+
+        let (status, body) = try server.admin("/admin/last-polling-query", method: "GET")
+        XCTAssertEqual(status, 200)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        let query = json?["query"] as? String
+        XCTAssertNotNil(query, "The server must have seen at least one polling request")
+
+        let items = URLComponents(string: "http://localhost/?\(query ?? "")")?.queryItems ?? []
+        let t = items.first(where: { $0.name == "t" })?.value
+        XCTAssertNotNil(t, "Polling requests must carry the t= cache buster (saw query: \(query ?? "nil"))")
+        XCTAssertFalse(t?.isEmpty ?? true)
+    }
 }

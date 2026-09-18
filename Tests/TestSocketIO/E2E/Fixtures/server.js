@@ -36,6 +36,14 @@ let connectFrameCount = 0;
 let blockNewConnectionsUntil = 0;
 let blockNewConnectionsPending = false;
 let blockResetTimer = null;
+// Query-bearing URL of the most recent engine.io polling request (GET or
+// POST). Polling URLs do not reach the packet layer, so the engine.io layer
+// is tapped. They also never reach the http.createServer request handler:
+// when socket.io attaches to an http.Server, engine.io removes the server's
+// existing `request` listeners and re-adds them behind its own check, so
+// `/socket.io/*` requests are handled by engine.io and the original handler
+// only sees everything else.
+let lastPollingUrl = null;
 
 const resetBlockedConnections = () => {
   if (blockResetTimer) {
@@ -209,6 +217,11 @@ const httpServer = http.createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ count: totalConnections }));
       return;
     }
+    if (url.pathname === "/admin/last-polling-query") {
+      const query = lastPollingUrl ? (lastPollingUrl.split("?")[1] ?? "") : null;
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ query, url: lastPollingUrl }));
+      return;
+    }
     res.writeHead(404).end("no route");
   } catch (e) {
     res.writeHead(500).end(String(e));
@@ -224,6 +237,14 @@ const io = new Server(httpServer, {
     maxDisconnectionDuration: recoveryWindowMs,
     skipMiddlewares: true,
   },
+});
+
+// engine.io emits "headers" for every HTTP long-polling request (handshake,
+// GET, POST) before responding, with the Node `req`.
+io.engine.on("headers", (_headers, req) => {
+  if (typeof req.url === "string" && req.url.includes("transport=polling")) {
+    lastPollingUrl = req.url;
+  }
 });
 
 // Tap engine.io raw packets so we can count socket.io CONNECT frames as they

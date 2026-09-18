@@ -715,6 +715,9 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         guard reconnects && reconnecting && status != .disconnected else { return }
 
         if reconnectAttempts != -1 && currentReconnectAttempt + 1 > reconnectAttempts {
+            // JS `Manager.reconnect()` in socket.io-client/lib/manager.ts: `backoff.reset(); _reconnecting = false`.
+            reconnecting = false
+            currentReconnectAttempt = 0
             return didDisconnect(reason: "Reconnect Failed")
         }
 

@@ -11,6 +11,7 @@
 - Polling POSTs now respect the `maxPayload` the server advertises in the handshake. Previously the whole queue went out in one request; above the limit the server answers HTTP 413 and discards every packet it carried, while the session stays open. The batch is now cut at the limit and the rest follows in the next POST, JS-aligned with `getWritablePackets()` in engine.io-client. A single packet larger than the limit is still sent on its own, as in the reference client. engine.io v3 is unaffected — those servers advertise no limit.
 - New `SocketEnginePollable.maxPayload: Int?` — additive protocol requirement with a `nil` default, so existing conformers keep the previous unbounded behavior.
 - With `.autoConnect(true)`, `socket(forNamespace:)` now re-connects a cached socket that is no longer active, JS-aligned with `Manager.socket()`; without `autoConnect` nothing changes.
+- After the reconnect budget is exhausted, a later `connect()` starts a fresh reconnection cycle with a fresh budget (previously the manager stayed flagged as reconnecting forever). JS-aligned with `Manager.reconnect()`; found via the JS scenario "should attempt reconnects after a failed reconnect".
 
 ## Features
 

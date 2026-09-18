@@ -107,8 +107,16 @@ final class SocketAckTimeoutTest: XCTestCase {
         waitForAckRegistration()
 
         let sent = try XCTUnwrap(engine.lastSent)
-        XCTAssertTrue(sent.hasPrefix("42"), "Expected an event packet, got \(sent)")
-        let ackId = try XCTUnwrap(Int(String(sent.dropFirst(2).prefix(while: { $0.isNumber })) ),
+        XCTAssertTrue(sent.hasPrefix("2"), "Expected an event packet, got \(sent)")
+        var remainder = String(sent.dropFirst())
+        if remainder.hasPrefix("/") {
+            guard let comma = remainder.firstIndex(of: ",") else {
+                XCTFail("Could not parse namespace from \(sent)")
+                return
+            }
+            remainder = String(remainder[remainder.index(after: comma)...])
+        }
+        let ackId = try XCTUnwrap(Int(String(remainder.prefix(while: { $0.isNumber })) ),
                                   "Could not parse ack id from \(sent)")
 
         socket.handleAck(ackId, data: ["pong"])

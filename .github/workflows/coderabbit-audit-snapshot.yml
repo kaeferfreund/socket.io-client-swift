@@ -1,0 +1,81 @@
+name: CodeRabbit audit snapshot (temporary)
+on:
+  push:
+    branches: [fix/coderabbit-findings-audit]
+    paths: [.github/workflows/coderabbit-audit-snapshot.yml]
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Collect all PR discussions and immutable source, no credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/coderabbit-audit"
+          git bundle create "$RUNNER_TEMP/coderabbit-audit/source.bundle" HEAD
+          python3 - <<'PY'
+          import json, os, urllib.request, datetime
+          from pathlib import Path
+          root = 'https://api.github.com'
+          repo = os.environ['GITHUB_REPOSITORY']
+          assert repo == 'kaeferfreund/socket.io-client-swift'
+          out = Path(os.environ['RUNNER_TEMP']) / 'coderabbit-audit'
+          headers = {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'User-Agent': 'review-audit'}
+          def request(path, data=None):
+              req = urllib.request.Request(root + path, headers=headers, data=None if data is None else json.dumps(data).encode())
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  return json.load(response)
+          def pages(path):
+              result = []
+              page = 1
+              while True:
+                  batch = request(path + ('&' if '?' in path else '?') + f'per_page=100&page={page}')
+                  assert isinstance(batch, list)
+                  result.extend(batch)
+                  if len(batch) < 100: return result
+                  page += 1
+          prs = pages(f'/repos/{repo}/pulls?state=all&sort=created&direction=asc')
+          (out / 'pulls.json').write_text(json.dumps(prs, indent=2))
+          for pr in prs:
+              n = pr['number']
+              data = {'number': n, 'title': pr['title'], 'state': pr['state'], 'merged_at': pr['merged_at'], 'head': pr['head']['sha'], 'base': pr['base']['ref']}
+              for key, path in [('reviews', f'pulls/{n}/reviews'), ('inline', f'pulls/{n}/comments'), ('discussion', f'issues/{n}/comments')]:
+                  data[key] = pages(f'/repos/{repo}/{path}')
+              cursor = None
+              threads = []
+              while True:
+                  query = 'query($n:Int!, $cursor:String) { repository(owner:"kaeferfreund",name:"socket.io-client-swift") { pullRequest(number:$n) { reviewThreads(first:100,after:$cursor) { pageInfo { hasNextPage endCursor } nodes { id isResolved isOutdated path line comments(first:100) { pageInfo { hasNextPage endCursor } nodes { databaseId url body author { login } } } } } } } }'
+                  result = request('/graphql', {'query': query, 'variables': {'n': n, 'cursor': cursor}})
+                  assert 'errors' not in result, result.get('errors')
+                  connection = result['data']['repository']['pullRequest']['reviewThreads']
+                  for thread in connection['nodes']:
+                      comments = thread['comments']
+                      while comments['pageInfo']['hasNextPage']:
+                          q = 'query($id:ID!, $cursor:String) { node(id:$id) { ... on PullRequestReviewThread { comments(first:100,after:$cursor) { pageInfo { hasNextPage endCursor } nodes { databaseId url body author { login } } } } } }'
+                          r = request('/graphql', {'query': q, 'variables': {'id': thread['id'], 'cursor': comments['pageInfo']['endCursor']}})
+                          assert 'errors' not in r, r.get('errors')
+                          comments = r['data']['node']['comments']
+                          thread['comments']['nodes'].extend(comments['nodes'])
+                      thread['comments']['pageInfo'] = comments['pageInfo']
+                      threads.append(thread)
+                  if not connection['pageInfo']['hasNextPage']: break
+                  cursor = connection['pageInfo']['endCursor']
+              data['threads'] = threads
+              (out / f'pr-{n}.json').write_text(json.dumps(data, indent=2))
+              print(n, pr['title'], {key: len(data[key]) for key in ['reviews', 'inline', 'discussion', 'threads']})
+          (out / 'manifest.json').write_text(json.dumps({'repository': repo, 'source_sha': os.environ['GITHUB_SHA'], 'audit_base': 'b613ef4c501df7b1ac32911b9a211312f496410b', 'retrieved_at': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'pr_numbers': [p['number'] for p in prs]}, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coderabbit-audit-snapshot
+          path: ${{ runner.temp }}/coderabbit-audit
+          retention-days: 7
+          if-no-files-found: error

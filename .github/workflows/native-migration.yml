@@ -44,7 +44,9 @@ jobs:
           gem install --user-install xcodeproj -v 1.28.1 --no-document
           ruby .native-migration/xcode.rb
       - name: Build complete native library
-        run: swift build
+        run: |
+          set -o pipefail
+          swift build 2>&1 | tee /tmp/native-build.log
       - name: Run complete unit and real-server test suite
         run: |
           set -o pipefail
@@ -61,7 +63,8 @@ jobs:
           test "$GITHUB_REPOSITORY" = 'kaeferfreund/socket.io-client-swift'
           test "$GITHUB_REF" = 'refs/heads/feat/native-urlsession-transport'
           git diff --exit-code -- Source/SocketIO/Manager Source/SocketIO/Client/SocketIOClient.swift
-          git add -A -- Source Tests Package.swift Package.resolved Cartfile Cartfile.resolved Socket.IO-Client-Swift.podspec Socket.IO-Client-Swift.xcodeproj scripts Documentation README.md CHANGELOG.md PARITY.md
+          git add -A -- Source Tests Package.swift Package.resolved Cartfile Cartfile.resolved Socket.IO-Client-Swift.podspec scripts Documentation README.md CHANGELOG.md PARITY.md
+          git add -u -- Socket.IO-Client-Swift.xcodeproj
           git diff --cached --check
           git diff --cached --stat
           git config user.name 'github-actions[bot]'
@@ -71,9 +74,10 @@ jobs:
       - name: Collect source-only diagnostic snapshot (no Git config or credentials)
         if: always()
         run: |
-          git add -A -- Source Tests Package.swift Cartfile Cartfile.resolved Socket.IO-Client-Swift.podspec Socket.IO-Client-Swift.xcodeproj scripts Documentation README.md CHANGELOG.md PARITY.md
-          git diff --cached --binary > /tmp/native-migration.patch
           git bundle create /tmp/native-history.bundle --all
+          git add -A -- Source Tests Package.swift Cartfile Cartfile.resolved Socket.IO-Client-Swift.podspec scripts Documentation README.md CHANGELOG.md PARITY.md
+          git add -u -- Socket.IO-Client-Swift.xcodeproj Package.resolved
+          git diff --cached --binary > /tmp/native-migration.patch
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -82,4 +86,5 @@ jobs:
           path: |
             /tmp/native-history.bundle
             /tmp/native-migration.patch
+            /tmp/native-build.log
             /tmp/native-full-tests.log

@@ -18,3 +18,19 @@ jobs:
         run: swift build -v
       - name: Run tests
         run: swift test -v
+
+  upgrade-race-proof:
+    name: Protocol proof (upgrade vs. in-flight POST)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Install fixture server
+        run: npm install --no-audit --no-fund
+        working-directory: Tests/TestSocketIO/E2E/Fixtures
+      - name: Prove the upgrade must wait for a pending POST
+        run: node upgrade-race-proof.mjs
+        working-directory: Tests/TestSocketIO/E2E/Fixtures

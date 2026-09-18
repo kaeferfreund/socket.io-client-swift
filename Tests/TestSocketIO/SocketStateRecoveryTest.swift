@@ -224,26 +224,24 @@ final class SocketStateRecoveryTest: XCTestCase {
         XCTAssertTrue(errors.isEmpty, "ordinary emits from replayed handlers should run after status becomes connected")
     }
 
-    // MARK: U9e — replay window still rejects ordinary emits during reconnect
+    // MARK: U9e — replay window buffers ordinary emits instead of sending them
 
-    func testU9e_replayWindowStillRejectsOrdinaryEmitDuringReconnect() {
+    func testU9e_replayWindowBuffersOrdinaryEmitDuringReconnect() {
         let engine = CaptureEngine()
         manager.engine = engine
         socket._pid = "p1"
         socket.setTestStatus(.connecting)
 
-        let expect = expectation(description: ".error fired")
-        var captured: [Any] = []
-        socket.on(clientEvent: .error) { data, _ in
-            captured = data
-            expect.fulfill()
-        }
-
         socket.emit("msg", "hello")
 
-        waitForExpectations(timeout: 1)
-        XCTAssertNil(engine.lastSent)
-        XCTAssertEqual(captured.first as? String, "Tried emitting when not connected")
+        XCTAssertNil(engine.lastSent, "Nothing may reach the wire before the socket is connected")
+
+        // The emit is owed, not lost: JS holds it in `sendBuffer` and writes it
+        // on the next CONNECT. Before, it was dropped with an `.error`.
+        socket.didConnect(toNamespace: "/", payload: ["sid": "s2", "pid": "p1"])
+
+        let expectedEmit = SocketPacket.packetFromEmit(["msg", "hello"], id: -1, nsp: "/", ack: false).packetString
+        XCTAssertEqual(engine.lastSent, expectedEmit)
     }
 
     // MARK: U9f — buffered replay packets still flow through handleEvent override hook when flushed
@@ -726,6 +724,9 @@ final class SocketStateRecoveryTest: XCTestCase {
 final class CaptureEngine: SocketEngineSpec {
     weak var client: SocketEngineClient?
     private(set) var lastSent: String?
+    /// Every packet written, in order. `lastSent` only keeps the most recent one,
+    /// which cannot show that a flushed buffer preserved its order.
+    private(set) var sentPackets = [String]()
     let closed = false
     let compress = false
     let connected = true
@@ -762,6 +763,7 @@ final class CaptureEngine: SocketEngineSpec {
 
     func write(_ msg: String, withType type: SocketEnginePacketType, withData data: [Data], completion: (() -> ())?) {
         lastSent = msg
+        sentPackets.append(msg)
         completion?()
     }
 }

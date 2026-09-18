@@ -56,6 +56,8 @@ final class JSParityE2ETest: XCTestCase {
         let socket = makeManager().socket(forNamespace: "/no")
 
         let failed = expectation(description: "connect error")
+        // A refused namespace may be retried; only the first report is under test.
+        failed.assertForOverFulfill = false
         var message: String?
         socket.on(clientEvent: .error) { data, _ in
             message = self.errorMessage(from: data)
@@ -73,6 +75,7 @@ final class JSParityE2ETest: XCTestCase {
         let socket = makeManager().socket(forNamespace: "/with-data")
 
         let failed = expectation(description: "connect error")
+        failed.assertForOverFulfill = false
         var payload: [String: Any]?
         socket.on(clientEvent: .error) { data, _ in
             payload = data.first as? [String: Any]
@@ -127,6 +130,8 @@ final class JSParityE2ETest: XCTestCase {
         let socket = makeManager().socket(forNamespace: "/")
 
         let connected = expectation(description: "connect")
+        // The handler stays registered across the reconnect below.
+        connected.assertForOverFulfill = false
         socket.on(clientEvent: .connect) { _, _ in connected.fulfill() }
         socket.connect()
         wait(for: [connected], timeout: 5)
@@ -169,6 +174,8 @@ final class JSParityE2ETest: XCTestCase {
         let socket = manager.socket(forNamespace: "/")
 
         let connected = expectation(description: "connect")
+        // The handler stays registered and fires again on the reconnect below.
+        connected.assertForOverFulfill = false
         socket.on(clientEvent: .connect) { _, _ in connected.fulfill() }
         socket.connect()
         wait(for: [connected], timeout: 5)
@@ -177,6 +184,7 @@ final class JSParityE2ETest: XCTestCase {
         XCTAssertNotNil(firstId)
 
         let reconnected = expectation(description: "reconnect")
+        reconnected.assertForOverFulfill = false
         socket.on(clientEvent: .connect) { _, _ in reconnected.fulfill() }
         manager.engine?.disconnect(reason: "test")
 
@@ -195,6 +203,7 @@ final class JSParityE2ETest: XCTestCase {
 
         let bothConnected = expectation(description: "both namespaces connected")
         bothConnected.expectedFulfillmentCount = 2
+        bothConnected.assertForOverFulfill = false
         foo.on(clientEvent: .connect) { _, _ in bothConnected.fulfill() }
         asd.on(clientEvent: .connect) { _, _ in bothConnected.fulfill() }
         foo.connect()

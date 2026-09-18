@@ -765,6 +765,7 @@ final class JSParityE2ETest: XCTestCase {
         // the new sid (not object identity) is what proves the old engine was
         // closed and a new one connected.
         XCTAssertNotEqual(newSid, oldSid)
+    }
 
     // MARK: socket.ts — "fire a connect_error event on open timeout (polling)"
 

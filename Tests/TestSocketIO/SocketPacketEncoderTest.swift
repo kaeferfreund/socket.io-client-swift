@@ -372,8 +372,8 @@ final class SocketPacketEncoderTest: XCTestCase {
         }
     }
 
-    /// A graph deeper than the encoder limit (and therefore also a cyclic one)
-    /// is an error rather than unbounded recursion.
+    /// A graph deeper than the encoder limit is an error rather than a
+    /// stack overflow inside `JSONSerialization`.
     func testTooDeeplyNestedPayloadThrows() {
         var nested: Any = "leaf"
         for _ in 0...SocketPacket.maximumEmitNestingDepth {
@@ -393,26 +393,14 @@ final class SocketPacketEncoderTest: XCTestCase {
     }
 
     // MARK: socket.io-parser/test/parser.js — "throws an error when encoding circular objects"
-
-    /// JS `encoder.encode()` throws on `a.b = a`. This encoder has no cycle
-    /// detector; the depth limit is what turns a cyclic Foundation graph into a
-    /// thrown error instead of unbounded recursion. The contract the JS test
-    /// asserts still holds: encoding fails and nothing is written.
-    func testThrowsWhenEncodingCircularObjects() {
-        let cyclic = NSMutableDictionary()
-        cyclic["b"] = cyclic
-
-        var reported: Error?
-        socket.on(clientEvent: .error) { data, _ in reported = data.last as? Error }
-
-        socket.emit("cycle", cyclic)
-        drain()
-
-        XCTAssertTrue(engine.sentPackets.isEmpty)
-        guard case .nestingTooDeep? = reported as? SocketPacketError else {
-            return XCTFail("Expected a SocketPacketError.nestingTooDeep, got \(String(describing: reported))")
-        }
-    }
+    //
+    // NOT PORTED, and deliberately so. A self-referencing Foundation container
+    // (`NSMutableDictionary` holding itself) never reaches this encoder: the
+    // `as? [String: Any]` bridge recurses through it first and overflows the
+    // stack, which no code in this package can intercept. Cycle detection is
+    // listed as out of scope in `ProtocolParityReview.md` §8; the depth limit
+    // above bounds deep graphs only. Adding the JS test here would crash the
+    // suite rather than assert anything.
 
     /// A custom `SocketData` whose conversion throws still reports through the
     /// same `.error` channel, and sends nothing.

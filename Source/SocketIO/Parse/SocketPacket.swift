@@ -322,7 +322,6 @@ public enum SocketPacketError : Error, LocalizedError, CustomStringConvertible {
     case nonStringKey(path: String)
 
     /// The object graph is nested deeper than `SocketPacket.maximumEmitNestingDepth`.
-    /// Also what a cyclic Foundation graph reports, instead of recursing forever.
     case nestingTooDeep(path: String, limit: Int)
 
     /// `JSONSerialization` rejected the payload after normalization.
@@ -338,7 +337,7 @@ public enum SocketPacketError : Error, LocalizedError, CustomStringConvertible {
         case let .nonStringKey(path):
             return "\(path) is a dictionary with a non-String key; JSON objects are string-keyed"
         case let .nestingTooDeep(path, limit):
-            return "\(path) is nested deeper than the \(limit) level encoder limit (or the graph is cyclic)"
+            return "\(path) is nested deeper than the \(limit) level encoder limit"
         case let .unserializablePayload(reason):
             return "the payload cannot be serialized: \(reason)"
         }
@@ -369,9 +368,11 @@ extension SocketPacket {
     /// Maximum object-graph depth the outgoing encoder accepts.
     ///
     /// Mirrors the decoder's `SocketParserOptions.maximumNestingDepth` default.
-    /// It also turns a cyclic Foundation graph into a thrown
-    /// `SocketPacketError.nestingTooDeep` instead of unbounded recursion;
-    /// proper cycle *detection* is out of scope (see `ProtocolParityReview.md`).
+    ///
+    /// **Cycles are out of scope.** A self-referencing Foundation container
+    /// overflows the stack inside Swift's `as? [String: Any]` / `as? [Any]`
+    /// bridging, before any code here runs, so this limit bounds deep graphs
+    /// only. See `Documentation/ProtocolParityReview.md` §8.
     public static let maximumEmitNestingDepth = 512
 
     /// `Date.prototype.toJSON()` — `toISOString()`, i.e. UTC with exactly three

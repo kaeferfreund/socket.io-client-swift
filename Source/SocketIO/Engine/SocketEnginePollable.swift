@@ -184,7 +184,7 @@ extension SocketEnginePollable {
         waitingForPoll = true
 
         doRequest(for: req) {[weak self] data, res, err in
-            guard let this = self, this.polling else { return }
+            guard let this = self, this.polling, !this.closed else { return }
             guard let data = data, let res = res as? HTTPURLResponse, res.statusCode == 200 else {
                 if let err = err {
                     DefaultSocketLogger.Logger.error(err.localizedDescription, type: "SocketEnginePolling")
@@ -192,7 +192,7 @@ extension SocketEnginePollable {
                     DefaultSocketLogger.Logger.error("Error during long poll request", type: "SocketEnginePolling")
                 }
 
-                if this.polling {
+                if this.polling && !this.closed {
                     this.didError(reason: err?.localizedDescription ?? "Error")
                 }
 
@@ -238,7 +238,7 @@ extension SocketEnginePollable {
         DefaultSocketLogger.Logger.log("POSTing", type: "SocketEnginePolling")
 
         doRequest(for: req) {[weak self] _, res, err in
-            guard let this = self else { return }
+            guard let this = self, !this.closed else { return }
             guard let res = res as? HTTPURLResponse, res.statusCode == 200 else {
                 if let err = err {
                     DefaultSocketLogger.Logger.error(err.localizedDescription, type: "SocketEnginePolling")
@@ -246,7 +246,7 @@ extension SocketEnginePollable {
                     DefaultSocketLogger.Logger.error("Error flushing waiting posts", type: "SocketEnginePolling")
                 }
 
-                if this.polling {
+                if this.polling && !this.closed {
                     this.didError(reason: err?.localizedDescription ?? "Error")
                 }
 

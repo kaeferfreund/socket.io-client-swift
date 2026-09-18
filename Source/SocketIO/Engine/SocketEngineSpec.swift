@@ -93,6 +93,16 @@ public protocol SocketEngineSpec: AnyObject {
     /// The version of engine.io being used. Default is three.
     var version: SocketIOVersion { get }
 
+    /// Whether polling (and WebSocket) requests carry a cache-busting
+    /// timestamp query parameter. `nil` is the JS default (`timestampRequests`
+    /// unset): polling requests carry it, WebSocket URLs do not. `true`:
+    /// both carry it. `false`: neither does.
+    var timestampRequests: Bool? { get }
+
+    /// The query parameter name used for the cache-busting timestamp.
+    /// Default `"t"`, JS-aligned with `timestampParam` in engine.io-client.
+    var timestampParam: String { get }
+
     /// If `true`, then the engine is currently in WebSockets mode.
     @available(*, deprecated, message: "No longer needed, if we're not polling, then we must be doing websockets")
     var websocket: Bool { get }
@@ -158,6 +168,32 @@ extension SocketEngineSpec {
     /// packets. See protocol declaration for rationale.
     public var writable: Bool { return false }
 
+    /// JS default: `timestampRequests` unset, so polling requests are stamped
+    /// and WebSocket URLs are not.
+    public var timestampRequests: Bool? { return nil }
+
+    /// JS default parameter name (`timestampParam: "t"` in engine.io-client).
+    public var timestampParam: String { return "t" }
+
+    /// A unique-per-request, URL-safe cache-busting value: a monotonically
+    /// increasing base-36 millisecond timestamp plus a short random suffix so
+    /// two requests within the same millisecond still differ.
+    func cacheBustingValue() -> String {
+        let millis = UInt64(Date().timeIntervalSince1970 * 1000)
+        let rand = UInt64.random(in: 0..<1_679_616) // 36^4, up to 4 chars
+
+        return String(millis, radix: 36) + String(rand, radix: 36)
+    }
+
+    /// Appends the cache-busting parameter to an already-built engine URL.
+    /// Evaluated per call, so every request gets a fresh value.
+    func urlByAppendingCacheBuster(to url: URL) -> URL {
+        var com = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        com.percentEncodedQuery = (com.percentEncodedQuery ?? "") + "&\(timestampParam.urlEncode()!)=\(cacheBustingValue())"
+
+        return com.url!
+    }
+
     var engineIOParam: String {
         switch version {
         case .two:
@@ -165,6 +201,16 @@ extension SocketEngineSpec {
         case .three:
             return "&EIO=4"
         }
+    }
+
+    /// The first polling GET (no `sid` yet — used by `_connect`); every later
+    /// poll and POST goes through `urlPollingWithSid`. Both carry the
+    /// cache-busting parameter unless `timestampRequests` is `false`.
+    /// JS-aligned with `Polling.uri()` in engine.io-client.
+    var urlPollingHandshake: URL {
+        guard timestampRequests != false else { return urlPolling }
+
+        return urlByAppendingCacheBuster(to: urlPolling)
     }
 
     var urlPollingWithSid: URL {
@@ -175,7 +221,9 @@ extension SocketEngineSpec {
             com.percentEncodedQuery = com.percentEncodedQuery! + engineIOParam
         }
 
-        return com.url!
+        guard timestampRequests != false else { return com.url! }
+
+        return urlByAppendingCacheBuster(to: com.url!)
     }
 
     var urlWebSocketWithSid: URL {
@@ -186,8 +234,11 @@ extension SocketEngineSpec {
             com.percentEncodedQuery = com.percentEncodedQuery! + engineIOParam
         }
 
+        // JS-aligned with `WS.uri()` in engine.io-client: the WebSocket URL
+        // is only stamped when `timestampRequests` is explicitly `true`.
+        guard timestampRequests == true else { return com.url! }
 
-        return com.url!
+        return urlByAppendingCacheBuster(to: com.url!)
     }
 
     func addHeaders(to req: inout URLRequest, includingCookies additionalCookies: [HTTPCookie]? = nil) {

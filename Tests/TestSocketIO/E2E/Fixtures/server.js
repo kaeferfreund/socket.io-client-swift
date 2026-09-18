@@ -36,6 +36,10 @@ let connectFrameCount = 0;
 let blockNewConnectionsUntil = 0;
 let blockNewConnectionsPending = false;
 let blockResetTimer = null;
+// Query-bearing URL of the most recent engine.io polling request (GET or
+// POST). Polling URLs do not reach the packet layer, so the HTTP layer is
+// tapped to prove the `t=` cache buster end to end.
+let lastPollingUrl = null;
 
 const resetBlockedConnections = () => {
   if (blockResetTimer) {
@@ -63,6 +67,9 @@ const armBlockedConnectionsUntil = (durationMs) => {
 };
 
 const httpServer = http.createServer(async (req, res) => {
+  if (typeof req.url === "string" && req.url.startsWith("/socket.io/") && req.url.includes("transport=polling")) {
+    lastPollingUrl = req.url;
+  }
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
   if (!url.pathname.startsWith("/admin/")) { res.writeHead(404).end(); return; }
   if (req.headers["x-admin-secret"] !== SECRET) { res.writeHead(401).end("unauthorized"); return; }
@@ -207,6 +214,11 @@ const httpServer = http.createServer(async (req, res) => {
       totalConnections = 0;
       connectFrameCount = 0;
       res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ count: totalConnections }));
+      return;
+    }
+    if (url.pathname === "/admin/last-polling-query") {
+      const query = lastPollingUrl ? (lastPollingUrl.split("?")[1] ?? "") : null;
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ query, url: lastPollingUrl }));
       return;
     }
     res.writeHead(404).end("no route");

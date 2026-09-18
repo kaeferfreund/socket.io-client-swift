@@ -126,6 +126,16 @@ open class SocketEngine: NSObject, WebSocketDelegate, URLSessionDelegate,
     /// The path to engine.io.
     public private(set) var socketPath = "/engine.io/"
 
+    /// Whether polling/WebSocket requests carry a cache-busting timestamp
+    /// query parameter. `nil` is the JS default (`timestampRequests` unset):
+    /// polling requests carry it, WebSocket URLs do not. `true`: both carry
+    /// it. `false`: neither does.
+    public private(set) var timestampRequests: Bool? = nil
+
+    /// The query parameter name used for the cache-busting timestamp.
+    /// Default `"t"`, JS-aligned with `timestampParam` in engine.io-client.
+    public private(set) var timestampParam = "t"
+
     /// The url for polling.
     public private(set) var urlPolling = URL(string: "http://localhost/")!
 
@@ -274,7 +284,7 @@ open class SocketEngine: NSObject, WebSocketDelegate, URLSessionDelegate,
             return
         }
 
-        var reqPolling = URLRequest(url: urlPolling, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60.0)
+        var reqPolling = URLRequest(url: urlPollingHandshake, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60.0)
 
         addHeaders(to: &reqPolling)
         doLongPoll(for: reqPolling)
@@ -657,6 +667,10 @@ open class SocketEngine: NSObject, WebSocketDelegate, URLSessionDelegate,
                 self.certPinner = pinner
             case .compress:
                 self.compress = true
+            case let .timestampRequests(stamp):
+                timestampRequests = stamp
+            case let .timestampParam(param):
+                timestampParam = param
             case .enableSOCKSProxy:
                 self.enableSOCKSProxy = true
             case let .useCustomEngine(enable):

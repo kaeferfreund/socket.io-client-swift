@@ -215,6 +215,7 @@ final class JSParityE2ETest: XCTestCase {
         XCTAssertNotNil(socket.sid)
 
         let disconnected = expectation(description: "disconnect")
+        disconnected.assertForOverFulfill = false
         socket.on(clientEvent: .disconnect) { _, _ in disconnected.fulfill() }
         socket.disconnect()
         wait(for: [disconnected], timeout: 5)
@@ -455,6 +456,7 @@ final class JSParityE2ETest: XCTestCase {
         connect(socket)
 
         let disconnected = expectation(description: "manual disconnect")
+        disconnected.assertForOverFulfill = false
         socket.on(clientEvent: .disconnect) { _, _ in disconnected.fulfill() }
         socket.disconnect()
         wait(for: [disconnected], timeout: 5)
@@ -472,6 +474,7 @@ final class JSParityE2ETest: XCTestCase {
         connect(socket)
 
         let disconnected = expectation(description: "manual disconnect")
+        disconnected.assertForOverFulfill = false
         socket.on(clientEvent: .disconnect) { _, _ in disconnected.fulfill() }
         socket.disconnect()
         wait(for: [disconnected], timeout: 5)

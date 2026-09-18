@@ -64,6 +64,11 @@ public enum SocketIOClientOption : ClientOption {
     /// A dictionary of GET parameters that will be included in the connect url.
     case connectParams([String: Any])
 
+    /// Seconds the engine.io handshake may take before the attempt is failed with `.error("timeout")`
+    /// and the engine is closed. Default `20`, JS-aligned with `Manager`'s `timeout` option
+    /// (`socket.io-client/lib/manager.ts`). `.infinity` disables the timeout.
+    case connectTimeout(Double)
+
     /// An array of cookies that will be sent during the initial connection.
     case cookies([HTTPCookie])
 
@@ -158,6 +163,8 @@ public enum SocketIOClientOption : ClientOption {
             description = "compress"
         case .connectParams:
             description = "connectParams"
+        case .connectTimeout:
+            description = "connectTimeout"
         case .cookies:
             description = "cookies"
         case .extraHeaders:
@@ -221,6 +228,8 @@ public enum SocketIOClientOption : ClientOption {
             value = true
         case let .connectParams(params):
             value = params
+        case let .connectTimeout(timeout):
+            value = timeout
         case let .cookies(cookies):
             value = cookies
         case let .extraHeaders(headers):

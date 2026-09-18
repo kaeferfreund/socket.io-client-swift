@@ -765,6 +765,177 @@ final class JSParityE2ETest: XCTestCase {
         // the new sid (not object identity) is what proves the old engine was
         // closed and a new one connected.
         XCTAssertNotEqual(newSid, oldSid)
+
+    // MARK: socket.ts — "fire a connect_error event on open timeout (polling)"
+
+    /// `.connectTimeout(0)` fails the attempt before the handshake can
+    /// complete — the JS `timeout: 0` trick — so the namespace never matters.
+    func testConnectErrorOnOpenTimeoutPolling() {
+        let socket = makeManager(.connectTimeout(0), .forcePolling(true), .reconnects(false))
+            .socket(forNamespace: "/")
+
+        let failed = expectation(description: "connect error")
+        failed.assertForOverFulfill = false
+        var message: String?
+        socket.on(clientEvent: .error) { data, _ in
+            message = data.first as? String
+            failed.fulfill()
+        }
+        socket.connect()
+        wait(for: [failed], timeout: 5)
+
+        XCTAssertEqual(message, "timeout")
+    }
+
+    // MARK: socket.ts — "fire a connect_error event on open timeout (websocket)"
+
+    func testConnectErrorOnOpenTimeoutWebsocket() {
+        let socket = makeManager(.connectTimeout(0), .forceWebsockets(true), .reconnects(false))
+            .socket(forNamespace: "/")
+
+        let failed = expectation(description: "connect error")
+        failed.assertForOverFulfill = false
+        var message: String?
+        socket.on(clientEvent: .error) { data, _ in
+            message = data.first as? String
+            failed.fulfill()
+        }
+        socket.connect()
+        wait(for: [failed], timeout: 5)
+
+        XCTAssertEqual(message, "timeout")
+    }
+
+    // MARK: connection.ts — "should try to reconnect twice and fail when requested two attempts with immediate timeout and reconnect enabled"
+
+    func testReconnectTwiceThenFailWithImmediateTimeout() {
+        let manager = makeManager(.connectTimeout(0), .reconnectAttempts(2), .reconnectWait(1))
+        let socket = manager.socket(forNamespace: "/")
+
+        var attempts = 0
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in attempts += 1 }
+
+        let failed = expectation(description: "reconnect failed")
+        failed.assertForOverFulfill = false
+        socket.on(clientEvent: .disconnect) { data, _ in
+            if data.first as? String == "Reconnect Failed" {
+                failed.fulfill()
+            }
+        }
+        socket.connect()
+        wait(for: [failed], timeout: 15)
+
+        XCTAssertEqual(attempts, 2)
+    }
+
+    // MARK: connection.ts — "should attempt reconnects after a failed reconnect"
+
+    /// Written exactly to the JS contract: after the first "Reconnect Failed"
+    /// a new `connect()` must get another full budget of 2 attempts. JS resets
+    /// its attempt counter on `reconnect_failed`; if this client does not,
+    /// this test fails — that is a FINDING, do not weaken the test.
+    func testAttemptReconnectsAfterAFailedReconnect() {
+        let manager = makeManager(.connectTimeout(0), .reconnectAttempts(2), .reconnectWait(1))
+        let socket = manager.socket(forNamespace: "/")
+
+        var attempts = 0
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in attempts += 1 }
+
+        var failures = 0
+        let firstFailed = expectation(description: "first reconnect failed")
+        firstFailed.assertForOverFulfill = false
+        let secondFailed = expectation(description: "second reconnect failed")
+        secondFailed.assertForOverFulfill = false
+        socket.on(clientEvent: .disconnect) { data, _ in
+            if data.first as? String == "Reconnect Failed" {
+                failures += 1
+                if failures == 1 {
+                    firstFailed.fulfill()
+                } else if failures == 2 {
+                    secondFailed.fulfill()
+                }
+            }
+        }
+        socket.connect()
+        wait(for: [firstFailed], timeout: 15)
+        XCTAssertEqual(attempts, 2, "The first round must spend exactly its budget of 2 attempts")
+
+        socket.connect()
+        wait(for: [secondFailed], timeout: 15)
+        XCTAssertEqual(attempts, 4, "The second round must get a fresh budget of 2 attempts")
+    }
+
+    // MARK: connection.ts — "should not reconnect when force closed"
+
+    func testNoReconnectWhenForceClosedDuringTimeout() {
+        let manager = makeManager(.connectTimeout(0), .reconnectWait(1))
+        let socket = manager.socket(forNamespace: "/")
+
+        var errors = 0
+        var attempts = 0
+        var closed = false
+        socket.on(clientEvent: .error) { _, _ in
+            errors += 1
+            if !closed {
+                closed = true
+                socket.disconnect()
+            }
+        }
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in attempts += 1 }
+        socket.connect()
+
+        settle(2)
+
+        XCTAssertGreaterThanOrEqual(errors, 1, "The timeout error must have fired, or this proves nothing")
+        XCTAssertEqual(attempts, 0, "No reconnect attempt may fire after the socket was closed")
+    }
+
+    // MARK: connection.ts — "should stop reconnecting when force closed"
+
+    func testStopReconnectingWhenForceClosed() {
+        let manager = makeManager(.connectTimeout(0), .reconnectWait(1))
+        let socket = manager.socket(forNamespace: "/")
+
+        var attempts = 0
+        var stopped = false
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in
+            attempts += 1
+            if !stopped {
+                stopped = true
+                socket.disconnect()
+            }
+        }
+        socket.connect()
+
+        settle(2.5)
+
+        XCTAssertEqual(attempts, 1, "Closing the socket must stop the loop after the first attempt")
+    }
+
+    // MARK: connection.ts — "should reconnect after stopping reconnection"
+
+    func testReconnectAfterStoppingReconnection() {
+        let manager = makeManager(.connectTimeout(0), .reconnectAttempts(3), .reconnectWait(1))
+        let socket = manager.socket(forNamespace: "/")
+
+        var attempts = 0
+        let attemptedAgain = expectation(description: "further reconnect attempt")
+        attemptedAgain.assertForOverFulfill = false
+        var restarted = false
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in
+            attempts += 1
+            if !restarted {
+                restarted = true
+                socket.disconnect()
+                socket.connect()
+            } else {
+                attemptedAgain.fulfill()
+            }
+        }
+        socket.connect()
+        wait(for: [attemptedAgain], timeout: 10)
+
+        XCTAssertGreaterThanOrEqual(attempts, 2, "Reconnecting after the stop must schedule further attempts")
     }
 
     // MARK: connection.ts — "should still try to reconnect twice after opening another socket asynchronously"
@@ -894,4 +1065,6 @@ final class JSParityE2ETest: XCTestCase {
         })
         wait(for: [acked], timeout: 5)
     }
+
+
 }

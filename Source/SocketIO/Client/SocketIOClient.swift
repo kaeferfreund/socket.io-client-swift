@@ -320,13 +320,14 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // mirrors that behavior for the identity-swap path so a session-bound
         // ack id issued before the swap cannot dangle waiting on a successor
         // session that would never reuse it.
-        // JS `_clearAcks` skips acks whose packet is still in the send buffer:
-        // that packet has not been sent yet, so its ack is still owed once the
-        // socket reconnects and the buffer is flushed.
-        let stillBuffered = bufferedAckIds
+        // Unlike `didDisconnect`, buffered emits are dropped rather than kept:
+        // this is the identity-swap path, and delivering the previous user's
+        // queued events into the successor session would leak them across
+        // identities. Their acks are therefore failed like any other.
+        clearSendBuffer()
 
         manager?.handleQueue.async { [weak self] in
-            self?.ackHandlers.clearTimedAcks(reason: .disconnected, keeping: stillBuffered)
+            self?.ackHandlers.clearTimedAcks(reason: .disconnected)
         }
     }
 
@@ -456,8 +457,13 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // before user ack callbacks observe the disconnected reason — matches
         // the JS sequence where the socket emits 'disconnect' before draining
         // ack callbacks.
+        // JS `_clearAcks` skips acks whose packet is still in the send buffer:
+        // that packet has not been sent yet, so its ack is still owed once the
+        // socket reconnects and the buffer is flushed.
+        let stillBuffered = bufferedAckIds
+
         manager?.handleQueue.async { [weak self] in
-            self?.ackHandlers.clearTimedAcks(reason: .disconnected)
+            self?.ackHandlers.clearTimedAcks(reason: .disconnected, keeping: stillBuffered)
         }
     }
 
@@ -748,6 +754,14 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     ///
     /// JS does this inside the ack timeout (`_registerAckCallback`), so an emit
     /// that already timed out is not delivered later by a reconnect.
+    /// Discards everything waiting in the send buffer.
+    private func clearSendBuffer() {
+        sendBufferLock.lock()
+        defer { sendBufferLock.unlock() }
+
+        sendBuffer.removeAll(keepingCapacity: false)
+    }
+
     func dropBufferedEmit(ack: Int) {
         sendBufferLock.lock()
         defer { sendBufferLock.unlock() }

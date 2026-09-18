@@ -129,6 +129,17 @@ final class SocketSendBufferTest: XCTestCase {
         XCTAssertTrue(engine.sentPackets.isEmpty, "The caller already saw this emit fail")
     }
 
+    /// `clearRecoveryState()` is the identity-swap path. Unlike a disconnect, the
+    /// previous user's queued events must not reach the successor session.
+    func testClearRecoveryStateDropsTheBuffer() {
+        socket.emit("previous-user", "secret")
+
+        socket.clearRecoveryState()
+        connect()
+
+        XCTAssertTrue(engine.sentPackets.isEmpty, "Queued events must not cross an identity change")
+    }
+
     /// JS `_clearAcks` skips acks whose packet is still buffered: it has not
     /// reached the server, so the ack is still owed after the reconnect.
     func testABufferedEmitsAckIsNotFailedOnDisconnect() {

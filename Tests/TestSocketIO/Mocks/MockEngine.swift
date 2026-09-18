@@ -9,7 +9,6 @@
 //
 
 import Foundation
-import Starscream
 @testable import SocketIO
 
 /// Test-only `SocketEngineSpec` conformer. Captures sent packets; lets tests
@@ -34,7 +33,7 @@ final class MockEngine: NSObject, SocketEngineSpec {
     var urlWebSocket: URL = URL(string: "ws://localhost/")!
     var version: SocketIOVersion = .three
     var websocket: Bool = true
-    var ws: WebSocket?
+
 
     /// Test-controlled writable signal. Defaults to `true` (most tests want
     /// non-volatile-drop behavior); flip to `false` to exercise the volatile gate.

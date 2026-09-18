@@ -23,7 +23,6 @@
 //  THE SOFTWARE.
 
 import Foundation
-import Starscream
 
 /// The socket.io version being used.
 public enum SocketIOVersion: Int {
@@ -40,6 +39,12 @@ protocol ClientOption : CustomStringConvertible, Equatable {
 
 /// The options for a client.
 public enum SocketIOClientOption : ClientOption {
+    /// The default timeout in seconds used when waiting for an acknowledgement
+    /// from `emit(_:_:ack:)` / `emit(_:with:ack:)`. `nil` (unset) means no
+    /// default — a plain ack that never times out. JS-aligned with the
+    /// `ackTimeout` (milliseconds) option in `socket.io-client/lib/socket.ts`.
+    case ackTimeout(Double)
+
     /// Whether the manager should automatically call `connect()` at the end of `init`.
     /// Default `false` to preserve existing behavior. JS `Manager` defaults to `true`;
     /// Swift inverts the default. When `true`, only the `defaultSocket` is auto-CONNECTed
@@ -52,7 +57,7 @@ public enum SocketIOClientOption : ClientOption {
     /// listeners, but be aware of the ordering. JS-aligned with `Manager` constructor.
     case autoConnect(Bool)
 
-    /// If given, the WebSocket transport will attempt to use compression.
+    /// Legacy option. Fails connection validation because native compression controls are unavailable.
     case compress
 
     /// A dictionary of GET parameters that will be included in the connect url.
@@ -79,7 +84,7 @@ public enum SocketIOClientOption : ClientOption {
     /// If passed `true`, the only transport that will be used will be WebSockets.
     case forceWebsockets(Bool)
 
-    /// If passed `true`, the WebSocket stream will be configured with the enableSOCKSProxy `true`.
+    /// Legacy option. `true` fails before connecting; it never silently bypasses the requested proxy.
     case enableSOCKSProxy(Bool)
 
     /// The queue that all interaction with the client should occur on. This is the queue that event handlers are
@@ -116,17 +121,37 @@ public enum SocketIOClientOption : ClientOption {
     /// Set `true` if your server is using secure transports.
     case secure(Bool)
 
-    /// Allows you to set which certs are valid. Useful for SSL pinning.
-    case security(CertificatePinning)
+    /// Whether to add a cache-busting timestamp query parameter with each
+    /// transport request. `nil` (default, JS `timestampRequests` unset):
+    /// polling requests carry it, WebSocket URLs do not. `true`: both carry
+    /// it. `false`: neither does. JS-aligned with `timestampRequests` in
+    /// engine.io-client (`Polling.uri()` vs `WS.uri()`).
+    case timestampRequests(Bool)
 
-    /// If you're using a self-signed set. Only use for development.
+    /// The query parameter name used for the cache-busting timestamp.
+    /// Default `"t"`. JS-aligned with `timestampParam` in engine.io-client.
+    case timestampParam(String)
+
+    /// Shared native TLS policy for polling and WebSocket. Normal system trust is the default.
+    case security(SocketTLSConfiguration)
+
+    /// Legacy option. `true` fails; use an explicit customTrust anchor instead of trust-all.
     case selfSigned(Bool)
 
-    /// Sets an NSURLSessionDelegate for the underlying engine. Useful if you need to handle self-signed certs.
+    /// Forwards authentication (except server trust), redirect, lifecycle and metrics events.
+    /// Server trust is always controlled by `security`, never by this delegate.
     case sessionDelegate(URLSessionDelegate)
 
-    /// If passed `false`, the WebSocket stream will be configured with the useCustomEngine `false`.
+    /// Deprecated compatibility option. Both values use native URLSession.
+    @available(*, deprecated, message: "URLSession is the only WebSocket backend; remove this option")
     case useCustomEngine(Bool)
+
+    /// Native incoming-message and outgoing-queue limits.
+    case webSocketOptions(SocketWebSocketOptions)
+
+    /// Carries a dictionary conversion failure to connection validation. No
+    /// network request is started when this option is present.
+    case invalidConfiguration(String)
 
     /// The version of socket.io being used. This should match the server version. Default is 3.
     case version(SocketIOVersion)
@@ -138,6 +163,12 @@ public enum SocketIOClientOption : ClientOption {
         let description: String
 
         switch self {
+        case .webSocketOptions:
+            description = "webSocketOptions"
+        case .invalidConfiguration:
+            description = "invalidConfiguration"
+        case .ackTimeout:
+            description = "ackTimeout"
         case .autoConnect:
             description = "autoConnect"
         case .compress:
@@ -176,6 +207,10 @@ public enum SocketIOClientOption : ClientOption {
             description = "randomizationFactor"
         case .secure:
             description = "secure"
+        case .timestampRequests:
+            description = "timestampRequests"
+        case .timestampParam:
+            description = "timestampParam"
         case .selfSigned:
             description = "selfSigned"
         case .security:
@@ -197,6 +232,12 @@ public enum SocketIOClientOption : ClientOption {
         let value: Any
 
         switch self {
+        case let .webSocketOptions(options):
+            value = options
+        case let .invalidConfiguration(reason):
+            value = reason
+        case let .ackTimeout(timeout):
+            value = timeout
         case let .autoConnect(autoConnect):
             value = autoConnect
         case .compress:
@@ -235,6 +276,10 @@ public enum SocketIOClientOption : ClientOption {
             value = factor
         case let .secure(secure):
             value = secure
+        case let .timestampRequests(timestampRequests):
+            value = timestampRequests
+        case let .timestampParam(timestampParam):
+            value = timestampParam
         case let .security(security):
             value = security
         case let .selfSigned(signed):

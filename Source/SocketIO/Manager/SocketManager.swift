@@ -85,6 +85,12 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     /// If `true` then every time `connect` is called, a new engine will be created.
     public var forceNew = false
 
+    /// The default ack timeout in seconds for `emit(_:_:ack:)` / `emit(_:with:ack:)`.
+    /// `nil` (the default) means no default timeout — the ack callback is a plain
+    /// ack that is never called with an error. Matches JS `ackTimeout: undefined`
+    /// in `socket.io-client/lib/socket.ts`.
+    public var ackTimeout: Double? = nil
+
     /// Whether the manager should automatically call `connect()` at the end of `init`.
     /// Default `false`. See `SocketIOClientOption.autoConnect` for full semantics.
     /// **Note:** when `true`, engine I/O begins before `init` returns. Attach
@@ -749,6 +755,8 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     open func setConfigs(_ config: SocketIOClientConfiguration) {
         for option in config {
             switch option {
+            case let .ackTimeout(value):
+                ackTimeout = max(0, value)
             case let .forceNew(new):
                 forceNew = new
             case let .autoConnect(value):

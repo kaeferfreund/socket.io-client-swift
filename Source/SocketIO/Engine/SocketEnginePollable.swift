@@ -163,8 +163,10 @@ extension SocketEnginePollable {
     /// Call to send a long-polling request.
     ///
     /// You shouldn't need to call this directly, the engine should automatically maintain a long-poll request.
-    public func doPoll() {
-        guard polling && !waitingForPoll && connected && !closed else { return }
+    public func doPoll() { performPollingRead() }
+
+    func performPollingRead() {
+        guard polling && !waitingForPoll && connected && !closed && !fastUpgrade else { return }
 
         var req = URLRequest(url: urlPollingWithSid)
         addHeaders(to: &req)
@@ -174,17 +176,30 @@ extension SocketEnginePollable {
 
     func doRequest(for req: URLRequest, callbackWith callback: @escaping (Data?, URLResponse?, Error?) -> ()) {
         guard polling && !closed && !invalidated && !fastUpgrade else { return }
+        // The engine object is reused across reconnects (`resetEngine` swaps in a NEW
+        // URLSession), while an invalidated session still lets in-flight tasks finish.
+        // Bind each request to the session it was issued on, so a late response (e.g.
+        // the pre-timeout handshake) cannot reach the new session's state. JS gets this
+        // by creating a fresh transport per attempt.
 
         DefaultSocketLogger.Logger.log("Doing polling \(req.httpMethod ?? "") \(req)", type: "SocketEnginePolling")
 
-        session?.dataTask(with: req, completionHandler: callback).resume()
+        guard let requestSession = session else { return }
+        requestSession.dataTask(with: req) { [weak self, weak requestSession] data, response, error in
+            guard let self = self else { return }
+            self.engineQueue.async { [weak self, weak requestSession] in
+                guard let self = self, let requestSession = requestSession,
+                      self.session === requestSession, !self.closed, !self.invalidated else { return }
+                callback(data, response, error)
+            }
+        }.resume()
     }
 
     func doLongPoll(for req: URLRequest) {
         waitingForPoll = true
 
         doRequest(for: req) {[weak self] data, res, err in
-            guard let this = self, this.polling else { return }
+            guard let this = self, this.polling, !this.closed else { return }
             guard let data = data, let res = res as? HTTPURLResponse, res.statusCode == 200 else {
                 if let err = err {
                     DefaultSocketLogger.Logger.error(err.localizedDescription, type: "SocketEnginePolling")
@@ -192,7 +207,7 @@ extension SocketEnginePollable {
                     DefaultSocketLogger.Logger.error("Error during long poll request", type: "SocketEnginePolling")
                 }
 
-                if this.polling {
+                if this.polling && !this.closed {
                     this.didError(reason: err?.localizedDescription ?? "Error")
                 }
 
@@ -218,7 +233,7 @@ extension SocketEnginePollable {
         }
     }
 
-    private func flushWaitingForPost() {
+    func flushWaitingForPost() {
         guard postWait.count != 0 && connected else { return }
         guard polling else {
             flushWaitingForPostToWebSocket()
@@ -238,7 +253,7 @@ extension SocketEnginePollable {
         DefaultSocketLogger.Logger.log("POSTing", type: "SocketEnginePolling")
 
         doRequest(for: req) {[weak self] _, res, err in
-            guard let this = self else { return }
+            guard let this = self, !this.closed else { return }
             guard let res = res as? HTTPURLResponse, res.statusCode == 200 else {
                 if let err = err {
                     DefaultSocketLogger.Logger.error(err.localizedDescription, type: "SocketEnginePolling")
@@ -246,7 +261,7 @@ extension SocketEnginePollable {
                     DefaultSocketLogger.Logger.error("Error flushing waiting posts", type: "SocketEnginePolling")
                 }
 
-                if this.polling {
+                if this.polling && !this.closed {
                     this.didError(reason: err?.localizedDescription ?? "Error")
                 }
 
@@ -276,6 +291,7 @@ extension SocketEnginePollable {
             let records = str.components(separatedBy: "\u{1e}")
 
             for record in records {
+                guard !closed else { break }
                 parseEngineMessage(record)
             }
         } else {
@@ -307,6 +323,10 @@ extension SocketEnginePollable {
     /// - parameter withData: The data associated with this message.
     /// - parameter completion: Callback called on transport write completion.
     public func sendPollMessage(_ message: String, withType type: SocketEnginePacketType, withData datas: [Data], completion: (() -> ())? = nil) {
+        performPollingWrite(message, withType: type, withData: datas, completion: completion)
+    }
+
+    func performPollingWrite(_ message: String, withType type: SocketEnginePacketType, withData datas: [Data], completion: (() -> ())?) {
         DefaultSocketLogger.Logger.log("Sending poll: \(message) as type: \(type.rawValue)", type: "SocketEnginePolling")
 
         postWait.append((String(type.rawValue) + message, completion))

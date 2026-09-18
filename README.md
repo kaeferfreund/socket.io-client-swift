@@ -1,3 +1,5 @@
+> **Native transport prerelease:** This fork now uses Apple's `URLSessionWebSocketTask` directly. There is no Starscream dependency or runtime fallback. Requires iOS 13 / macOS 10.15 / tvOS 13 / watchOS 6. See [migration and compatibility notes](Documentation/NativeWebSocketTransport.md) before adopting this major prerelease.
+
 [![Build Status](https://travis-ci.org/socketio/socket.io-client-swift.svg?branch=master)](https://travis-ci.org/socketio/socket.io-client-swift)
 
 # Socket.IO-Client-Swift

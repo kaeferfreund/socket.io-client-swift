@@ -1,6 +1,5 @@
 import XCTest
 @testable import SocketIO
-import Starscream
 
 /// Manager-level connection timeout (`SocketManager.connectTimeout`), JS-aligned with
 /// `Manager.open()` in `socket.io-client/lib/manager.ts`. Unit tests only: the fake
@@ -230,7 +229,7 @@ private final class TimeoutTestEngine: SocketEngineSpec {
     private(set) var urlPolling = URL(string: "http://localhost/")!
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
     private(set) var websocket = false
-    private(set) var ws: WebSocket? = nil
+
     private(set) var version = SocketIOVersion.three
 
     var onConnect: (() -> Void)?

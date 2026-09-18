@@ -23,7 +23,6 @@
 //  THE SOFTWARE.
 
 import Foundation
-import Starscream
 
 enum JSONError : Error {
     case notArray
@@ -45,6 +44,12 @@ extension CharacterSet {
 extension Dictionary where Key == String, Value == Any {
     private static func keyValueToSocketIOClientOption(key: String, value: Any) -> SocketIOClientOption? {
         switch (key, value) {
+        case let ("webSocketOptions", options as SocketWebSocketOptions):
+            return .webSocketOptions(options)
+        case let ("connectTimeout", timeout as Double):
+            return .connectTimeout(timeout)
+        case let ("useCustomEngine", enable as Bool), let ("customEngine", enable as Bool):
+            return .useCustomEngine(enable)
         case let ("autoConnect", autoConnect as Bool):
             return .autoConnect(autoConnect)
         case let ("connectParams", params as [String: Any]):
@@ -79,7 +84,11 @@ extension Dictionary where Key == String, Value == Any {
             return .randomizationFactor(factor)
         case let ("secure", secure as Bool):
             return .secure(secure)
-        case let ("security", security as CertificatePinning):
+        case let ("timestampRequests", timestampRequests as Bool):
+            return .timestampRequests(timestampRequests)
+        case let ("timestampParam", timestampParam as String):
+            return .timestampParam(timestampParam)
+        case let ("security", security as SocketTLSConfiguration):
             return .security(security)
         case let ("selfSigned", selfSigned as Bool):
             return .selfSigned(selfSigned)
@@ -91,6 +100,10 @@ extension Dictionary where Key == String, Value == Any {
             return .enableSOCKSProxy(enable)
         case let ("version", version as Int):
             return .version(SocketIOVersion(rawValue: version) ?? .three)
+        case ("security", _), ("secure", _), ("selfSigned", _), ("sessionDelegate", _),
+             ("enableSOCKSProxy", _), ("compress", _), ("webSocketOptions", _),
+             ("useCustomEngine", _), ("customEngine", _):
+            return .invalidConfiguration("invalid value for " + key + "; legacy security objects must migrate to SocketTLSConfiguration")
         case _:
             return nil
         }

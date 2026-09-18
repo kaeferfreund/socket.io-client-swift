@@ -1,6 +1,5 @@
 import XCTest
 @testable import SocketIO
-import Starscream
 
 private extension SocketPacket {
     init(type: PacketType, nsp: String, placeholders: Int = 0, id: Int = -1, data: [Any]) {
@@ -745,7 +744,6 @@ final class CaptureEngine: SocketEngineSpec {
     let urlWebSocket = URL(string: "http://localhost/")!
     let version: SocketIOVersion = .three
     let websocket = false
-    let ws: WebSocket? = nil
 
     required init(client: SocketEngineClient, url: URL, options: [String: Any]?) {
         self.client = client

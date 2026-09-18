@@ -1002,5 +1002,70 @@ final class JSParityE2ETest: XCTestCase {
         wait(for: [reconnected], timeout: 5)
     }
 
+    // MARK: engine.io-client — Polling.uri() cache buster
+
+    /// Every polling request has to carry a unique `t=` parameter so that
+    /// intermediaries never serve a cached long-poll response, JS-aligned
+    /// with `Polling.uri()` in engine.io-client. The fixture taps the HTTP
+    /// layer because poll URLs never reach the packet layer.
+    func testPollingRequestsCarryCacheBustingTimestamp() throws {
+        connect(makeManager(.forcePolling(true)).socket(forNamespace: "/"))
+        settle(0.5)
+
+        let (status, body) = try server.admin("/admin/last-polling-query", method: "GET")
+        XCTAssertEqual(status, 200)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        let query = json?["query"] as? String
+        XCTAssertNotNil(query, "The server must have seen at least one polling request")
+
+        let items = URLComponents(string: "http://localhost/?\(query ?? "")")?.queryItems ?? []
+        let t = items.first(where: { $0.name == "t" })?.value
+        XCTAssertNotNil(t, "Polling requests must carry the t= cache buster (saw query: \(query ?? "nil"))")
+        XCTAssertFalse(t?.isEmpty ?? true)
+    }
+
+    // MARK: socket.ts — "should use the default timeout value"
+
+    func testDefaultAckTimeoutApplies() {
+        let socket = connect(makeManager(.ackTimeout(0.05)).socket(forNamespace: "/"))
+
+        let timedOut = expectation(description: "default timeout fires")
+        socket.emit("never_ack", ack: { err, _ in
+            XCTAssertEqual(err as? SocketAckError, .timeout)
+            timedOut.fulfill()
+        })
+        wait(for: [timedOut], timeout: 5)
+    }
+
+    // MARK: socket.ts — "should ack with an error upon disconnection (callback & ackTimeout)"
+
+    func testAckTimeoutFailsWithErrorOnDisconnect() {
+        let socket = connect(makeManager(.ackTimeout(10)).socket(forNamespace: "/"))
+
+        let disconnected = expectation(description: "ack fails on disconnect")
+        socket.emit("never_ack", ack: { err, _ in
+            XCTAssertEqual(err as? SocketAckError, .disconnected)
+            disconnected.fulfill()
+        })
+        socket.disconnect()
+        wait(for: [disconnected], timeout: 5)
+    }
+
+    // MARK: socket.ts — "should use the default timeout value" (positive round trip)
+
+    /// The default must not break the happy path: a server ack still arrives
+    /// as `(nil, data)`.
+    func testEmitWithDefaultAckTimeoutRoundTrip() {
+        let socket = connect(makeManager(.ackTimeout(5)).socket(forNamespace: "/"))
+
+        let acked = expectation(description: "server ack")
+        socket.emit("echo", "a", ack: { err, data in
+            XCTAssertNil(err)
+            XCTAssertEqual(data.first as? String, "a")
+            acked.fulfill()
+        })
+        wait(for: [acked], timeout: 5)
+    }
+
 
 }

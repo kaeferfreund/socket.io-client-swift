@@ -8,11 +8,12 @@ import FoundationNetworking
 extension URLSessionWebSocketTransport {
     /// Owns a session independent of the polling session. The supplied request
     /// carries headers/cookies prepared by the engine; this adapter never rewrites
-    /// them. Uses system TLS validation only. Custom trust/delegate integration is
-    /// deliberately NOT wired into SocketEngine in this foundational change.
+    /// them. The TLS policy and external delegate match the polling session.
     internal convenience init(request: URLRequest,
                               queue: DispatchQueue,
                               configuration: URLSessionConfiguration = .default,
+                              tlsConfiguration: SocketTLSConfiguration = .systemDefault,
+                              sessionDelegate: URLSessionDelegate? = nil,
                               maximumMessageSize: Int = 16 * 1024 * 1024,
                               maximumPendingBytes: Int = URLSessionWebSocketTransport.defaultMaximumPendingBytes,
                               maximumPendingBatches: Int = URLSessionWebSocketTransport.defaultMaximumPendingBatches,
@@ -24,7 +25,8 @@ extension URLSessionWebSocketTransport {
                   maximumPendingMessages: maximumPendingMessages) {
             URLSessionWebSocketConnection(request: request, queue: queue,
                                           configuration: snapshot,
-                                          maximumMessageSize: maximumMessageSize)
+                                          maximumMessageSize: maximumMessageSize,
+                                          tlsConfiguration: tlsConfiguration, sessionDelegate: sessionDelegate)
         }
     }
 }
@@ -42,19 +44,25 @@ internal final class URLSessionWebSocketConnection: EngineWebSocketConnection {
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
     private var started = false
+    private let tlsConfiguration: SocketTLSConfiguration
+    private weak var sessionDelegate: URLSessionDelegate?
 
     internal init(request: URLRequest, queue: DispatchQueue,
-                  configuration: URLSessionConfiguration, maximumMessageSize: Int) {
+                  configuration: URLSessionConfiguration, maximumMessageSize: Int,
+                  tlsConfiguration: SocketTLSConfiguration = .systemDefault, sessionDelegate: URLSessionDelegate? = nil) {
         self.request = request
         self.queue = queue
         self.configuration = configuration
         self.maximumMessageSize = maximumMessageSize
+        self.tlsConfiguration = tlsConfiguration
+        self.sessionDelegate = sessionDelegate
     }
 
     internal func start() {
         guard !started else { return }
         started = true
-        let proxy = WebSocketSessionDelegateProxy(owner: self)
+        let proxy = WebSocketSessionDelegateProxy(owner: self, tlsConfiguration: tlsConfiguration,
+                                                  forwardingDelegate: sessionDelegate)
         let session = URLSession(configuration: configuration, delegate: proxy, delegateQueue: nil)
         let task = session.webSocketTask(with: request)
         task.maximumMessageSize = maximumMessageSize
@@ -115,7 +123,10 @@ internal final class URLSessionWebSocketConnection: EngineWebSocketConnection {
             return
         }
         task?.cancel(with: closeCode, reason: reason)
-        session?.finishTasksAndInvalidate()
+        let closingSession = session
+        closingSession?.finishTasksAndInvalidate()
+        // Do not leave a closing session retained indefinitely by Foundation.
+        queue.asyncAfter(deadline: .now() + 1) { closingSession?.invalidateAndCancel() }
         task = nil
         session = nil
     }
@@ -136,7 +147,10 @@ internal final class URLSessionWebSocketConnection: EngineWebSocketConnection {
 
     fileprivate func opened(_ session: URLSession, _ task: URLSessionWebSocketTask, _ protocolName: String?) {
         guard matches(session, task) else { return }
-        onEvent?(.opened(protocol: protocolName))
+        let response = task.response as? HTTPURLResponse
+        var headers = [String: String]()
+        response?.allHeaderFields.forEach { headers[String(describing: $0.key)] = String(describing: $0.value) }
+        onEvent?(.opened(protocol: protocolName, headers: headers))
     }
 
     fileprivate func closed(_ session: URLSession, _ task: URLSessionWebSocketTask,
@@ -159,29 +173,48 @@ internal final class URLSessionWebSocketConnection: EngineWebSocketConnection {
 }
 
 /// URLSession retains its delegate; the proxy must not retain the connection.
-/// No custom authentication handler is installed, so Foundation performs normal
-/// platform trust evaluation. A future policy proxy must cover polling as well.
+/// The shared superclass enforces the same trust policy as HTTP polling.
 @available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
-internal final class WebSocketSessionDelegateProxy: NSObject, URLSessionWebSocketDelegate {
+internal final class WebSocketSessionDelegateProxy: SocketSessionDelegateProxy, URLSessionWebSocketDelegate {
     private weak var owner: URLSessionWebSocketConnection?
 
-    internal init(owner: URLSessionWebSocketConnection) { self.owner = owner }
+    internal init(owner: URLSessionWebSocketConnection, tlsConfiguration: SocketTLSConfiguration,
+                  forwardingDelegate: URLSessionDelegate?) {
+        self.owner = owner
+        super.init(tlsConfiguration: tlsConfiguration, forwardingDelegate: forwardingDelegate)
+    }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                     didOpenWithProtocol protocolName: String?) {
         owner?.queue.async { [weak owner] in owner?.opened(session, webSocketTask, protocolName) }
+        #if canImport(ObjectiveC)
+        (forwardingDelegate as? URLSessionWebSocketDelegate)?.urlSession?(session, webSocketTask: webSocketTask,
+                                                                        didOpenWithProtocol: protocolName)
+        #else
+        (forwardingDelegate as? URLSessionWebSocketDelegate)?.urlSession(session, webSocketTask: webSocketTask,
+                                                                       didOpenWithProtocol: protocolName)
+        #endif
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                     didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         owner?.queue.async { [weak owner] in owner?.closed(session, webSocketTask, closeCode, reason) }
+        #if canImport(ObjectiveC)
+        (forwardingDelegate as? URLSessionWebSocketDelegate)?.urlSession?(session, webSocketTask: webSocketTask,
+                                                                        didCloseWith: closeCode, reason: reason)
+        #else
+        (forwardingDelegate as? URLSessionWebSocketDelegate)?.urlSession(session, webSocketTask: webSocketTask,
+                                                                       didCloseWith: closeCode, reason: reason)
+        #endif
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    override func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        super.urlSession(session, task: task, didCompleteWithError: error)
         owner?.queue.async { [weak owner] in owner?.completed(session, task, error) }
     }
 
-    func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+    override func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        super.urlSession(session, didBecomeInvalidWithError: error)
         owner?.queue.async { [weak owner] in owner?.invalidated(session, error) }
     }
 }

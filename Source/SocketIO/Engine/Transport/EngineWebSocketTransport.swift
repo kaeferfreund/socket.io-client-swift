@@ -25,7 +25,7 @@ internal enum EngineWebSocketMessage: Equatable {
 }
 
 internal enum EngineWebSocketEvent {
-    case opened(protocol: String?)
+    case opened(protocol: String?, headers: [String: String] = [:])
     case message(EngineWebSocketMessage)
     case closed(code: Int?, reason: Data?, error: Error?)
 }

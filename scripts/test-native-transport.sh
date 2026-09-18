@@ -1,22 +1,19 @@
 #!/usr/bin/env bash
-# Offline, dependency-free check of ONLY the native transport milestone.
-# This is not a replacement for the full repository's macOS/E2E test suite.
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-scratch="$(mktemp -d)"
-trap 'rm -rf "$scratch"' EXIT
-mkdir -p "$scratch/Sources/SocketIO" "$scratch/Tests/TestSocketIO"
-cp "$root"/Source/SocketIO/Engine/Transport/*.swift "$scratch/Sources/SocketIO/"
-cp "$root/Tests/TestSocketIO/URLSessionWebSocketTransportTest.swift" "$scratch/Tests/TestSocketIO/"
-cat > "$scratch/Package.swift" <<'MANIFEST'
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+mkdir -p "$TMP/Sources/SocketIO" "$TMP/Tests/TestSocketIO"
+cp "$ROOT"/Source/SocketIO/Engine/Transport/*.swift "$TMP/Sources/SocketIO/"
+cp "$ROOT"/Source/SocketIO/Security/*.swift "$TMP/Sources/SocketIO/"
+cp "$ROOT"/Tests/TestSocketIO/URLSessionWebSocketTransportTest.swift "$TMP/Tests/TestSocketIO/"
+cat > "$TMP/Package.swift" <<'MANIFEST'
 // swift-tools-version:5.4
 import PackageDescription
-let package = Package(
-    name: "NativeTransportCheck",
-    targets: [
-        .target(name: "SocketIO"),
-        .testTarget(name: "TestSocketIO", dependencies: ["SocketIO"])
-    ]
-)
+let package = Package(name: "SocketIO",
+    platforms: [.iOS(.v13), .macOS(.v10_15), .tvOS(.v13), .watchOS(.v6)],
+    products: [.library(name: "SocketIO", targets: ["SocketIO"])],
+    targets: [.target(name: "SocketIO"), .testTarget(name: "TestSocketIO", dependencies: ["SocketIO"])])
 MANIFEST
-swift test --package-path "$scratch" "$@"
+cd "$TMP"
+swift test

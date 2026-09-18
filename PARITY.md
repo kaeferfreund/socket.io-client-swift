@@ -1,3 +1,7 @@
+## Native transport update (17.0.0-native.1 prerelease)
+
+The transport now uses URLSessionWebSocketTask exclusively. Any older transport-specific notes below describe the pre-migration implementation. Native `writable` now reports real queued-send backpressure and is false during probes/upgrades. WebSocket send completions occur once per entire packet, not once per attachment or immediately for text. The GET+POST upgrade barrier and polling maxPayload batching are retained. Manager parse errors close the engine (covered by the existing parser/E2E regression tests). Compression/SOCKS/trust-all requests fail explicitly rather than claiming unsupported parity. See `Documentation/NativeWebSocketTransport.md` for the complete migration contract.
+
 # Parity with the JavaScript client
 
 This fork exists to behave like [socket.io-client](https://github.com/socketio/socket.io)

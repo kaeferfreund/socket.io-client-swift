@@ -14,15 +14,15 @@ at **v4.8.3** — 116 of them — and what this client does about it.
 | Status | Meaning | Count |
 |---|---|---|
 | ✅ covered | an existing Swift test asserts the same behaviour | 41 |
-| ✅ ported | the JS scenario itself is now a Swift test | 36 |
+| ✅ ported | the JS scenario itself is now a Swift test | 40 |
 | 🔧 fixed | the port found a divergence and it was fixed | 8 |
-| ❌ gap | a known divergence, not yet addressed | 9 |
-| ➖ n/a | not applicable to Swift or to a non-browser platform | 22 |
+| ❌ gap | a known divergence, not yet addressed | 3 |
+| ➖ n/a | not applicable to Swift or to a non-browser platform | 24 |
 | ❓ unassessed | not yet checked | 0 |
 
-Every scenario has been assessed. "Parity" here means: **85 of the
+Every scenario has been assessed. "Parity" here means: **89 of the
 94 applicable scenarios pass a Swift test that encodes the JS
-expectation; 9 are known divergences, each named below with its reason.**
+expectation; 3 are known divergences, each named below with its reason.**
 
 ## What porting has found
 
@@ -48,7 +48,10 @@ expectation; 9 are known divergences, each named below with its reason.**
 Gaps closed since the first matrix: connection timeout (`.connectTimeout`),
 undecodable data closes the engine, `Manager.socket()` reopens an inactive
 socket, the `t=` cache buster, `ackTimeout` with err-first `emit(_:_:ack:)`,
-and the `connect_error` client event (see below).
+the `connect_error` client event (see below), and the `retries` option with
+its ordered retry queue (see below). The per-emit `compress(_:)` scenarios
+became n/a with the native transport: URLSession cannot negotiate
+`permessage-deflate`, so no compression control exists to port.
 
 Worth recording because they did **not** show up: a transport dropping under an
 established connection does not raise a client-side error here, and a
@@ -62,12 +65,27 @@ account.
   reconnection *starts* (`setReconnecting`); in JS it fires on *success*. A
   successful reconnect here is observed as another `.connect`. Nothing fires on
   the manager (2 scenarios).
-- **No `retries` option** and no packet queue behind it (4 scenarios).
-- **No per-emit `compress(_:)` chain** — `.compress` is a manager-wide option
-  (2 scenarios).
 - Plus, from the engine side: disconnect reasons that are not the JS strings
   (`io server disconnect`, `ping timeout`, …). (The missing `t=` cache buster
   on polling requests is closed: every long-polling request now carries one.)
+
+## The `retries` queue
+
+`.retries(Int)` (default `0`, disabled) mirrors JS `retries` in
+`socket.io-client/lib/socket.ts`: with it set, every event emit — plain,
+err-first ack, and `timeout(after:).emit` — goes through an ordered queue
+(JS `_addToQueue`/`_drainQueue`). Only the head packet is in flight; each
+attempt waits `ackTimeout` (or the per-emit `timeout(after:)`) for the ack and
+is resent on failure until `retries` is exhausted (`retries + 1` attempts
+total), then the ack callback fires with `SocketAckError.timeout`. The queue
+survives a disconnect, does not drain while disconnected, and drains (force)
+on the next CONNECT before the `connect` event fires. Each attempt carries a
+fresh ack id, exactly like the JS re-emit.
+
+Divergences: the legacy `emitWithAck(...).timingOut(after:)` chain keeps its
+documented behavior and does not participate in retries (same policy as the
+default-ack-timeout work), and the async `timeout(after:).emit` overload does
+not queue either.
 
 ## How to add to this
 
@@ -152,8 +170,8 @@ successful reconnection.
 | fire a connect_error event on open timeout (websocket) | 🔧 fixed | **gap closed** — `.connectTimeout`, `testConnectErrorOnOpenTimeoutWebsocket` |
 | doesn't fire a connect_error event when the connection is already established | ✅ ported | `testNoErrorEventWhenAnEstablishedConnectionDrops` |
 | should change socket.id upon reconnection | ✅ ported | `testSocketIdChangesOnReconnection` |
-| should enable compression by default | ❌ gap | no per-emit `compress(_:)` chain in Swift; `.compress` is a manager option |
-| should disable compression | ❌ gap | no per-emit `compress(_:)` chain in Swift |
+| should enable compression by default | ➖ n/a | the native URLSession transport cannot negotiate `permessage-deflate` — there is no compression control to wrap in a `compress(_:)` chain |
+| should disable compression | ➖ n/a | same: URLSessionWebSocketTask exposes no compression negotiation; on the native transport both `compress()` and `compress(false)` send uncompressed |
 | should accept an object (default namespace) | ✅ covered | `SocketIOClientConfigurationTest` (`connectParams`) |
 | should accept a query string (default namespace) | ✅ covered | `SocketIOClientConfigurationTest` |
 | should accept an object | ✅ covered | `SocketAuthProviderTest` / `SocketAuthProviderE2ETest` |
@@ -211,10 +229,10 @@ successful reconnection.
 
 | Scenario | Status | Where |
 |---|---|---|
-| should preserve the order of the packets | ❌ gap | no `retries` option in Swift |
-| should fail when the server does not acknowledge the packet | ❌ gap | no `retries` option in Swift |
-| should not drain the queue while the socket is disconnected | ❌ gap | no `retries` option in Swift |
-| should not emit a packet twice in the 'connect' handler | ❌ gap | no `retries` option in Swift |
+| should preserve the order of the packets | ✅ ported | `JSParityRetryE2ETest.testRetryPreservesTheOrderOfThePackets` — strict FIFO, one in-flight head |
+| should fail when the server does not acknowledge the packet | ✅ ported | `JSParityRetryE2ETest.testRetryFailsWhenTheServerDoesNotAcknowledgeThePacket` — 1 + `retries` attempts, then `SocketAckError.timeout` |
+| should not drain the queue while the socket is disconnected | ✅ ported | `JSParityRetryE2ETest.testRetryDoesNotDrainTheQueueWhileDisconnected` |
+| should not emit a packet twice in the 'connect' handler | ✅ ported | `JSParityRetryE2ETest.testRetryDoesNotEmitAPacketTwiceInTheConnectHandler` |
 
 ### `connection-state-recovery.ts`
 

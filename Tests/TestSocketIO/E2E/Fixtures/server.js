@@ -323,6 +323,13 @@ io.on("connection", (socket) => {
   socket.on("never_ack", () => {
     // intentionally do nothing
   });
+
+  // JS parity (retry.ts "should fail when the server does not acknowledge the
+  // packet"): the server receives "ack" without acking it, but announces each
+  // receipt as a separate event so the client can count the attempts it made.
+  socket.on("ack", () => {
+    socket.emit("ack");
+  });
 });
 
 // Register /admin namespace so AutoConnectE2ETest can verify

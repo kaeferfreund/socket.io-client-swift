@@ -1125,5 +1125,173 @@ final class JSParityE2ETest: XCTestCase {
         wait(for: [acked], timeout: 5)
     }
 
+    // MARK: socket.ts > query option — "should accept an object (default namespace)"
 
+    func testQueryOptionAcceptsAnObjectOnTheDefaultNamespace() throws {
+        let socket = makeManager(.connectParams(["e": "f"])).socket(forNamespace: "/")
+        connect(socket)
+
+        XCTAssertEqual(try handshakeQuery(for: socket)["e"] as? String, "f")
+    }
+
+    // MARK: socket.ts > query option — "should accept a query string (default namespace)"
+
+    /// JS reads the parameters out of the server URL
+    /// (`opts.query = parsed.queryKey` in `lib/index.ts`).
+    func testQueryOptionAcceptsAQueryStringOnTheDefaultNamespace() throws {
+        manager = SocketManager(socketURL: URL(string: "http://127.0.0.1:\(server.port)/?c=d")!,
+                                config: [.log(false)])
+        let socket = manager.socket(forNamespace: "/")
+        connect(socket)
+
+        XCTAssertEqual(try handshakeQuery(for: socket)["c"] as? String, "d")
+    }
+
+    // MARK: socket.ts > query option — "should accept an object"
+
+    /// The JS test puts the namespace in the URL (`io(BASE_URL + "/abc")`);
+    /// here the namespace comes from `socket(forNamespace:)`, which is the only
+    /// way this client selects one.
+    func testQueryOptionAcceptsAnObjectOnACustomNamespace() {
+        let socket = makeManager(.connectParams(["a": "b"])).socket(forNamespace: "/abc")
+
+        XCTAssertEqual(handshakeEventQuery(for: socket)["a"] as? String, "b")
+    }
+
+    // MARK: socket.ts > query option — "should accept a query string"
+
+    func testQueryOptionAcceptsAQueryStringOnACustomNamespace() {
+        manager = SocketManager(socketURL: URL(string: "http://127.0.0.1:\(server.port)/?b=c&d=e")!,
+                                config: [.log(false)])
+        let socket = manager.socket(forNamespace: "/abc")
+
+        let query = handshakeEventQuery(for: socket)
+        XCTAssertEqual(query["b"] as? String, "c")
+        XCTAssertEqual(query["d"] as? String, "e")
+    }
+
+    /// The default namespace answers `getHandshake` with its own handshake.
+    private func handshakeQuery(for socket: SocketIOClient) throws -> [String: Any] {
+        let replied = expectation(description: "handshake for \(socket.nsp)")
+        var handshake: [String: Any]?
+        socket.emitWithAck("getHandshake").timingOut(after: 5) { data in
+            handshake = data.first as? [String: Any]
+            replied.fulfill()
+        }
+        wait(for: [replied], timeout: 5)
+
+        return try XCTUnwrap(handshake?["query"] as? [String: Any])
+    }
+
+    /// `/abc` pushes its handshake on connect, like `server.of("/abc")` in the
+    /// JS support server.
+    private func handshakeEventQuery(for socket: SocketIOClient) -> [String: Any] {
+        let got = expectation(description: "handshake event for \(socket.nsp)")
+        got.assertForOverFulfill = false
+        var handshake: [String: Any]?
+        socket.on("handshake") { data, _ in
+            handshake = data.first as? [String: Any]
+            got.fulfill()
+        }
+        socket.connect()
+        wait(for: [got], timeout: 5)
+
+        return (handshake?["query"] as? [String: Any]) ?? [:]
+    }
+
+    // MARK: connection.ts — "should emit date as string"
+
+    func testEmitDateAsString() {
+        let socket = makeManager().socket(forNamespace: "/")
+        connect(socket)
+
+        let took = expectation(description: "takeDate")
+        took.assertForOverFulfill = false
+        var received: Any?
+        socket.on("takeDate") { data, _ in
+            received = data.first
+            took.fulfill()
+        }
+        socket.emit("getDate")
+        wait(for: [took], timeout: 5)
+
+        XCTAssertTrue(received is String, "A Date crosses the wire as a string, got \(String(describing: received))")
+    }
+
+    // MARK: connection.ts — "should emit date in object"
+
+    func testEmitDateInObject() {
+        let socket = makeManager().socket(forNamespace: "/")
+        connect(socket)
+
+        let took = expectation(description: "takeDateObj")
+        took.assertForOverFulfill = false
+        var received: [String: Any]?
+        socket.on("takeDateObj") { data, _ in
+            received = data.first as? [String: Any]
+            took.fulfill()
+        }
+        socket.emit("getDateObj")
+        wait(for: [took], timeout: 5)
+
+        XCTAssertNotNil(received)
+        XCTAssertTrue(received?["date"] is String)
+    }
+
+    // MARK: connection.ts — "should receive date with ack"
+
+    func testReceiveDateWithAck() {
+        let socket = makeManager().socket(forNamespace: "/")
+        connect(socket)
+
+        let acked = expectation(description: "getAckDate")
+        var received: Any?
+        socket.emitWithAck("getAckDate", ["test": true]).timingOut(after: 5) { data in
+            received = data.first
+            acked.fulfill()
+        }
+        wait(for: [acked], timeout: 5)
+
+        XCTAssertTrue(received is String)
+    }
+
+    /// The outgoing direction of the same rule: a `Date` this client emits
+    /// arrives as the ISO-8601 string `JSON.stringify` produces.
+    func testEmittedDateArrivesAsAnISO8601String() {
+        let socket = makeManager().socket(forNamespace: "/")
+        connect(socket)
+
+        let date = Date(timeIntervalSince1970: 1_704_164_645.678)
+        let acked = expectation(description: "echo")
+        var received: Any?
+        socket.emitWithAck("echo", date).timingOut(after: 5) { data in
+            received = data.first
+            acked.fulfill()
+        }
+        wait(for: [acked], timeout: 5)
+
+        XCTAssertEqual(received as? String, "2024-01-02T03:04:05.678Z")
+    }
+
+    // MARK: socket.ts — "should emit an event and wait for the acknowledgement"
+
+    func testEmitWithAckAwaitsTheAcknowledgement() async throws {
+        let socket = makeManager().socket(forNamespace: "/")
+        connect(socket)
+
+        let value = try await socket.emitWithAck("echo", 123)
+
+        XCTAssertEqual(value.first as? Int, 123)
+    }
+
+    // MARK: socket.ts > timeout — "should not timeout when the server does acknowledge the event (promise)"
+
+    func testTimedEmitWithAckDoesNotTimeOutWhenTheServerAcknowledges() async throws {
+        let socket = makeManager().socket(forNamespace: "/")
+        connect(socket)
+
+        let value = try await socket.timeout(after: 5).emitWithAck("echo", 42)
+
+        XCTAssertEqual(value.first as? Int, 42)
+    }
 }

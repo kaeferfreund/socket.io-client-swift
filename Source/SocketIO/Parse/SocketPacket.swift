@@ -75,8 +75,33 @@ public struct SocketPacket : CustomStringConvertible {
     }
 
     /// A string representation of this packet.
+    ///
+    /// **17.0.0**: prefer `encodedPacketString()`. Every emit path in this
+    /// client validates its payload and throws before a packet is created, so
+    /// the empty-payload fallback below can no longer put a different packet on
+    /// the wire; it remains only for code that builds a `SocketPacket` by hand.
     public var packetString: String {
-        return createPacketString()
+        do {
+            return try encodedPacketString()
+        } catch {
+            DefaultSocketLogger.Logger.error(
+                "Error creating JSON object in SocketPacket.packetString: \(error). " +
+                "Use encodedPacketString() to handle this instead of encoding an empty payload.",
+                type: SocketPacket.logType
+            )
+
+            return createHeaderString() + (type.carriesArgumentArray ? "[]" : "")
+        }
+    }
+
+    /// The wire string for this packet, or a `SocketPacketError` describing why
+    /// the payload cannot be represented as JSON.
+    ///
+    /// JS-aligned with `Encoder.encodeAsString` in `socket.io-parser/lib/index.ts`:
+    /// `JSON.stringify` either produces the value or throws — it never silently
+    /// substitutes a different payload.
+    public func encodedPacketString() throws -> String {
+        return try createHeaderString() + (payloadJSON() ?? "")
     }
 
     init(type: PacketType, data: [Any] = [Any](), id: Int = -1, nsp: String, placeholders: Int = 0,
@@ -139,28 +164,63 @@ public struct SocketPacket : CustomStringConvertible {
         return true
     }
 
-    private func completeMessage(_ message: String) -> String {
-        guard data.count != 0 else { return message + "[]" }
-        guard let jsonSend = try? data.toJSON(), let jsonString = String(data: jsonSend, encoding: .utf8) else {
-            DefaultSocketLogger.Logger.error("Error creating JSON object in SocketPacket.completeMessage",
-                                             type: SocketPacket.logType)
+    /// The JSON body JS appends after the header, or `nil` when JS appends
+    /// nothing (`if (null != obj.data)` in `Encoder.encodeAsString`).
+    ///
+    /// CONNECT, DISCONNECT and CONNECT_ERROR carry a single value — an object,
+    /// a string, or nothing at all — while EVENT and ACK carry the argument
+    /// array. Swift stores both shapes in `data`, so the single-value types
+    /// encode `data.first` as a JSON fragment.
+    private func payloadJSON() throws -> String? {
+        guard type.carriesArgumentArray else {
+            guard let first = data.first else { return nil }
 
-            return message + "[]"
+            return try SocketPacket.jsonString(from: first, fragmentsAllowed: true)
         }
 
-        return message + jsonString
+        return try SocketPacket.jsonString(from: data, fragmentsAllowed: false)
     }
 
-    private func createPacketString() -> String {
+    /// `JSONSerialization` raises an uncatchable Objective-C exception for an
+    /// invalid object graph, so validity is checked before encoding.
+    ///
+    /// Keys are sorted. JS preserves object insertion order, which a Swift
+    /// `Dictionary` does not have at all, so the choice is between an arbitrary
+    /// order and a reproducible one; JSON object order carries no meaning, and a
+    /// reproducible encoder is what makes the wire strings testable and the
+    /// encoder differential deterministic.
+    static func jsonString(from value: Any, fragmentsAllowed: Bool) throws -> String {
+        guard JSONSerialization.isValidJSONObject(fragmentsAllowed ? [value] : value) else {
+            throw SocketPacketError.unserializablePayload(String(describing: Swift.type(of: value)))
+        }
+
+        var options: JSONSerialization.WritingOptions = [.sortedKeys]
+        if fragmentsAllowed {
+            options.insert(.fragmentsAllowed)
+        }
+
+        let json: Data
+        do {
+            json = try JSONSerialization.data(withJSONObject: value, options: options)
+        } catch {
+            throw SocketPacketError.unserializablePayload(error.localizedDescription)
+        }
+
+        guard let string = String(data: json, encoding: .utf8) else {
+            throw SocketPacketError.unserializablePayload("the encoded payload is not valid UTF-8")
+        }
+
+        return string
+    }
+
+    private func createHeaderString() -> String {
         let typeString = String(type.rawValue)
         // Binary count?
         let binaryCountString = typeString + (type.isBinary ? "\(String(binary.count))-" : "")
         // Namespace?
         let nspString = binaryCountString + (nsp != "/" ? "\(nsp)," : "")
         // Ack number?
-        let idString = nspString + (id != -1 ? String(id) : "")
-
-        return completeMessage(idString)
+        return nspString + (id != -1 ? String(id) : "")
     }
 
     // Called when we have all the binary data for a packet
@@ -228,6 +288,65 @@ public extension SocketPacket {
         public var isBinary: Bool {
             return self == .binaryAck || self == .binaryEvent
         }
+
+        /// Whether the wire payload of this type is the argument array.
+        /// CONNECT, DISCONNECT and CONNECT_ERROR carry a single value instead
+        /// (`Encoder.encodeAsString` in `socket.io-parser/lib/index.ts`).
+        public var carriesArgumentArray: Bool {
+            switch self {
+            case .event, .ack, .binaryEvent, .binaryAck:
+                return true
+            case .connect, .disconnect, .error:
+                return false
+            }
+        }
+    }
+}
+
+/// Why an outgoing payload cannot be put on the wire.
+///
+/// JS `JSON.stringify` never changes the operation: it either produces the
+/// value or throws. This client does the same — an emit whose payload cannot
+/// be represented fails with one of these before any buffer, retry queue or
+/// transport write sees it.
+public enum SocketPacketError : Error, LocalizedError, CustomStringConvertible {
+    // MARK: Cases
+
+    /// A value with no JSON representation, e.g. a custom class, a `URL`, or
+    /// `Data` in an emit made through `rawEmitView` (which does not shred
+    /// binary into attachments). `path` locates it inside the emitted items.
+    case unsupportedValue(path: String, type: String)
+
+    /// A dictionary whose keys are not strings. JSON objects are string-keyed,
+    /// and JS objects always are.
+    case nonStringKey(path: String)
+
+    /// The object graph is nested deeper than `SocketPacket.maximumEmitNestingDepth`.
+    /// Also what a cyclic Foundation graph reports, instead of recursing forever.
+    case nestingTooDeep(path: String, limit: Int)
+
+    /// `JSONSerialization` rejected the payload after normalization.
+    case unserializablePayload(String)
+
+    // MARK: Properties
+
+    /// A description of this error.
+    public var description: String {
+        switch self {
+        case let .unsupportedValue(path, type):
+            return "\(path) is a \(type), which has no JSON representation"
+        case let .nonStringKey(path):
+            return "\(path) is a dictionary with a non-String key; JSON objects are string-keyed"
+        case let .nestingTooDeep(path, limit):
+            return "\(path) is nested deeper than the \(limit) level encoder limit (or the graph is cyclic)"
+        case let .unserializablePayload(reason):
+            return "the payload cannot be serialized: \(reason)"
+        }
+    }
+
+    /// :nodoc:
+    public var errorDescription: String? {
+        return description
     }
 }
 
@@ -244,6 +363,104 @@ extension SocketPacket {
             return .binaryAck
         default:
             return .error
+        }
+    }
+
+    /// Maximum object-graph depth the outgoing encoder accepts.
+    ///
+    /// Mirrors the decoder's `SocketParserOptions.maximumNestingDepth` default.
+    /// It also turns a cyclic Foundation graph into a thrown
+    /// `SocketPacketError.nestingTooDeep` instead of unbounded recursion;
+    /// proper cycle *detection* is out of scope (see `ProtocolParityReview.md`).
+    public static let maximumEmitNestingDepth = 512
+
+    /// `Date.prototype.toJSON()` — `toISOString()`, i.e. UTC with exactly three
+    /// fractional-second digits and a `Z` suffix (`2024-01-02T03:04:05.678Z`).
+    /// Years outside 0000–9999, which JS writes in its expanded `±YYYYYY` form,
+    /// are not reproduced.
+    private static let iso8601Formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+
+        return formatter
+    }()
+
+    /// The string JS `JSON.stringify(date)` produces for `date`.
+    public static func iso8601String(from date: Date) -> String {
+        return iso8601Formatter.string(from: date)
+    }
+
+    /// Applies JS `JSON.stringify` semantics to the items of an emit, and
+    /// throws a `SocketPacketError` for anything that has no JSON form.
+    ///
+    /// - `Date`/`NSDate` become their ISO-8601 string, at any depth, because
+    ///   that is what `Date.prototype.toJSON()` returns.
+    /// - Non-finite numbers become `null`, because `JSON.stringify(NaN)` and
+    ///   `JSON.stringify(Infinity)` are `"null"`. `JSONSerialization` would
+    ///   otherwise reject the whole payload.
+    /// - `Data` stays put when `allowBinary` is set (the shredder turns it into
+    ///   an attachment placeholder) and is an error otherwise.
+    /// - Everything else that JSON cannot represent throws, instead of the
+    ///   pre-17.0.0 behaviour of sending an empty payload.
+    ///
+    /// - parameter items: The emitted items, after `socketRepresentation()`.
+    /// - parameter allowBinary: Whether `Data` will be shredded into attachments.
+    public static func jsonSafeEmitData(_ items: [Any], allowBinary: Bool) throws -> [Any] {
+        return try items.enumerated().map { index, item in
+            try jsonSafeValue(item, allowBinary: allowBinary, depth: 0, path: "item \(index)")
+        }
+    }
+
+    private static func jsonSafeValue(_ value: Any, allowBinary: Bool, depth: Int, path: String) throws -> Any {
+        guard depth <= maximumEmitNestingDepth else {
+            throw SocketPacketError.nestingTooDeep(path: path, limit: maximumEmitNestingDepth)
+        }
+
+        switch value {
+        case is NSNull:
+            return value
+        case let date as Date:
+            return iso8601String(from: date)
+        case let number as NSNumber:
+            // Keep everything except a non-finite number: a JSON boolean is an
+            // NSNumber too (`isJSONNumber` filters it out), and every finite
+            // value encodes as-is.
+            guard isJSONNumber(number), !number.doubleValue.isFinite else { return number }
+
+            return NSNull()
+        case let double as Double:
+            // Only reached where Swift numerics do not bridge to NSNumber.
+            return double.isFinite ? double : NSNull()
+        case let float as Float:
+            return float.isFinite ? float : NSNull()
+        case is String, is NSString, is Bool, is Int, is UInt:
+            return value
+        case let data as Data:
+            guard allowBinary else {
+                throw SocketPacketError.unsupportedValue(path: path, type: "Data")
+            }
+
+            return data
+        case let array as [Any]:
+            return try array.enumerated().map { index, element in
+                try jsonSafeValue(element, allowBinary: allowBinary, depth: depth + 1,
+                                  path: "\(path)[\(index)]")
+            }
+        case let dictionary as JSON:
+            var out = JSON(minimumCapacity: dictionary.count)
+            for (key, element) in dictionary {
+                out[key] = try jsonSafeValue(element, allowBinary: allowBinary, depth: depth + 1,
+                                             path: "\(path).\(key)")
+            }
+
+            return out
+        case is [AnyHashable: Any]:
+            throw SocketPacketError.nonStringKey(path: path)
+        default:
+            throw SocketPacketError.unsupportedValue(path: path, type: String(describing: Swift.type(of: value)))
         }
     }
 
@@ -272,8 +489,12 @@ private extension SocketPacket {
         case let arr as [Any]:
             return arr.map({shred($0, binary: &binary)})
         case let dict as JSON:
-            return dict.reduce(into: JSON(), {cur, keyValue in
-                cur[keyValue.0] = shred(keyValue.1, binary: &binary)
+            // Sorted traversal so attachment numbering is reproducible. JS
+            // `deconstructPacket` walks a JS object in insertion order, which a
+            // Swift `Dictionary` does not have; without an order the same
+            // payload could number its attachments differently on every emit.
+            return dict.keys.sorted().reduce(into: JSON(), {cur, key in
+                cur[key] = shred(dict[key]!, binary: &binary)
             })
         default:
             return data

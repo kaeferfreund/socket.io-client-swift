@@ -552,7 +552,12 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     open func emit(_ event: String, with items: [SocketData], completion: (() -> ())?) {
 
         do {
-            let mapped = [event] + (try items.map({ try $0.socketRepresentation() }))
+            // JS-aligned: `JSON.stringify` runs on the payload and throws for
+            // anything it cannot represent, so the failure happens here —
+            // before the retry queue or the send buffer take ownership.
+            let mapped = try SocketPacket.jsonSafeEmitData(
+                [event] + (try items.map({ try $0.socketRepresentation() })), allowBinary: true
+            )
 
             // JS `emit()`: with `retries` set, EVERY emit goes through the
             // queue (`_addToQueue`), ack or not.
@@ -598,7 +603,9 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// - parameter ack: The err-first ack callback.
     open func emit(_ event: String, with items: [SocketData], ack: @escaping (Error?, [Any]) -> Void) {
         do {
-            let mapped = [event] + (try items.map({ try $0.socketRepresentation() }))
+            let mapped = try SocketPacket.jsonSafeEmitData(
+                [event] + (try items.map({ try $0.socketRepresentation() })), allowBinary: true
+            )
 
             // JS `emit()`: with `retries` set, the queue takes over and the
             // per-attempt timeout is `flags.timeout ?? ackTimeout` — which is
@@ -640,6 +647,9 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
                                              type: logType)
 
             handleClientEvent(.error, data: [event, items, error])
+            // The caller asked for an acknowledgement; a packet that never
+            // leaves has to settle it exactly once, with the encoding error.
+            ack(error, [])
         }
     }
 
@@ -688,7 +698,9 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     open func emitWithAck(_ event: String, with items: [SocketData]) -> OnAckCallback {
 
         do {
-            return createOnAck([event] + (try items.map({ try $0.socketRepresentation() })))
+            return createOnAck(try SocketPacket.jsonSafeEmitData(
+                [event] + (try items.map({ try $0.socketRepresentation() })), allowBinary: true
+            ))
         } catch {
             DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event), \(items)",
                                              type: logType)
@@ -752,7 +764,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         emit(data, ack: nil, binary: true, isAck: false, volatile: true, completion: completion)
     }
 
-    func emit(_ data: [Any],
+    func emit(_ unsafeData: [Any],
               ack: Int? = nil,
               binary: Bool = true,
               isAck: Bool = false,
@@ -771,8 +783,26 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // where `emit()` throws regardless of connection state. isAck=true frames
         // (ack response packets) bypass the guard because their first item is the
         // ack id, not an event name.
-        if !isAck, failIfReserved(data) {
+        if !isAck, failIfReserved(unsafeData) {
             wrappedCompletion?()
+            return
+        }
+
+        // Last-resort encoder gate. The public entry points already validated
+        // (and normalized) their payload so their acks can carry the error;
+        // this covers the paths that build `[Any]` directly — `rawEmitView`,
+        // the Objective-C ack views — and guarantees nothing unencodable is
+        // ever buffered or written. Re-validating an already-normalized array
+        // is a no-op.
+        let data: [Any]
+        do {
+            data = try SocketPacket.jsonSafeEmitData(unsafeData, allowBinary: binary)
+        } catch {
+            DefaultSocketLogger.Logger.error("Error encoding emit: \(error)", type: logType)
+
+            wrappedCompletion?()
+            handleClientEvent(.error, data: [error])
+
             return
         }
 
@@ -826,7 +856,20 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
                             completion: (() -> ())?
     ) {
         let packet = SocketPacket.packetFromEmit(data, id: ack ?? -1, nsp: nsp, ack: isAck, checkForBinary: binary)
-        let str = packet.packetString
+        let str: String
+        do {
+            str = try packet.encodedPacketString()
+        } catch {
+            // Unreachable from the emit entry points, which validate the
+            // payload before anything is buffered, queued or written. Kept so a
+            // future caller cannot reintroduce the silent empty-payload packet.
+            DefaultSocketLogger.Logger.error("Refusing to send an unencodable packet: \(error)", type: logType)
+
+            completion?()
+            handleClientEvent(.error, data: [error])
+
+            return
+        }
 
         DefaultSocketLogger.Logger.log("Emitting: \(str), Ack: \(isAck)", type: logType)
 
@@ -1642,7 +1685,11 @@ extension SocketIOClient {
             if cancellation?.isCancelled == true { ack(CancellationError(), []); return }
             do {
                 // A custom SocketData representation is evaluated exactly once.
-                let mapped = try mappedItems ?? ([event] + items.map { try $0.socketRepresentation() })
+                // `mappedItems` has already been normalized by the caller;
+                // re-running the JS-stringify normalization on it is a no-op.
+                let mapped = try SocketPacket.jsonSafeEmitData(
+                    mappedItems ?? ([event] + items.map { try $0.socketRepresentation() }), allowBinary: true
+                )
                 guard !self.failIfReserved(mapped) else {
                     ack(NSError(domain: "SocketIO.Emit", code: 1,
                                 userInfo: [NSLocalizedDescriptionKey: "Reserved event name: " + event]), [])
@@ -1659,7 +1706,12 @@ extension SocketIOClient {
                 }
                 self.ackHandlers.addTimedAck(id, on: queue, callback: ackDroppingBuffered, timeout: timeout)
                 self.emit(mapped, ack: id, binary: true, isAck: false)
-            } catch { ack(error, []) }
+            } catch {
+                // Exactly one settlement for the user's ack, and the same
+                // `.error` client event every other emit path reports.
+                self.handleClientEvent(.error, data: [event, items, error])
+                ack(error, [])
+            }
         }
     }
 

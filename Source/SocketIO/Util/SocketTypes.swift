@@ -67,6 +67,12 @@ extension NSString : SocketData { }
 extension NSNull : SocketData { }
 extension String : SocketData { }
 
+/// A `Date` is emitted as the ISO-8601 string `Date.prototype.toJSON()`
+/// produces in JS (`"2024-01-02T03:04:05.678Z"`), at the top level and nested
+/// at any depth. See `SocketPacket.iso8601String(from:)`.
+extension Date : SocketData { }
+extension NSDate : SocketData { }
+
 /// A typealias for an ack callback.
 public typealias AckCallback = ([Any]) -> ()
 

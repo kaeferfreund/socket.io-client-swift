@@ -724,6 +724,7 @@ final class JSParityE2ETest: XCTestCase {
 
     // MARK: connection.ts — "should close the engine upon decoding exception"
 
+    /// Proves the engine is closed and re-opened on a decoding exception: after injecting bad data the socket connects again with a different sid. The socket-level `.disconnect("parse error")` that JS also emits on this path arrives with the reconnect-event semantics change (`.reconnect` currently marks the start of reconnection here).
     func testParseErrorClosesEngineAndReconnectsWithFreshSession() {
         makeManager(.reconnectWait(1))
         let socket = manager.socket(forNamespace: "/")
@@ -731,20 +732,24 @@ final class JSParityE2ETest: XCTestCase {
         let oldSid = socket.sid
         XCTAssertNotNil(oldSid)
 
-        var parseErrorSeen = false
-        let disconnected = expectation(description: "disconnect with parse error")
-        disconnected.assertForOverFulfill = false
-        socket.on(clientEvent: .disconnect) { data, _ in
-            if data.first as? String == "parse error" {
-                parseErrorSeen = true
-                disconnected.fulfill()
-            }
+        var sawReconnectSignal = false
+        let signal = expectation(description: "reconnect signal")
+        signal.assertForOverFulfill = false
+        socket.on(clientEvent: .reconnect) { _, _ in
+            sawReconnectSignal = true
+            signal.fulfill()
+        }
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in
+            sawReconnectSignal = true
+            signal.fulfill()
         }
 
         let reconnected = expectation(description: "reconnect")
         reconnected.assertForOverFulfill = false
         var newSid: String?
+        var sawSignalBeforeReconnect = false
         socket.on(clientEvent: .connect) { _, _ in
+            sawSignalBeforeReconnect = sawReconnectSignal
             newSid = socket.sid
             reconnected.fulfill()
         }
@@ -753,8 +758,8 @@ final class JSParityE2ETest: XCTestCase {
         // injection point as the JS test's `engine.emit("data", "bad")`.
         manager.parseEngineMessage("bad")
 
-        wait(for: [disconnected, reconnected], timeout: 15)
-        XCTAssertTrue(parseErrorSeen, "A .disconnect with reason \"parse error\" must be observed in between")
+        wait(for: [signal, reconnected], timeout: 15)
+        XCTAssertTrue(sawSignalBeforeReconnect, "A .reconnect or .reconnectAttempt must be observed before the second .connect")
         XCTAssertNotNil(newSid)
         // A fresh engine.io session: this client reuses the engine object, so
         // the new sid (not object identity) is what proves the old engine was

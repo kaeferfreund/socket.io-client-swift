@@ -62,6 +62,16 @@ public struct SocketTimedEmitter {
         return try await emit(event, with: items)
     }
 
+    /// JS-named alias of the async overload — `socket.timeout(ms).emitWithAck(ev, ...)`.
+    public func emitWithAck(_ event: String, _ items: SocketData...) async throws -> [Any] {
+        return try await emit(event, with: items)
+    }
+
+    /// Array form of `emitWithAck`.
+    public func emitWithAck(_ event: String, with items: [SocketData]) async throws -> [Any] {
+        return try await emit(event, with: items)
+    }
+
     /// Array async/throws overload.
     ///
     /// Throws `SocketAckError.timeout` / `.disconnected` for the corresponding

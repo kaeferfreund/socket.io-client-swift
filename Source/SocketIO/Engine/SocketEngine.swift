@@ -425,6 +425,12 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         var urlWebSocket = URLComponents(string: url.absoluteString)!
         var queryString = ""
 
+        // JS `socket.io-client/lib/index.ts`:
+        // `if (parsed.query && !opts.query) opts.query = parsed.queryKey` — the
+        // parameters written into the server URL are used, but an explicit
+        // `query` option replaces them rather than merging with them.
+        let urlQuery = urlPolling.percentEncodedQuery
+
         urlWebSocket.path = socketPath
         urlPolling.path = socketPath
 
@@ -436,13 +442,17 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             urlWebSocket.scheme = "ws"
         }
 
-        if let connectParams = self.connectParams {
+        if let connectParams = self.connectParams, !connectParams.isEmpty {
             for (key, value) in connectParams {
                 let keyEsc = key.urlEncode()!
                 let valueEsc = "\(value)".urlEncode()!
 
                 queryString += "&\(keyEsc)=\(valueEsc)"
             }
+        } else if let urlQuery = urlQuery, !urlQuery.isEmpty {
+            // Already percent-encoded by whoever built the URL; re-encoding it
+            // would double-escape the separators.
+            queryString += "&" + urlQuery
         }
 
         urlWebSocket.percentEncodedQuery = "transport=websocket" + queryString

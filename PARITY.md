@@ -10,15 +10,15 @@ at **v4.8.3** — 116 of them — and what this client does about it.
 | Status | Meaning | Count |
 |---|---|---|
 | ✅ covered | an existing Swift test asserts the same behaviour | 41 |
-| ✅ ported | the JS scenario itself is now a Swift test | 31 |
-| 🔧 fixed | the port found a divergence and it was fixed | 2 |
-| ❌ gap | a known divergence, not yet addressed | 20 |
+| ✅ ported | the JS scenario itself is now a Swift test | 36 |
+| 🔧 fixed | the port found a divergence and it was fixed | 8 |
+| ❌ gap | a known divergence, not yet addressed | 9 |
 | ➖ n/a | not applicable to Swift or to a non-browser platform | 22 |
 | ❓ unassessed | not yet checked | 0 |
 
-Every scenario has been assessed. "Parity" here means: **74 of the
+Every scenario has been assessed. "Parity" here means: **85 of the
 94 applicable scenarios pass a Swift test that encodes the JS
-expectation; 20 are known divergences, each named below with its reason.**
+expectation; 9 are known divergences, each named below with its reason.**
 
 ## What porting has found
 
@@ -35,6 +35,16 @@ expectation; 20 are known divergences, each named below with its reason.**
   A v3 client against a v2 server previously looked connected while nothing
   worked.
 
+- **`should attempt reconnects after a failed reconnect`** — after the
+  reconnect budget was exhausted the manager stayed flagged as reconnecting,
+  so a later `connect()` never started a new cycle; and a handshake completing
+  after a timeout-close revived the reused engine with a stale session. Both
+  fixed with the connection-timeout work.
+
+Gaps closed since the first matrix: connection timeout (`.connectTimeout`),
+undecodable data closes the engine, `Manager.socket()` reopens an inactive
+socket, the `t=` cache buster, and `ackTimeout` with err-first `emit(_:_:ack:)`.
+
 Worth recording because they did **not** show up: a transport dropping under an
 established connection does not raise a client-side error here, and a
 `disconnect(); connect()` bounce surfaces exactly one `.disconnect`. An app that
@@ -46,25 +56,16 @@ account.
 - **No `connect_error` client event.** A refused connection surfaces as `.error`.
   The message and `data` do reach the application (pinned by two ported tests),
   but the event name differs and `.error` carries other things too.
-- **No manager-level connection `timeout`.** JS's `timeout` option fails an
-  open that takes too long with `connect_error "timeout"` and feeds the
-  reconnect loop; seven scenarios depend on it. Swift's
-  `connect(timeoutAfter:withHandler:)` only calls a handler.
 - **`.reconnect` means the opposite of JS `reconnect`.** Here it fires when
   reconnection *starts* (`setReconnecting`); in JS it fires on *success*. A
   successful reconnect here is observed as another `.connect`. Nothing fires on
   the manager (2 scenarios).
 - **No `retries` option** and no packet queue behind it (4 scenarios).
-- **No manager-level `ackTimeout`** (2 scenarios).
 - **No per-emit `compress(_:)` chain** — `.compress` is a manager-wide option
   (2 scenarios).
-- **`Manager.socket()` does not reopen a cached inactive socket.** JS re-connects
-  it when `autoConnect` is on.
-- **A decoding exception does not close the engine.** JS treats an undecodable
-  packet as fatal for the transport; this client logs and continues.
-- Plus, from the engine side: no `t=` cache buster on polling requests, and
-  disconnect reasons that are not the JS strings (`io server disconnect`,
-  `ping timeout`, …).
+- Plus, from the engine side: disconnect reasons that are not the JS strings
+  (`io server disconnect`, `ping timeout`, …). (The missing `t=` cache buster
+  on polling requests is closed: every long-polling request now carries one.)
 
 ## How to add to this
 
@@ -102,13 +103,13 @@ successful reconnection.
 | should reconnect by default | ✅ covered | `SocketMangerTest` |
 | should reconnect manually | ✅ ported | `testReconnectManually` |
 | should reconnect automatically after reconnecting manually | ✅ ported | `testReconnectAutomaticallyAfterReconnectingManually` — note Swift `.reconnect` fires when reconnection *starts*; success is another `.connect` |
-| should attempt reconnects after a failed reconnect | ❌ gap | relies on the JS manager `timeout` option (connection open timeout → `connect_error "timeout"` → reconnect loop); Swift has no manager-level connect timeout — `connect(timeoutAfter:)` only calls a handler |
+| should attempt reconnects after a failed reconnect | ✅ ported | `testAttemptReconnectsAfterAFailedReconnect` (connect timeout PR) |
 | reconnect delay should increase every time | ✅ covered | exponential backoff, `SocketMangerTest` |
-| should not reconnect when force closed | ❌ gap | relies on the JS manager `timeout` option (connection open timeout → `connect_error "timeout"` → reconnect loop); Swift has no manager-level connect timeout — `connect(timeoutAfter:)` only calls a handler |
-| should stop reconnecting when force closed | ❌ gap | relies on the JS manager `timeout` option (connection open timeout → `connect_error "timeout"` → reconnect loop); Swift has no manager-level connect timeout — `connect(timeoutAfter:)` only calls a handler |
-| should reconnect after stopping reconnection | ❌ gap | relies on the JS manager `timeout` option (connection open timeout → `connect_error "timeout"` → reconnect loop); Swift has no manager-level connect timeout — `connect(timeoutAfter:)` only calls a handler |
+| should not reconnect when force closed | ✅ ported | `testNoReconnectWhenForceClosedDuringTimeout` |
+| should stop reconnecting when force closed | ✅ ported | `testStopReconnectingWhenForceClosed` |
+| should reconnect after stopping reconnection | ✅ ported | `testReconnectAfterStoppingReconnection` |
 | should stop reconnecting on a socket and keep to reconnect on another | ✅ ported | `testStopReconnectingOnOneSocketButNotTheOther` |
-| should try to reconnect twice and fail when requested two attempts with immediate timeout and reconnect enabled | ❌ gap | relies on the JS manager `timeout` option (connection open timeout → `connect_error "timeout"` → reconnect loop); Swift has no manager-level connect timeout — `connect(timeoutAfter:)` only calls a handler |
+| should try to reconnect twice and fail when requested two attempts with immediate timeout and reconnect enabled | ✅ ported | `testReconnectTwiceThenFailWithImmediateTimeout` |
 | should fire reconnect_* events on manager | ❌ gap | Swift fires `.reconnect` / `.reconnectAttempt` on the socket; the manager has no event channel — and `.reconnect` marks the *start* of reconnection, not success |
 | should fire reconnecting (on manager) with attempts number when reconnecting twice | ❌ gap | same: no manager-level events |
 | should not try to reconnect and should form a connection when connecting to correct port with default timeout | ✅ ported | `testNoReconnectAttemptWhenConnectingToCorrectPort` |
@@ -131,10 +132,10 @@ successful reconnection.
 | should send binary data (as a Blob) | ➖ n/a | browser-only type |
 | should send binary data (as a Blob) mixed with json | ➖ n/a | browser-only type |
 | should send events with Blobs in the correct order | ➖ n/a | browser-only type |
-| should reopen a cached socket | ❌ gap | JS `Manager.socket()` re-`connect()`s a cached inactive socket when `autoConnect` is on; Swift's `socket(forNamespace:)` only returns it |
+| should reopen a cached socket | 🔧 fixed | **gap closed** — `socket(forNamespace:)` re-connects an inactive socket when `autoConnect` is on; `testReopenACachedSocket` |
 | should not reopen a cached but active socket | ✅ ported | `testFetchingTheSameNamespaceTwiceSendsOneConnectFrame` |
 | should not reopen an already active socket | ✅ ported | `testTwoNamespacesSendOneConnectFrameEach` |
-| should close the engine upon decoding exception | ❌ gap | Swift logs a parse failure and keeps the engine open |
+| should close the engine upon decoding exception | 🔧 fixed | **gap closed** — undecodable data closes the engine with "parse error"; `testParseErrorClosesEngineAndReconnectsWithFreshSession`, `SocketParseErrorTest` |
 
 ### `socket.ts`
 
@@ -145,8 +146,8 @@ successful reconnection.
 | clears socket.id upon disconnection | ✅ ported | `testSocketIdIsClearedOnDisconnect` |
 | doesn't fire an error event if we force disconnect in opening state | ✅ ported | `testNoErrorWhenDisconnectingWhileStillOpening` |
 | fire a connect_error event when the connection cannot be established | ❌ gap | Swift has no `connect_error` client event; it maps onto `.error` |
-| fire a connect_error event on open timeout (polling) | ❌ gap | relies on the JS manager `timeout` option (connection open timeout → `connect_error "timeout"` → reconnect loop); Swift has no manager-level connect timeout — `connect(timeoutAfter:)` only calls a handler |
-| fire a connect_error event on open timeout (websocket) | ❌ gap | relies on the JS manager `timeout` option (connection open timeout → `connect_error "timeout"` → reconnect loop); Swift has no manager-level connect timeout — `connect(timeoutAfter:)` only calls a handler |
+| fire a connect_error event on open timeout (polling) | 🔧 fixed | **gap closed** — `.connectTimeout`, `testConnectErrorOnOpenTimeoutPolling` |
+| fire a connect_error event on open timeout (websocket) | 🔧 fixed | **gap closed** — `.connectTimeout`, `testConnectErrorOnOpenTimeoutWebsocket` |
 | doesn't fire a connect_error event when the connection is already established | ✅ ported | `testNoErrorEventWhenAnEstablishedConnectionDrops` |
 | should change socket.id upon reconnection | ✅ ported | `testSocketIdChangesOnReconnection` |
 | should enable compression by default | ❌ gap | no per-emit `compress(_:)` chain in Swift; `.compress` is a manager option |
@@ -181,10 +182,10 @@ successful reconnection.
 | should not timeout when the server does acknowledge the event | ✅ covered | `SocketTimedEmitterE2ETest` |
 | should timeout when the server does not acknowledge the event (promise) | ✅ covered | `SocketTimedEmitterAsyncTest` |
 | should not timeout when the server does acknowledge the event (promise) | ✅ covered | `SocketTimedEmitterAsyncTest` |
-| should use the default timeout value | ❌ gap | no manager-level `ackTimeout` option in Swift |
+| should use the default timeout value | 🔧 fixed | **gap closed** — `.ackTimeout` + `emit(_:_:ack:)`; `testDefaultAckTimeoutApplies`, `SocketAckTimeoutTest` |
 | should not ack upon disconnection (callback) | ✅ covered | legacy `emitWithAck.timingOut` is documented as not cleared on disconnect |
 | should ack with an error upon disconnection (callback & timeout) | ✅ covered | `SocketTimedEmitterTest`, `.disconnected` |
-| should ack with an error upon disconnection (callback & ackTimeout) | ❌ gap | depends on the missing `ackTimeout` option |
+| should ack with an error upon disconnection (callback & ackTimeout) | 🔧 fixed | **gap closed** — `testAckTimeoutFailsWithErrorOnDisconnect` |
 | should ack with an error upon disconnection (promise) | ✅ covered | `SocketTimedEmitterAsyncTest` |
 | should ack with an error upon disconnection (promise & timeout) | ✅ covered | `SocketTimedEmitterAsyncTest` |
 | should not discard an unsent ack (callback) | ✅ ported | `testAnUnsentAckIsNotDiscarded` |

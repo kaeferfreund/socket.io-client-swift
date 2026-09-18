@@ -370,6 +370,17 @@ class SocketEngineTest: XCTestCase {
         XCTAssertTrue(engine.postWait.isEmpty, "Stale packets would be sent under a sid that never issued their ack ids")
     }
 
+    /// url.ts — "works with ipv6". A bracketed IPv6 literal has to survive URL
+    /// construction; losing the brackets produces a host nothing can resolve.
+    func testIpv6HostSurvivesEngineUrlConstruction() {
+        let engine = SocketEngine(client: manager, url: URL(string: "http://[::1]:8080")!, options: nil)
+
+        XCTAssertEqual(engine.urlPolling.host, "::1")
+        XCTAssertEqual(engine.urlPolling.port, 8080)
+        XCTAssertEqual(engine.urlWebSocket.host, "::1")
+        XCTAssertEqual(engine.urlWebSocket.scheme, "ws")
+    }
+
     func testChangingEngineHeadersAfterInit() {
         engine.extraHeaders = ["Hello": "World"]
 

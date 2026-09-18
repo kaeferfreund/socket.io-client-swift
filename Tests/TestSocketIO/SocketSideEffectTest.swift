@@ -148,7 +148,7 @@ class SocketSideEffectTest: XCTestCase {
 
     func testHandlesErrorPacket() {
         let expect = expectation(description: "Handled error")
-        socket.on("error") {data, ack in
+        socket.on(clientEvent: .connectError) {data, ack in
             if let error = data[0] as? String, error == "test error" {
                 expect.fulfill()
             }

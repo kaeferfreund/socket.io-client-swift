@@ -205,6 +205,55 @@ class SocketEngineTest: XCTestCase {
         XCTAssertTrue(manager.engine!.forceWebsockets)
     }
 
+    /// Engine.IO has to pause the polling transport before it sends the upgrade
+    /// packet. Sending it while a POST is still on the wire makes the server
+    /// answer that late POST with HTTP 400; the client discards the error and
+    /// never resends, so the payload is lost without a trace.
+    func testUpgradeIsDeferredUntilPollAndPostSettled() {
+        engine.setConnected(true)
+        engine.setFastUpgrade(true)
+
+        engine.waitingForPoll = true
+        engine.waitingForPost = true
+        XCTAssertFalse(engine.canSendUpgradePacket, "Neither poll nor post settled")
+
+        engine.waitingForPoll = false
+        XCTAssertFalse(
+            engine.canSendUpgradePacket, "A POST is still on the wire; upgrading loses it")
+
+        engine.waitingForPost = false
+        XCTAssertTrue(engine.canSendUpgradePacket, "Both settled, the upgrade may proceed")
+
+        engine.waitingForPoll = true
+        XCTAssertFalse(engine.canSendUpgradePacket, "An outstanding poll still blocks the upgrade")
+    }
+
+    /// `upgradeTransport()` enables `fastUpgrade` and only then enqueues its noop.
+    /// That POST can never be sent, because `doRequest` refuses to write on a
+    /// transport that is upgrading. It must therefore not mark the transport as
+    /// writing, or the deferred upgrade would wait for a callback that never comes
+    /// and the engine would end up with no active transport at all.
+    func testPendingUpgradeDoesNotMarkTheTransportAsWriting() {
+        engine.setConnected(true)
+        engine.setFastUpgrade(true)
+        engine.waitingForPoll = false
+        engine.waitingForPost = false
+
+        engine.sendPollMessage("", withType: .noop, withData: [])
+
+        XCTAssertFalse(engine.waitingForPost, "A POST that cannot start must not block the upgrade")
+        XCTAssertTrue(engine.canSendUpgradePacket)
+    }
+
+    func testNoUpgradePacketWithoutAPendingUpgrade() {
+        engine.setConnected(true)
+        engine.waitingForPoll = false
+        engine.waitingForPost = false
+
+        XCTAssertFalse(
+            engine.canSendUpgradePacket, "Without fastUpgrade there is nothing to upgrade")
+    }
+
     func testChangingEngineHeadersAfterInit() {
         engine.extraHeaders = ["Hello": "World"]
 

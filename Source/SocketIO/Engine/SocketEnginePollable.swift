@@ -104,6 +104,19 @@ extension SocketEnginePollable {
         return req
     }
 
+    /// Whether the paused polling transport may now send the upgrade packet.
+    ///
+    /// Engine.IO requires the current transport to be PAUSED before upgrading.
+    /// A POST still on the wire would reach the server after it switched to
+    /// WebSocket, and the server answers such a late POST with HTTP 400. That
+    /// response is then discarded (`polling` is already `false` by then) and the
+    /// packet is never resent, so its payload is lost without any error. The
+    /// reference implementation waits for both the poll and the write to settle
+    /// (`pause()` in engine.io-client's polling transport); this mirrors it.
+    var canSendUpgradePacket: Bool {
+        fastUpgrade && !waitingForPoll && !waitingForPost
+    }
+
     /// Call to send a long-polling request.
     ///
     /// You shouldn't need to call this directly, the engine should automatically maintain a long-poll request.
@@ -152,7 +165,10 @@ extension SocketEnginePollable {
             this.waitingForPoll = false
 
             if this.fastUpgrade {
-                this.doFastUpgrade()
+                // Deferred while a POST is in flight; the POST callback upgrades then.
+                if this.canSendUpgradePacket {
+                    this.doFastUpgrade()
+                }
             } else if !this.closed && this.polling {
                 this.doPoll()
             }
@@ -166,6 +182,11 @@ extension SocketEnginePollable {
 
             return
         }
+        // A pending upgrade stops polling writes: `doRequest` refuses them, so the
+        // request below would never start while still marking the transport as
+        // writing — and the deferred upgrade would then wait forever. The queued
+        // packets leave over the WebSocket in `doFastUpgrade` instead.
+        guard !fastUpgrade else { return }
 
         let req = createRequestForPostWithPostWait()
 
@@ -191,7 +212,12 @@ extension SocketEnginePollable {
 
             this.waitingForPost = false
 
-            if !this.fastUpgrade {
+            if this.fastUpgrade {
+                // The write settled, so a transport paused for the upgrade may go on.
+                if this.canSendUpgradePacket {
+                    this.doFastUpgrade()
+                }
+            } else {
                 this.flushWaitingForPost()
                 this.doPoll()
             }

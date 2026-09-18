@@ -740,6 +740,10 @@ open class SocketEngine: NSObject, WebSocketDelegate, URLSessionDelegate,
     func setConnected(_ value: Bool) {
         connected = value
     }
+
+    func setFastUpgrade(_ value: Bool) {
+        fastUpgrade = value
+    }
 }
 
 extension SocketEngine {

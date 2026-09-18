@@ -1114,6 +1114,13 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         self.status = status
     }
 
+    /// `connect()` sets `active` before moving the status, so a test that drives
+    /// the status directly has to say whether the socket still wants its
+    /// namespace — the manager only rejoins active ones.
+    func setTestActive(_ value: Bool) {
+        active = value
+    }
+
     func setTestRecovered(_ value: Bool) {
         recovered = value
     }

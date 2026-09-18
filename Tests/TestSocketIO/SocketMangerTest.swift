@@ -261,6 +261,8 @@ class SocketMangerTest : XCTestCase {
         setUpSockets()
 
         socket.setTestStatus(.connecting)
+        // `connect()` would have set this; the manager only rejoins active sockets.
+        socket.setTestActive(true)
         socket._pid = "p1"
         socket._lastOffset = "offset-1"
         socket.connectPayload = ["token": "stale", "room": "old"]

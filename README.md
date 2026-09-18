@@ -101,7 +101,7 @@ Checkout the [15to16](https://nuclearace.github.io/Socket.IO-Client-Swift/15to16
 ## Installation
 
 This native prerelease requires iOS 15, macOS 12, tvOS 15 or watchOS 8,
-and a Swift 5-compatible toolchain supporting the package's Swift tools 5.4
+and a Swift 5-compatible toolchain supporting the package's Swift tools 5.5
 manifest. The checked-in framework project builds against all four Apple SDKs.
 Device/runtime support, particularly watchOS, must still be exercised by adopters.
 

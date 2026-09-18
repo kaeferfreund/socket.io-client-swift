@@ -478,16 +478,24 @@ final class JSParityE2ETest: XCTestCase {
 
         connect(socket)
 
-        // The manual reconnect above proves connect() works again; now the
-        // transport drops and the automatic loop has to pick it back up.
+        // Swift `.reconnect` marks the start of reconnection (`setReconnecting`), so a successful reconnect is observed as another `.connect` — unlike JS, where `reconnect` means success.
+        var connects = 0
+        var transportKilled = false
         let cameBack = expectation(description: "reconnected after transport drop")
         cameBack.assertForOverFulfill = false
-        socket.on(clientEvent: .reconnect) { _, _ in cameBack.fulfill() }
-        socket.on(clientEvent: .connect) { _, _ in cameBack.fulfill() }
+        socket.on(clientEvent: .connect) { _, _ in
+            connects += 1
+            if transportKilled {
+                cameBack.fulfill()
+            }
+        }
+        let connectsBeforeKill = connects
         try killTransport(ofSocketWithId: XCTUnwrap(socket.sid))
+        transportKilled = true
         wait(for: [cameBack], timeout: 15)
 
         XCTAssertEqual(socket.status, .connected)
+        XCTAssertGreaterThan(connects, connectsBeforeKill)
     }
 
     // MARK: socket.ts — "should properly disconnect then reconnect"

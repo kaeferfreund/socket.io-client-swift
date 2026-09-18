@@ -26,7 +26,11 @@ final class JSParityUnitTest: XCTestCase {
 
         let gotError = expectation(description: ".error fired")
         gotError.assertForOverFulfill = false
-        socket.on(clientEvent: .error) { _, _ in gotError.fulfill() }
+        var errorMessage: String?
+        socket.on(clientEvent: .error) { data, _ in
+            errorMessage = data.first as? String
+            gotError.fulfill()
+        }
 
         let gotConnect = expectation(description: ".connect must not fire")
         gotConnect.isInverted = true
@@ -35,6 +39,27 @@ final class JSParityUnitTest: XCTestCase {
         socket.handlePacket(SocketPacket(type: .connect, nsp: "/", placeholders: 0, id: -1, data: []))
 
         waitForExpectations(timeout: 1)
+        XCTAssertEqual(errorMessage, SocketIOClient.v2ServerConnectErrorMessage)
         XCTAssertNotEqual(socket.status, .connected)
+    }
+
+    /// The v2 protocol carries no sid, so a bare CONNECT on a `.two` manager
+    /// is a normal connect, not a version-mismatch error.
+    func testV2ManagerStillConnectsOnABareConnectPacket() {
+        let manager = SocketManager(socketURL: URL(string: "http://localhost/")!, config: [.log(false), .version(.two)])
+        let socket = manager.socket(forNamespace: "/foo")
+        socket.setTestStatus(.connecting)
+
+        let gotConnect = expectation(description: ".connect fired")
+        socket.on(clientEvent: .connect) { _, _ in gotConnect.fulfill() }
+
+        let gotError = expectation(description: ".error must not fire")
+        gotError.isInverted = true
+        socket.on(clientEvent: .error) { _, _ in gotError.fulfill() }
+
+        socket.handlePacket(SocketPacket(type: .connect, nsp: "/foo", placeholders: 0, id: -1, data: []))
+
+        waitForExpectations(timeout: 1)
+        XCTAssertEqual(socket.status, .connected)
     }
 }

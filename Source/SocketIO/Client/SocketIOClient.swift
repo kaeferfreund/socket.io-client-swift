@@ -111,6 +111,10 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// See design spec §3.3 / §6.1 D1.
     public static let socketStateRecoveryMaxOffsetBytes = 256
 
+    /// Fired as `.error` when a CONNECT packet without a `sid` arrives on a
+    /// `.three` manager: the server speaks the v2 protocol. Message matches JS.
+    static let v2ServerConnectErrorMessage = "It seems you are trying to reach a Socket.IO server in v2.x with a v3.x client, but they are not compatible (more information here: https://socket.io/docs/v3/migrating-from-2-x-to-3-0/)"
+
     /// Whether the last successful CONNECT ack recovered a prior session.
     /// Matches the `recovered` property on `socket.io-client` JS.
     public private(set) var recovered: Bool = false
@@ -853,7 +857,15 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         case .ack, .binaryAck:
             handleAck(packet.id, data: packet.data)
         case .connect:
-            didConnect(toNamespace: nsp, payload: packet.data.isEmpty ? nil : packet.data[0] as? [String: Any])
+            // JS-aligned with `socket.io-client/lib/socket.ts` `onpacket`: a
+            // CONNECT without a `sid` on a v3 client means a v2.x server, so
+            // fire `connect_error` instead of connecting. The v2 protocol
+            // carries no sid, so `.two` managers keep the old behavior.
+            if manager?.version == .three && (packet.data.isEmpty || (packet.data[0] as? [String: Any])?["sid"] as? String == nil) {
+                handleClientEvent(.error, data: [SocketIOClient.v2ServerConnectErrorMessage])
+            } else {
+                didConnect(toNamespace: nsp, payload: packet.data.isEmpty ? nil : packet.data[0] as? [String: Any])
+            }
         case .disconnect:
             // JS-aligned: server-initiated DISCONNECT calls `destroy()` which
             // clears `subs` (and therefore `active`) before emitting the

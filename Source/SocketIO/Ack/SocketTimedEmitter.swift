@@ -75,6 +75,10 @@ public struct SocketTimedEmitter {
         // happen together on handleQueue; no actor/executor mutates currentAck.
         let state = SocketAsyncAckState()
         let socket = self.socket
+        // `onCancel` is @Sendable and `SocketIOClient` is not: the box carries the
+        // reference across that boundary, and the socket is only ever touched on
+        // its manager's serial handleQueue.
+        let boxed = SocketUncheckedSendableBox(socket)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 socket.emitTimed(event: event, items: items, timeout: timeout, cancellation: state) { error, data in
@@ -84,9 +88,9 @@ public struct SocketTimedEmitter {
             }
         } onCancel: {
             state.cancel()
-            socket.manager?.handleQueue.async {
+            boxed.value.manager?.handleQueue.async {
                 if let id = state.registeredID {
-                    socket.ackHandlers.cancelTimedAck(id, fireWith: CancellationError())
+                    boxed.value.ackHandlers.cancelTimedAck(id, fireWith: CancellationError())
                 }
             }
         }
@@ -106,4 +110,14 @@ internal final class SocketAsyncAckState {
 }
 #if compiler(>=5.5)
 extension SocketAsyncAckState: @unchecked Sendable {}
+#endif
+
+/// Carries a handleQueue-confined reference across a `@Sendable` boundary.
+/// Correctness relies on the caller dispatching to that queue, not on the box.
+internal struct SocketUncheckedSendableBox<Value> {
+    let value: Value
+    init(_ value: Value) { self.value = value }
+}
+#if compiler(>=5.5)
+extension SocketUncheckedSendableBox: @unchecked Sendable {}
 #endif

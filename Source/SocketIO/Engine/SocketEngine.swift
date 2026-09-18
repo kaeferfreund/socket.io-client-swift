@@ -780,8 +780,10 @@ open class SocketEngine: NSObject, URLSessionDelegate,
                   self.heartbeatNow().uptimeNanoseconds > deadline else { return false }
             self.heartbeatExpired = true
             let attempt = self.generation
-            self.engineQueue.async { [weak self] in
-                guard let self = self, self.generation == attempt, self.heartbeatExpired else { return }
+            // `read` already holds `self` strongly for the duration of this
+            // call; the close block is bounded by the same attempt/token guards.
+            self.engineQueue.async {
+                guard self.generation == attempt, self.heartbeatExpired else { return }
                 self.closeOutEngine(reason: "ping timeout")
             }
             return true

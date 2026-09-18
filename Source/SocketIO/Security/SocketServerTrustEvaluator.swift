@@ -26,8 +26,17 @@ internal enum SocketServerTrustEvaluator {
         }
         guard SecTrustEvaluateWithError(trust, nil) else { return false }
         guard !pins.isEmpty else { return true }
-        guard let leaf = SecTrustGetCertificateAtIndex(trust, 0) else { return false }
+        guard let leaf = Self.leafCertificate(of: trust) else { return false }
         return pins.contains(SecCertificateCopyData(leaf) as Data)
+    }
+
+    /// `SecTrustGetCertificateAtIndex` is deprecated from macOS 12 / iOS 15; the
+    /// deployment floor is still macOS 10.15 / iOS 13, so both paths remain.
+    private static func leafCertificate(of trust: SecTrust) -> SecCertificate? {
+        if #available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *) {
+            return (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first
+        }
+        return SecTrustGetCertificateAtIndex(trust, 0)
     }
 }
 #endif

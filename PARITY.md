@@ -10,16 +10,15 @@ at **v4.8.3** — 116 of them — and what this client does about it.
 | Status | Meaning | Count |
 |---|---|---|
 | ✅ covered | an existing Swift test asserts the same behaviour | 41 |
-| ✅ ported | the JS scenario itself is now a Swift test | 19 |
-| 🔧 fixed | the port found a divergence and it was fixed | 1 |
-| ❌ gap | a known divergence, not yet addressed | 13 |
-| ➖ n/a | not applicable to Swift or to a non-browser platform | 19 |
-| ❓ unassessed | not yet checked — **the honest state, not a claim of parity** | 23 |
+| ✅ ported | the JS scenario itself is now a Swift test | 31 |
+| 🔧 fixed | the port found a divergence and it was fixed | 2 |
+| ❌ gap | a known divergence, not yet addressed | 20 |
+| ➖ n/a | not applicable to Swift or to a non-browser platform | 22 |
+| ❓ unassessed | not yet checked | 0 |
 
-The 23 unassessed are not assumed to pass. They are almost all in one place:
-**reconnection semantics** — manual reconnects, force-close, attempt counting,
-giving up. That is the hardest group to port without flakiness, and the one
-worth the most care.
+Every scenario has been assessed. "Parity" here means: **74 of the
+94 applicable scenarios pass a Swift test that encodes the JS
+expectation; 20 are known divergences, each named below with its reason.**
 
 ## What porting has found
 
@@ -29,23 +28,36 @@ worth the most care.
   reconnect, forever. `SocketManager._engineDidOpen` now skips sockets whose
   `active` is false, which is what the flag was introduced for; nothing had been
   reading it.
+- **`should emit a connect_error event when reaching a Socket.IO server in v2.x`**
+  — a CONNECT packet without a `sid` on a `.three` manager connected the socket.
+  JS recognises it as a v2 server and fires `connect_error` with a message
+  pointing at the migration guide; this client now does the same via `.error`.
+  A v3 client against a v2 server previously looked connected while nothing
+  worked.
 
-Worth recording because it did **not** show up: a transport dropping under an
-established connection does not raise a client-side error here
-(`testNoErrorEventWhenAnEstablishedConnectionDrops`). An app that reports the
-server as unreachable in that situation is doing so on its own account.
+Worth recording because they did **not** show up: a transport dropping under an
+established connection does not raise a client-side error here, and a
+`disconnect(); connect()` bounce surfaces exactly one `.disconnect`. An app that
+reports the server as unreachable in those situations is doing so on its own
+account.
 
 ## Open gaps
 
 - **No `connect_error` client event.** A refused connection surfaces as `.error`.
   The message and `data` do reach the application (pinned by two ported tests),
   but the event name differs and `.error` carries other things too.
+- **No manager-level connection `timeout`.** JS's `timeout` option fails an
+  open that takes too long with `connect_error "timeout"` and feeds the
+  reconnect loop; seven scenarios depend on it. Swift's
+  `connect(timeoutAfter:withHandler:)` only calls a handler.
+- **`.reconnect` means the opposite of JS `reconnect`.** Here it fires when
+  reconnection *starts* (`setReconnecting`); in JS it fires on *success*. A
+  successful reconnect here is observed as another `.connect`. Nothing fires on
+  the manager (2 scenarios).
 - **No `retries` option** and no packet queue behind it (4 scenarios).
 - **No manager-level `ackTimeout`** (2 scenarios).
 - **No per-emit `compress(_:)` chain** — `.compress` is a manager-wide option
   (2 scenarios).
-- **No manager-level events.** JS fires `reconnect`, `reconnect_attempt` and
-  friends on the `Manager`; here they are socket events (2 scenarios).
 - **`Manager.socket()` does not reopen a cached inactive socket.** JS re-connects
   it when `autoConnect` is on.
 - **A decoding exception does not close the engine.** JS treats an undecodable
@@ -58,14 +70,16 @@ server as unreachable in that situation is doing so on its own account.
 
 The fixture server under `Tests/TestSocketIO/E2E/Fixtures/server.js` mirrors
 `test/support/server.ts` where the ported scenarios need it — same namespace
-names (`/no`, `/with-data`, `/foo`, `/asd`), same error strings, same `echo` and
-`false` handlers. Port a scenario into `JSParityE2ETest`, keep the JS title in a
-`MARK` comment, and let CI decide whether it passes.
+names (`/no`, `/with-data`, `/foo`, `/asd`, `/valid`, `/abc`), same error
+strings, same `echo`, `false` and `abuff1`/`abuff2` handlers. Port a scenario
+into `JSParityE2ETest` (or `JSParityUnitTest` when no server is needed), keep
+the JS title in a `MARK` comment, and let CI decide whether it passes.
 
 Force a reconnect with `/admin/kill-transport`, never with
 `engine.disconnect(reason:)` — the latter is a clean shutdown and does not
 reliably reconnect, which silently turns a "this must not happen" test into one
-that proves nothing.
+that proves nothing. And wait for `.connect`, not `.reconnect`, to observe a
+successful reconnection.
 
 ## The matrix
 
@@ -75,9 +89,9 @@ that proves nothing.
 |---|---|---|
 | should connect to localhost | ✅ covered | `HarnessSanityTest`, every E2E `connect` expectation |
 | should not connect when autoConnect option set to false | ✅ covered | `AutoConnectE2ETest` |
-| should start two connections with same path | ❓ unassessed |  |
-| should start two connections with same path and different querystrings | ❓ unassessed |  |
-| should start two connections with different paths | ❓ unassessed |  |
+| should start two connections with same path | ➖ n/a | tests JS `io()`'s Manager cache (`forceNew`/`multiplex`); every Swift `SocketManager` is its own connection, and Swift's `.forceNew` only forces a new engine |
+| should start two connections with same path and different querystrings | ➖ n/a | tests JS `io()`'s Manager cache (`forceNew`/`multiplex`); every Swift `SocketManager` is its own connection, and Swift's `.forceNew` only forces a new engine |
+| should start two connections with different paths | ➖ n/a | tests JS `io()`'s Manager cache (`forceNew`/`multiplex`); every Swift `SocketManager` is its own connection, and Swift's `.forceNew` only forces a new engine |
 | should start a single connection with different namespaces | ✅ ported | `testTwoNamespacesSendOneConnectFrameEach` |
 | should work with acks | ✅ ported | `testEmitWithAckRoundTrip` |
 | should receive date with ack | ➖ n/a | JS `Date` has no Swift equivalent on the wire; `SocketData` is the Swift contract |
@@ -86,25 +100,25 @@ that proves nothing.
 | should connect to a namespace after connection established | ✅ ported | `testJoinANamespaceAfterTheConnectionIsEstablished` |
 | should open a new namespace after connection gets closed | ✅ ported | `testJoinANewNamespaceAfterTheConnectionWasClosed` |
 | should reconnect by default | ✅ covered | `SocketMangerTest` |
-| should reconnect manually | ❓ unassessed |  |
-| should reconnect automatically after reconnecting manually | ❓ unassessed |  |
-| should attempt reconnects after a failed reconnect | ❓ unassessed |  |
+| should reconnect manually | ✅ ported | `testReconnectManually` |
+| should reconnect automatically after reconnecting manually | ✅ ported | `testReconnectAutomaticallyAfterReconnectingManually` — note Swift `.reconnect` fires when reconnection *starts*; success is another `.connect` |
+| should attempt reconnects after a failed reconnect | ❌ gap | relies on the JS manager `timeout` option (connection open timeout → `connect_error "timeout"` → reconnect loop); Swift has no manager-level connect timeout — `connect(timeoutAfter:)` only calls a handler |
 | reconnect delay should increase every time | ✅ covered | exponential backoff, `SocketMangerTest` |
-| should not reconnect when force closed | ❓ unassessed |  |
-| should stop reconnecting when force closed | ❓ unassessed |  |
-| should reconnect after stopping reconnection | ❓ unassessed |  |
-| should stop reconnecting on a socket and keep to reconnect on another | ❓ unassessed |  |
-| should try to reconnect twice and fail when requested two attempts with immediate timeout and reconnect enabled | ❓ unassessed |  |
-| should fire reconnect_* events on manager | ❌ gap | Swift fires `.reconnect` / `.reconnectAttempt` on the socket; the manager has no event channel |
+| should not reconnect when force closed | ❌ gap | relies on the JS manager `timeout` option (connection open timeout → `connect_error "timeout"` → reconnect loop); Swift has no manager-level connect timeout — `connect(timeoutAfter:)` only calls a handler |
+| should stop reconnecting when force closed | ❌ gap | relies on the JS manager `timeout` option (connection open timeout → `connect_error "timeout"` → reconnect loop); Swift has no manager-level connect timeout — `connect(timeoutAfter:)` only calls a handler |
+| should reconnect after stopping reconnection | ❌ gap | relies on the JS manager `timeout` option (connection open timeout → `connect_error "timeout"` → reconnect loop); Swift has no manager-level connect timeout — `connect(timeoutAfter:)` only calls a handler |
+| should stop reconnecting on a socket and keep to reconnect on another | ✅ ported | `testStopReconnectingOnOneSocketButNotTheOther` |
+| should try to reconnect twice and fail when requested two attempts with immediate timeout and reconnect enabled | ❌ gap | relies on the JS manager `timeout` option (connection open timeout → `connect_error "timeout"` → reconnect loop); Swift has no manager-level connect timeout — `connect(timeoutAfter:)` only calls a handler |
+| should fire reconnect_* events on manager | ❌ gap | Swift fires `.reconnect` / `.reconnectAttempt` on the socket; the manager has no event channel — and `.reconnect` marks the *start* of reconnection, not success |
 | should fire reconnecting (on manager) with attempts number when reconnecting twice | ❌ gap | same: no manager-level events |
-| should not try to reconnect and should form a connection when connecting to correct port with default timeout | ❓ unassessed |  |
-| should connect while disconnecting another socket | ❓ unassessed |  |
-| should emit a connect_error event when reaching a Socket.IO server in v2.x | ❓ unassessed | fixture has `server-v2.cjs`; portable |
+| should not try to reconnect and should form a connection when connecting to correct port with default timeout | ✅ ported | `testNoReconnectAttemptWhenConnectingToCorrectPort` |
+| should connect while disconnecting another socket | ✅ ported | `testConnectWhileDisconnectingAnotherSocket` |
+| should emit a connect_error event when reaching a Socket.IO server in v2.x | 🔧 fixed | **found by this port** — `JSParityUnitTest.testConnectPacketWithoutPayloadFiresConnectError`; a CONNECT without `sid` used to connect the socket |
 | should not close the connection when disconnecting a single socket | ✅ ported | `testDisconnectingOneNamespaceKeepsTheOtherConnected` |
-| should stop trying to reconnect | ❓ unassessed |  |
-| should try to reconnect twice and fail when requested two attempts with incorrect address and reconnect enabled | ❓ unassessed |  |
-| should not try to reconnect with incorrect port when reconnection disabled | ❓ unassessed |  |
-| should still try to reconnect twice after opening another socket asynchronously | ❓ unassessed |  |
+| should stop trying to reconnect | ✅ ported | `testStopTryingToReconnect` |
+| should try to reconnect twice and fail when requested two attempts with incorrect address and reconnect enabled | ✅ ported | `testReconnectTwiceThenFailWithIncorrectAddress` |
+| should not try to reconnect with incorrect port when reconnection disabled | ✅ ported | `testNoReconnectWhenDisabledWithIncorrectPort` |
+| should still try to reconnect twice after opening another socket asynchronously | ✅ ported | `testReconnectTwiceAfterOpeningAnotherSocketAsynchronously` |
 | should use overridden setTimeout by default | ➖ n/a | JS timer-injection idiom |
 | should use native setTimeout with useNativeSetTimers | ➖ n/a | JS timer-injection idiom |
 | should emit date as string | ➖ n/a | JS `Date` serialisation |
@@ -113,7 +127,7 @@ that proves nothing.
 | should get binary data (as an ArrayBuffer) | ✅ covered | `Data` in `SocketBasicPacketTest` |
 | should send binary data (as an ArrayBuffer) | ✅ covered | `Data` in `SocketBasicPacketTest` |
 | should send binary data (as an ArrayBuffer) mixed with json | ✅ covered | `SocketBasicPacketTest` |
-| should send events with ArrayBuffers in the correct order | ❓ unassessed |  |
+| should send events with ArrayBuffers in the correct order | ✅ ported | `testBinaryEventsArriveInOrder` |
 | should send binary data (as a Blob) | ➖ n/a | browser-only type |
 | should send binary data (as a Blob) mixed with json | ➖ n/a | browser-only type |
 | should send events with Blobs in the correct order | ➖ n/a | browser-only type |
@@ -131,8 +145,8 @@ that proves nothing.
 | clears socket.id upon disconnection | ✅ ported | `testSocketIdIsClearedOnDisconnect` |
 | doesn't fire an error event if we force disconnect in opening state | ✅ ported | `testNoErrorWhenDisconnectingWhileStillOpening` |
 | fire a connect_error event when the connection cannot be established | ❌ gap | Swift has no `connect_error` client event; it maps onto `.error` |
-| fire a connect_error event on open timeout (polling) | ❓ unassessed |  |
-| fire a connect_error event on open timeout (websocket) | ❓ unassessed |  |
+| fire a connect_error event on open timeout (polling) | ❌ gap | relies on the JS manager `timeout` option (connection open timeout → `connect_error "timeout"` → reconnect loop); Swift has no manager-level connect timeout — `connect(timeoutAfter:)` only calls a handler |
+| fire a connect_error event on open timeout (websocket) | ❌ gap | relies on the JS manager `timeout` option (connection open timeout → `connect_error "timeout"` → reconnect loop); Swift has no manager-level connect timeout — `connect(timeoutAfter:)` only calls a handler |
 | doesn't fire a connect_error event when the connection is already established | ✅ ported | `testNoErrorEventWhenAnEstablishedConnectionDrops` |
 | should change socket.id upon reconnection | ✅ ported | `testSocketIdChangesOnReconnection` |
 | should enable compression by default | ❌ gap | no per-emit `compress(_:)` chain in Swift; `.compress` is a manager option |
@@ -141,13 +155,13 @@ that proves nothing.
 | should accept a query string (default namespace) | ✅ covered | `SocketIOClientConfigurationTest` |
 | should accept an object | ✅ covered | `SocketAuthProviderTest` / `SocketAuthProviderE2ETest` |
 | should accept a query string | ✅ covered | `SocketIOClientConfigurationTest` |
-| should properly encode the parameters | ❓ unassessed |  |
+| should properly encode the parameters | ✅ ported | `testQueryParametersAreProperlyEncoded` |
 | should accept an object | ✅ covered | `SocketAuthProviderTest` / `SocketAuthProviderE2ETest` |
 | should accept an function | ✅ covered | `setAuth(_:)`, `SocketAuthProviderE2ETest` |
 | should fire an error event on middleware failure from custom namespace | ✅ ported | `testMiddlewareFailureOnCustomNamespaceIsReported` |
 | should fire a connect_error event with error data on middleware failure | ✅ ported | `testMiddlewareFailureCarriesItsErrorData` |
 | should not try to reconnect after a middleware failure | 🔧 fixed | **found by this port** — `testNoRejoinAfterAMiddlewareFailure` |
-| should properly disconnect then reconnect | ❓ unassessed |  |
+| should properly disconnect then reconnect | ✅ ported | `testDisconnectThenReconnect` |
 | should throw on reserved event | ✅ covered | `SocketReservedEventTest`, `ReservedEventE2ETest` (`.error` instead of `throw`) |
 | should emit events in order | ✅ covered | `SocketSendBufferTest.testBufferedEmitsKeepTheirOrder` |
 | should emit an event and wait for the acknowledgement | ✅ covered | `SocketTimedEmitterTest` async overload |

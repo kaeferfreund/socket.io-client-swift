@@ -273,6 +273,13 @@ io.on("connection", (socket) => {
     }
   });
 
+  // JS parity: `socket.on("echo", (arg, cb) => cb(arg))` from the JS support
+  // server. Used by the ported ack scenarios.
+  socket.on("echo", (...args) => {
+    const cb = args[args.length - 1];
+    if (typeof cb === "function") { cb(args[0]); }
+  });
+
   // Phase 9 E2E: intentionally never acks — verifies client-side timeout.
   socket.on("never_ack", () => {
     // intentionally do nothing
@@ -284,6 +291,25 @@ io.on("connection", (socket) => {
 io.of("/admin").on("connection", (socket) => {
   socket.on("disconnect", () => {});
 });
+
+// --- socket.io-client (JS) parity fixtures ---------------------------------
+// Mirrors packages/socket.io-client/test/support/server.ts so the scenarios
+// ported in JSParityE2ETest run against the same server behaviour the JS client
+// is tested against. Keep the namespace names and error strings identical.
+
+io.of("/no").use((_socket, next) => {
+  next(new Error("Auth failed (custom namespace)"));
+});
+
+io.of("/with-data").use((_socket, next) => {
+  const err = new Error("Auth failed (with data)");
+  err.data = { code: 401, details: "Invalid token" };
+  next(err);
+});
+
+// Registered so a client can join them; they carry no behaviour of their own.
+io.of("/foo").on("connection", () => {});
+io.of("/asd").on("connection", () => {});
 
 httpServer.listen(0, "127.0.0.1", () => {
   const port = httpServer.address().port;

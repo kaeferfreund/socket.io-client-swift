@@ -111,7 +111,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// See design spec §3.3 / §6.1 D1.
     public static let socketStateRecoveryMaxOffsetBytes = 256
 
-    /// Fired as `.error` when a CONNECT packet without a `sid` arrives on a
+    /// Fired as `.connectError` when a CONNECT packet without a `sid` arrives on a
     /// `.three` manager: the server speaks the v2 protocol. Message matches JS.
     static let v2ServerConnectErrorMessage = "It seems you are trying to reach a Socket.IO server in v2.x with a v3.x client, but they are not compatible (more information here: https://socket.io/docs/v3/migrating-from-2-x-to-3-0/)"
 
@@ -912,7 +912,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             // fire `connect_error` instead of connecting. The v2 protocol
             // carries no sid, so `.two` managers keep the old behavior.
             if manager?.version == .three && (packet.data.isEmpty || (packet.data[0] as? [String: Any])?["sid"] as? String == nil) {
-                handleClientEvent(.error, data: [SocketIOClient.v2ServerConnectErrorMessage])
+                handleClientEvent(.connectError, data: [SocketIOClient.v2ServerConnectErrorMessage])
             } else {
                 didConnect(toNamespace: nsp, payload: packet.data.isEmpty ? nil : packet.data[0] as? [String: Any])
             }
@@ -929,7 +929,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             // connect; the manager will not auto-rejoin without explicit
             // `socket.connect()`, so `active` must reflect that.
             active = false
-            handleEvent("error", data: packet.data, isInternalMessage: true, withAck: packet.id)
+            handleClientEvent(.connectError, data: packet.data)
         }
     }
 

@@ -31,9 +31,9 @@ expectation; 9 are known divergences, each named below with its reason.**
 - **`should emit a connect_error event when reaching a Socket.IO server in v2.x`**
   — a CONNECT packet without a `sid` on a `.three` manager connected the socket.
   JS recognises it as a v2 server and fires `connect_error` with a message
-  pointing at the migration guide; this client now does the same via `.error`.
-  A v3 client against a v2 server previously looked connected while nothing
-  worked.
+  pointing at the migration guide; this client now does the same via
+  `.connectError`. A v3 client against a v2 server previously looked connected
+  while nothing worked.
 
 - **`should attempt reconnects after a failed reconnect`** — after the
   reconnect budget was exhausted the manager stayed flagged as reconnecting,
@@ -43,7 +43,8 @@ expectation; 9 are known divergences, each named below with its reason.**
 
 Gaps closed since the first matrix: connection timeout (`.connectTimeout`),
 undecodable data closes the engine, `Manager.socket()` reopens an inactive
-socket, the `t=` cache buster, and `ackTimeout` with err-first `emit(_:_:ack:)`.
+socket, the `t=` cache buster, `ackTimeout` with err-first `emit(_:_:ack:)`,
+and the `connect_error` client event (see below).
 
 Worth recording because they did **not** show up: a transport dropping under an
 established connection does not raise a client-side error here, and a
@@ -53,9 +54,6 @@ account.
 
 ## Open gaps
 
-- **No `connect_error` client event.** A refused connection surfaces as `.error`.
-  The message and `data` do reach the application (pinned by two ported tests),
-  but the event name differs and `.error` carries other things too.
 - **`.reconnect` means the opposite of JS `reconnect`.** Here it fires when
   reconnection *starts* (`setReconnecting`); in JS it fires on *success*. A
   successful reconnect here is observed as another `.connect`. Nothing fires on
@@ -145,7 +143,7 @@ successful reconnection.
 | should have an accessible socket id equal to the server-side socket id (custom namespace) | ✅ ported | `testSocketIdOnACustomNamespace` |
 | clears socket.id upon disconnection | ✅ ported | `testSocketIdIsClearedOnDisconnect` |
 | doesn't fire an error event if we force disconnect in opening state | ✅ ported | `testNoErrorWhenDisconnectingWhileStillOpening` |
-| fire a connect_error event when the connection cannot be established | ❌ gap | Swift has no `connect_error` client event; it maps onto `.error` |
+| fire a connect_error event when the connection cannot be established | 🔧 fixed | **gap closed** — `.connectError` client event (`.engineDidError` while not connected) |
 | fire a connect_error event on open timeout (polling) | 🔧 fixed | **gap closed** — `.connectTimeout`, `testConnectErrorOnOpenTimeoutPolling` |
 | fire a connect_error event on open timeout (websocket) | 🔧 fixed | **gap closed** — `.connectTimeout`, `testConnectErrorOnOpenTimeoutWebsocket` |
 | doesn't fire a connect_error event when the connection is already established | ✅ ported | `testNoErrorEventWhenAnEstablishedConnectionDrops` |

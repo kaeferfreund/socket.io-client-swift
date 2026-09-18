@@ -24,10 +24,10 @@ final class JSParityUnitTest: XCTestCase {
         let socket = manager.defaultSocket
         socket.setTestStatus(.connecting)
 
-        let gotError = expectation(description: ".error fired")
+        let gotError = expectation(description: ".connectError fired")
         gotError.assertForOverFulfill = false
         var errorMessage: String?
-        socket.on(clientEvent: .error) { data, _ in
+        socket.on(clientEvent: .connectError) { data, _ in
             errorMessage = data.first as? String
             gotError.fulfill()
         }
@@ -56,6 +56,10 @@ final class JSParityUnitTest: XCTestCase {
         let gotError = expectation(description: ".error must not fire")
         gotError.isInverted = true
         socket.on(clientEvent: .error) { _, _ in gotError.fulfill() }
+
+        let gotConnectError = expectation(description: ".connectError must not fire")
+        gotConnectError.isInverted = true
+        socket.on(clientEvent: .connectError) { _, _ in gotConnectError.fulfill() }
 
         socket.handlePacket(SocketPacket(type: .connect, nsp: "/foo", placeholders: 0, id: -1, data: []))
 

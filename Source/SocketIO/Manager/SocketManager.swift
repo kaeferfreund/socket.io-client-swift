@@ -239,9 +239,9 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     }
 
     /// Fires when the engine.io handshake takes longer than `connectTimeout`.
-    /// Emits `.error("timeout")` to every socket, then closes the engine; the
-    /// resulting close enters the reconnect loop when reconnection is enabled.
-    /// JS-aligned with the timeout callback in `Manager.open()`.
+    /// Emits `.connectError("timeout")` to every socket, then closes the
+    /// engine; the resulting close enters the reconnect loop when reconnection
+    /// is enabled. JS-aligned with the timeout callback in `Manager.open()`.
     private func connectDidTimeOut() {
         connectTimeoutTimer = nil
 
@@ -251,7 +251,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
         DefaultSocketLogger.Logger.log("Connect attempt timed out after \(connectTimeout)s", type: SocketManager.logType)
 
-        emitAll(clientEvent: .error, data: ["timeout"])
+        emitAll(clientEvent: .connectError, data: ["timeout"])
 
         engine?.disconnect(reason: "timeout")
     }
@@ -472,7 +472,16 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
         DefaultSocketLogger.Logger.error("\(reason)", type: SocketManager.logType)
 
-        emitAll(clientEvent: .error, data: [reason])
+        // JS `socket.ts onerror`: an engine error while not connected is a
+        // `connect_error`; an established connection reports `.error` instead
+        // (a transport drop under a live connection is a runtime error).
+        forAll { socket in
+            if socket.status == .connected {
+                socket.handleClientEvent(.error, data: [reason])
+            } else {
+                socket.handleClientEvent(.connectError, data: [reason])
+            }
+        }
     }
 
     /// Called when the engine opens.

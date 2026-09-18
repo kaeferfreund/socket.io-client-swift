@@ -378,6 +378,24 @@ public enum SocketClientEvent : String {
     /// ```
     case error
 
+    /// Emitted when the connection or namespace join fails, JS-aligned with `connect_error` in
+    /// `socket.io-client/lib/socket.ts` (`onerror`, `onpacket`).
+    ///
+    /// Fires instead of `.error` for: a server CONNECT_ERROR refusal (namespace middleware rejection),
+    /// a CONNECT packet without `sid` on a `.three` manager (v2.x server), an engine/transport error
+    /// while not connected, and the connection timeout. For a middleware refusal the first data item
+    /// is the packet payload dictionary with `"message"` and optional `"data"`; for the other cases
+    /// the first data item is a String message (`"timeout"` for the connection timeout).
+    ///
+    /// Usage:
+    ///
+    /// ```swift
+    /// socket.on(clientEvent: .connectError) {data, ack in
+    ///     // Some connection-failure handling
+    /// }
+    /// ```
+    case connectError = "connect_error"
+
     /// Emitted whenever the engine sends a ping.
     ///
     /// Usage:

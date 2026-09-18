@@ -70,6 +70,39 @@ final class SocketNativeEngineTest: XCTestCase {
         transport.onEvent?(.message(.text(handshake))); drain(engine)
     }
 
+    func testApplicationTrafficCannotRefreshTheServerHeartbeatDeadline() {
+        let (engine, client, transport) = make()
+        var now = DispatchTime.now()
+        engine.engineQueue.sync { engine.heartbeatNow = { now } }
+        open(engine, transport) // deadline: 25 + 20 seconds
+        engine.engineQueue.sync {
+            now = now + .seconds(46)
+            engine.parseEngineMessage("4[\"still sending data\"]")
+            engine.parseEngineData(Data([1]))
+            XCTAssertTrue(engine.hasPingExpired)
+        }
+        drain(engine)
+        engine.engineQueue.sync { XCTAssertEqual(client.closes, ["ping timeout"]) }
+    }
+
+    func testOnlyPingResetsTheDeadlineAndExpiredChecksCloseOnce() {
+        let (engine, client, transport) = make()
+        var now = DispatchTime.now()
+        engine.engineQueue.sync { engine.heartbeatNow = { now } }
+        open(engine, transport)
+        engine.engineQueue.sync {
+            now = now + .seconds(30)
+            engine.parseEngineMessage("2")
+            now = now + .seconds(30)
+            XCTAssertFalse(engine.hasPingExpired) // inside the reset 45-second budget
+            now = now + .seconds(16)
+            XCTAssertTrue(engine.hasPingExpired)
+            XCTAssertTrue(engine.hasPingExpired)
+        }
+        drain(engine)
+        engine.engineQueue.sync { XCTAssertEqual(client.closes, ["ping timeout"]) }
+    }
+
     func testMalformedHeartbeatIntervalsCannotTrapOrOpenEngine() {
         for timers in ["\"pingInterval\":9223372036854775807,\"pingTimeout\":1",
                        "\"pingInterval\":-1,\"pingTimeout\":1",

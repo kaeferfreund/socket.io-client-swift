@@ -356,6 +356,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // this is the identity-swap path, and delivering the previous user's
         // queued events into the successor session would leak them across
         // identities. Their acks are therefore failed like any other.
+        let retiringAckIDs = ackHandlers.pendingTimedAckIDs
         clearSendBuffer()
         // The retry queue follows the same rule: the previous identity's
         // unacknowledged emits must not be delivered (or retried) under the
@@ -365,7 +366,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         clearRetriableQueue()
 
         manager?.handleQueue.async { [weak self] in
-            self?.ackHandlers.clearTimedAcks(reason: .disconnected)
+            self?.ackHandlers.clearTimedAcks(reason: .disconnected, only: retiringAckIDs)
         }
     }
 
@@ -792,7 +793,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // this fork deliberately reports them as an error rather than dropping
         // them silently. Replaying an ack for an event the server handled in a
         // session that no longer exists would be meaningless anyway.
-        guard status == .connected else {
+        guard status == .connected, manager?.engine?.hasPingExpired != true else {
             guard !isAck else {
                 wrappedCompletion?()
                 handleClientEvent(.error, data: ["Tried emitting when not connected"])

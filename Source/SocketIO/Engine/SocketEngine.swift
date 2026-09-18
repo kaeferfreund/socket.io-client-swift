@@ -91,7 +91,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     /// inspected on engineQueue, including while a polling upgrade is in progress.
     public var writable: Bool {
         let read = {
-            self.connected && !self.closed && !self.probing && !self.fastUpgrade &&
+            self.connected && !self.closed && !self.hasPingExpired && !self.probing && !self.fastUpgrade &&
                 (self.polling ? !self.waitingForPost :
                     (self.wsConnected && self.webSocketTransport?.isWritable == true))
         }
@@ -177,7 +177,13 @@ open class SocketEngine: NSObject, URLSessionDelegate,
 
     private let url: URL
 
-    private var lastCommunication: Date?
+    // Monotonic deadlines do not drift with wall-clock changes. Only an Engine.IO
+    // OPEN or PING resets the v4 heartbeat, never an application message.
+    internal var heartbeatNow: () -> DispatchTime = { .now() }
+    private var heartbeatDeadline: UInt64?
+    private var heartbeatExpired = false
+    private var heartbeatToken: UInt64 = 0
+    private var heartbeatWork: DispatchWorkItem?
     private var pingInterval: Int?
     private var pingTimeout = 0 {
         didSet {
@@ -225,6 +231,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     deinit {
         DefaultSocketLogger.Logger.log("Engine is being released", type: SocketEngine.logType)
         closed = true
+        heartbeatWork?.cancel()
         session?.invalidateAndCancel()
         let abandoned = webSocketTransport
         engineQueue.async {
@@ -267,6 +274,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     private func closeOutEngine(reason: String, graceful: Bool = false,
                                 pollingCloseRequest: URLRequest? = nil) {
         guard !closed else { return }
+        cancelHeartbeat()
         let oldTransport = webSocketTransport
         let wasWebSocketOpen = wsConnected
         let wasPolling = polling
@@ -652,26 +660,52 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     private func handlePing(with message: String) {
         if version.rawValue >= 3 {
             write("", withType: .pong, withData: [])
+            checkPings()
         }
 
         client?.engineDidReceivePing()
     }
 
+    private func cancelHeartbeat() {
+        heartbeatToken &+= 1
+        heartbeatWork?.cancel()
+        heartbeatWork = nil
+        heartbeatDeadline = nil
+    }
+
     private func checkPings() {
-        let pingInterval = self.pingInterval ?? 25_000
-        let deadlineMs = Double(pingInterval + pingTimeout) / 1000
-        let timeoutDeadline = DispatchTime.now() + .milliseconds(pingInterval + pingTimeout)
-
-        engineQueue.asyncAfter(deadline: timeoutDeadline) {[weak self, attempt = self.generation] in
-            // Make sure not to ping old connections
-            guard let this = self, this.generation == attempt && !this.closed else { return }
-
-            if abs(this.lastCommunication?.timeIntervalSinceNow ?? deadlineMs) >= deadlineMs {
-                this.closeOutEngine(reason: "ping timeout")
-            } else {
-                this.checkPings()
-            }
+        guard connected, !closed, !heartbeatExpired, version.rawValue >= 3 else { return }
+        cancelHeartbeat()
+        let deadline = heartbeatNow() + .milliseconds((pingInterval ?? 25_000) + pingTimeout)
+        heartbeatDeadline = deadline.uptimeNanoseconds
+        let attempt = generation
+        let token = heartbeatToken
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, self.generation == attempt,
+                  self.heartbeatToken == token, !self.closed else { return }
+            self.heartbeatExpired = true
+            self.closeOutEngine(reason: "ping timeout")
         }
+        heartbeatWork = work
+        engineQueue.asyncAfter(deadline: deadline, execute: work)
+    }
+
+    public var hasPingExpired: Bool {
+        let read = { () -> Bool in
+            guard self.connected, !self.closed, self.version.rawValue >= 3 else { return false }
+            if self.heartbeatExpired { return true }
+            guard let deadline = self.heartbeatDeadline,
+                  self.heartbeatNow().uptimeNanoseconds > deadline else { return false }
+            self.heartbeatExpired = true
+            let attempt = self.generation
+            self.engineQueue.async { [weak self] in
+                guard let self = self, self.generation == attempt, self.heartbeatExpired else { return }
+                self.closeOutEngine(reason: "ping timeout")
+            }
+            return true
+        }
+        if DispatchQueue.getSpecific(key: engineQueueKey) != nil { return read() }
+        return engineQueue.sync(execute: read)
     }
 
     /// Parses raw binary received from engine.io.
@@ -685,8 +719,6 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         }
 
         DefaultSocketLogger.Logger.log("Got binary data: \(data)", type: SocketEngine.logType)
-
-        lastCommunication = Date()
 
         guard version.rawValue >= 3 || data.first == 0x04 else {
             didError(reason: "Invalid Engine.IO 3 binary packet")
@@ -708,8 +740,6 @@ open class SocketEngine: NSObject, URLSessionDelegate,
 
             return
         }
-
-        lastCommunication = Date()
 
         DefaultSocketLogger.Logger.log("Got message: \(message)", type: SocketEngine.logType)
 
@@ -770,7 +800,8 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         sid = ""
         waitingForPoll = false
         waitingForPost = false
-        lastCommunication = nil
+        cancelHeartbeat()
+        heartbeatExpired = false
         pingInterval = nil
         pingTimeout = 0
         pongsMissed = 0

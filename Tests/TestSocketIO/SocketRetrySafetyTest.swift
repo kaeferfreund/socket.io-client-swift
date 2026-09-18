@@ -29,6 +29,27 @@ final class SocketRetrySafetyTest: XCTestCase {
         super.tearDown()
     }
 
+    func testExpiredHeartbeatBuffersInsteadOfSendingOnTheStaleConnection() throws {
+        make([])
+        engine.hasPingExpired = true
+        socket.emit("after-suspension", "data")
+        XCTAssertTrue(engine.sentPackets.isEmpty)
+        socket.didDisconnect(reason: "ping timeout")
+        engine.hasPingExpired = false
+        socket.didConnect(toNamespace: "/", payload: ["sid": "fresh"])
+        XCTAssertEqual(engine.sentPackets.count, 1)
+        XCTAssertEqual(try manager.parseString(engine.sentPackets[0].0).event, "after-suspension")
+    }
+
+    func testIdentityResetCannotSweepTheNewIdentityAcknowledgement() {
+        make([])
+        socket.ackHandlers.addTimedAck(100, on: .main, callback: { _, _ in }, timeout: .infinity)
+        socket.clearRecoveryState()
+        socket.ackHandlers.addTimedAck(101, on: .main, callback: { _, _ in }, timeout: .infinity)
+        drain()
+        XCTAssertEqual(socket.ackHandlers.pendingTimedAckIDs, [101])
+    }
+
     func testEmitImmediatelyFollowedByDisconnectFailsTheAlreadyRegisteredAck() {
         make([.ackTimeout(10)])
         let failed = expectation(description: "same-turn emit is registered before disconnect")

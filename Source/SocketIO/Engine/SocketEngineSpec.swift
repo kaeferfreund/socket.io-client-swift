@@ -50,6 +50,10 @@ public protocol SocketEngineSpec: AnyObject {
     /// admitting them).
     var writable: Bool { get }
 
+    /// Whether the server heartbeat deadline expired, even if its timer was delayed.
+    /// Reading a native engine schedules its once-only timeout close when necessary.
+    var hasPingExpired: Bool { get }
+
     /// The connect parameters sent during a connect.
     var connectParams: [String: Any]? { get set }
 
@@ -164,6 +168,7 @@ extension SocketEngineSpec {
     /// Default fail-safe — conformers that don't override drop all volatile
     /// packets. See protocol declaration for rationale.
     public var writable: Bool { return false }
+    public var hasPingExpired: Bool { return false }
 
     /// JS default: `timestampRequests` unset, so polling requests are stamped
     /// and WebSocket URLs are not.

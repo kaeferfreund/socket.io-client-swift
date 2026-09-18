@@ -1,0 +1,188 @@
+# Swift Socket.IO: protocol parity and safety review
+
+**Review date:** 2026-09-18. **PR:** #18, `fix/coderabbit-findings-audit` against `master`.
+
+## Decision
+
+The reviewed fork is **not a complete test-for-test port or an observationally identical implementation of the JavaScript client**. This review fixes concrete defects and strengthens validation; it is not a declaration of zero defects or a production release approval. The outstanding resource-boundary and encoder work below must not be hidden behind a green test count.
+
+The reference is the official `socketio/socket.io` repository at commit **`aaf2af36ec8ad05910f357a788e0e358bad32738`**, including `socket.io-client`, `engine.io-client`, `socket.io-parser` and `engine.io-parser`. Its client package declares version 4.8.3. The commit pins the comparison; it is not a claim that an arbitrary installation labelled 4.8.3 has the same sources. The starting Swift PR head was **`513a484aa5bd30bd2b09112830bcf6326f60b581`**. The integrated default-branch baseline was **`b613ef4c501df7b1ac32911b9a211312f496410b`**.
+
+Source review focused on peer-controlled parsing, native transport/session ownership, HTTP polling, acknowledgement and retry lifetimes, disconnect/reconnect ordering, configuration/TLS, and the credibility of the existing parity evidence. Not every execution path or interleaving is proven. Static code observations, reproduced failures, differential measurements and design recommendations are distinguished below.
+
+## 1. The outstanding CodeRabbit comment
+
+[Comment 5733052285](https://github.com/kaeferfreund/socket.io-client-swift/pull/18#issuecomment-5733052285) alleged that an immediate reconnect could cancel the retiring polling session before its close-only POST. The original PR already captured the session and assigned `session = nil` before invoking client callbacks. Thus the specific claim that this detachment was missing was **not reproduced**.
+
+The ownership contract is now more explicit: `closeOutEngine` captures **both the retiring session and its POST completion group**, detaches the active session, and replaces the active POST group before exposing the close to reentrant client code. The close-only POST waits only for the retiring session's outstanding POSTs. It cannot be blocked by a new session's writes or sent under its SID. A bounded one-second teardown remains.
+
+`SocketPollingCloseTest` now includes a held in-flight POST followed by immediate reconnect, alongside the existing `testRetiredCloseUsesOnlyTheOldSessionAfterReconnect`. A second regression verifies that a local POST completion which synchronously enqueues more work cannot open an overlapping POST. These are controlled URLSession/URLProtocol tests, not claims about every network condition.
+
+## 2. Defects fixed during this review
+
+### F1. Peer-controlled parser traps and unsafe binary reconstruction, high severity
+
+The starting parser crashed in isolated subprocesses on short packet strings such as `2`, `2123`, `51-`, and on a binary placeholder with an out-of-bounds `num`. These are Socket.IO payloads that a peer could place inside an Engine.IO MESSAGE. The test harness compiled the real parser/packet source, with only manager and logging conveniences replaced. The recorded input/exit evidence is in `ReviewEvidence/BaselineParserReproduction.json`.
+
+`SocketParsable.swift` now uses a forward-only, bounds-checked UTF-8 cursor. Numeric headers are parsed with overflow checks; namespace Unicode is preserved. Mandatory event/ack payloads and attachment-count syntax are validated before indexing. Modern CONNECT_ERROR payloads follow the modern shape; the explicitly selected legacy protocol retains its older error shapes. All six reserved event names are rejected in the relevant event paths, including `newListener` and `removeListener`.
+
+`SocketPacket` validates placeholder types and indices before retaining/reconstructing attachments. Boolean NSNumber bridges no longer masquerade as numeric event names or indices. A malformed header, a second binary header, unexpected binary data, or a text packet interleaved into a pending binary reconstruction terminates the affected parse session rather than indexing invalid storage or leaving ambiguous framing. Empty Engine.IO MESSAGE payloads no longer disappear silently at the manager parser boundary.
+
+New `SocketParserOptions` default to **10 attachments, 16 MiB binary bytes per reconstructed packet, 16 MiB text packet bytes, and JSON depth 100**. Positive values and a bounded depth setting are required. These limits are deliberately stricter than unlimited acceptance; they are not proof of an end-to-end memory cap. Existing `.webSocketOptions(...)` still separately controls native complete-message/queued-send bounds.
+
+Tests: `SocketProtocolSafetyTest`, extended `SocketParserTest`, manager parser-failure regressions and `scripts/test-parser-safety.sh`.
+
+### F2. Retry queue and acknowledgement ownership, high severity
+
+Ordinary emits routed into the retry queue did not inherit the configured `ackTimeout`, so a missing acknowledgement could leave the queue head blocking later packets indefinitely. Retry attempts also needed stronger identity separation from stale acknowledgement cleanup.
+
+The modern retry path now applies the effective timeout to plain emits as well as err-first callback emits. Each attempt owns a fresh acknowledgement ID. Superseded registrations are retired before resending, and callbacks must match both queue entry and attempt ID. Local write completion fires once for the user operation rather than once for every retransmission. Reserved events are checked before retry enqueueing, so retries cannot bypass event validation. Retry drain happens before the namespace's `connect` listener, preventing a listener from overtaking a queued head.
+
+Disconnect and identity-reset cleanup snapshot the retiring acknowledgement IDs before reentrant callbacks. Deferred cleanup cannot erase an acknowledgement belonging to a replacement connection or identity. Modern no-timeout acknowledgements are removed silently on disconnect, unlike the intentionally separate legacy API. Timeout registrations carry their own identity token; reusing an ID cannot allow its cancelled old timer to fire the new registration.
+
+Same-turn `emit(); disconnect()` is also explicitly tested. Acknowledgements register synchronously when already on the manager's owning queue; dispatch from another queue remains asynchronous. This avoids fixing stale cleanup at the cost of missing the acknowledgement that was just emitted. A custom `SocketData` representation is evaluated once, and the retry wrapper does not consume an unused acknowledgement ID before the actual attempt.
+
+Tests: `SocketRetrySafetyTest`, `JSParityRetryE2ETest`, existing acknowledgement, state-recovery and connect-timeout suites.
+
+### F3. Cancellation before async acknowledgement registration
+
+A cancellation arriving in the check-to-registration window could miss a not-yet-allocated acknowledgement and leave an infinite-timeout async emit suspended. A small lock-protected cancellation/registration state now carries that cancellation into registration on `handleQueue`. Already-cancelled work does not send or register a timer; cancellation after registration uses the same once-only acknowledgement path.
+
+The unchecked Sendable assertion is restricted to this lock-protected state, not applied to the mutable client or manager as a shortcut. This is not a full Swift 6 strict-concurrency migration.
+
+Tests: `testCancelledBeforeRegistrationCannotHangInfiniteAsyncAck` and the existing async cancellation/race suites.
+
+### F4. Polling POST reentrancy and malformed legacy framing
+
+The production POST path now detaches a batch, claims the active POST slot and registers the actual request with the session barrier **before** running user-visible local completions. A completion that emits again cannot enter a second concurrent POST. The old helper remains available for its existing test/API behavior, but production ownership no longer depends on running callbacks while the slot appears idle.
+
+Engine.IO 3 payload lengths now use checked, bounded UTF-16 reads. Negative, overflowing, truncated and split-surrogate lengths produce a controlled error instead of a String index trap. This is separate from Socket.IO packet parsing and is tested independently.
+
+Tests: `SocketPollingCloseTest` and `SocketNativeEngineTest.testMalformedLegacyPollingLengthsAreRejectedWithoutTrapping`.
+
+### F5. Heartbeat deadline correctness and timer bounds
+
+Static review found that the old Engine.IO 4 heartbeat checked `lastCommunication`, which was updated by **all** text/binary traffic. Application traffic could therefore hide missing server PING packets, and a periodic check was not an exact ping-only deadline. The JavaScript reference resets its deadline on OPEN/PING and separately detects expiration when a timer has been delayed.
+
+The Swift engine now owns a cancellable monotonic heartbeat deadline reset by OPEN/PING only. Cancellation plus attempt/token guards prevent old timer callbacks from closing a replacement attempt. `hasPingExpired` detects an expired deadline even before a delayed timer callback executes, schedules the once-only timeout close, and prevents a normal emit from being sent over the stale connection. That emit remains buffered for reconnect. Native volatile writability also accounts for expiry. Other `SocketEngineSpec` conformers receive a source-compatible default property.
+
+Handshake heartbeat intervals are untrusted inputs. Boolean, negative, fractional and overflowing values and a sum outside the supported timer range are rejected before constructing Dispatch deadlines. Acknowledgement timeout conversion likewise treats infinity without scheduling an overflowing timer and bounds finite values.
+
+Tests: `testApplicationTrafficCannotRefreshTheServerHeartbeatDeadline`, `testOnlyPingResetsTheDeadlineAndExpiredChecksCloseOnce`, `testExpiredHeartbeatBuffersInsteadOfSendingOnTheStaleConnection`, and malformed-heartbeat tests. The clock seam is test-only; no sleeps are used to prove the deadline arithmetic.
+
+### F6. Redirect downgrade across more than one hop
+
+The redirect guard previously needed to account for the **current response URL**, not only the original task URL. Otherwise a chain beginning at HTTP and passing through HTTPS could later downgrade. The guard now evaluates the current hop and retains the configured TLS policy; it does not let an external delegate override a server-trust decision.
+
+Test: the multi-hop redirect regression in `SocketNativeTLSConfigurationTest`, together with existing real HTTPS/WSS hostname, expiry, pin and custom-anchor tests.
+
+## 3. Are all JavaScript tests ported?
+
+**No.** The old matrix counted only the 116 Socket.IO client declarations and described generic Swift test files as if they were exact scenario evidence. It omitted Engine.IO and both parsers. Its applicable/covered totals were internally inconsistent. This review replaces that percentage claim rather than carrying it forward.
+
+| Official package | Static runtime test declarations |
+| --- | ---: |
+| socket.io-client | 116 |
+| engine.io-client | 109 |
+| socket.io-parser | 34 |
+| engine.io-parser | 38 |
+| Total | 297 |
+
+There are **14 additional TypeScript compile-time test declarations**. These numbers are generated from AST traversal by `scripts/inventory-upstream-tests.cjs`; they are declarations, not expanded executions. Loops and conditional platform branches can instantiate multiple cases. Server implementation suites are not part of this client-port denominator.
+
+`JavaScriptTestInventory.csv` contains all 311 declaration entries with source file/line, suite, title, review status and candidate Swift evidence. The labels deliberately do not collapse distinct facts:
+
+* **focused-regression:** a related invariant is explicitly tested by this review, sometimes with intentionally stricter Swift input handling; not a claim of literal transplantation.
+* **candidate-existing-test:** a previous pointer or relevant test exists, but its full assertion set has not been newly certified against the upstream case.
+* **mapping-gap / unmapped:** an exact mapping is missing; this does not prove the behavior itself is missing.
+* **known-divergence / api-difference / unsupported-feature / platform-specific / typescript-only:** the reason the entry cannot be counted as an equivalent Swift port is recorded.
+
+The inventory is a reproducible backlog and traceability index, **not a measured semantic-coverage percentage**. Many entries remain unmapped. No full JavaScript upstream `npm test` suite was run in this review. Existing Swift E2E tests run against real Node Socket.IO fixtures, but that is different from running both clients through every identical trace.
+
+Examples of missing proof in the former matrix: async acknowledgement success/disconnect scenarios pointed at a file that tested cancellation/timeouts; URL query-string cases pointed at generic configuration tests; binary `onAnyOutgoing` pointed at a generic listener suite; the throttled-timer case was treated like ordinary offline buffering. The new heartbeat regressions address that last invariant; the other missing mappings are not silently promoted to covered.
+
+Browser File/Blob, IE XMLHttpRequest, Web Workers, Node `autoUnref`, public JS transport constructors and TypeScript inference have platform/API-specific aspects. Their transferable wire behavior may still require native Data/Foundation tests. Compression and WebTransport are **unsupported features**, not merely irrelevant browser tests. Date values also have a representable JSON wire form, so the former blanket dismissal of Date tests was not justified.
+
+## 4. Does Swift behave like the JavaScript original?
+
+For the tested ordinary Socket.IO packet semantics, the evidence is stronger than before. A differential harness transpiles and executes the **actual hash-verified upstream decoder and event emitter**, not a reimplementation of JavaScript parsing. Only debug logging is disabled. The Swift side compiles the actual parser/packet files with small manager/logging shims.
+
+**5,000 seeded generated valid vectors produced zero normalized decoder-output differences.** They include namespaces, Unicode, IDs including zero, JSON primitives/objects/arrays, CONNECT/ERROR/EVENT/ACK packets, and multipart binary event/ack data. Binary packet types and native Data/Buffer representations are normalized for comparison.
+
+**Eight of 29 malformed/noncanonical probes differ.** This JavaScript snapshot accepts some missing/truncated payloads and an exponential attachment count that the hardened Swift decoder rejects. The exact inputs and both outputs are in `ReviewEvidence/DecoderDifferential.json`. They remain visible as deliberate strictness, not hidden to produce a perfect match number. This finite corpus is not an exhaustive equivalence proof, and it does not exercise all encoder outputs, network lifetimes or application behavior.
+
+The separate malformed-input smoke harness processes **20,000 deterministic generated strings**, plus explicit former-crash cases and positive controls, without a parser process crash. This is seeded smoke/fuzz-style coverage, not coverage-guided fuzzing or an assurance that all malicious inputs are safe.
+
+### Remaining behavioral differences
+
+`SocketIOClient.setReconnecting` emits Swift `.reconnect` at the **start** of reconnection; the JavaScript manager emits successful `reconnect` later and exposes a different reconnect-event stream. During automatic retry, `SocketManager._engineDidClose` follows its own reconnect path instead of the JavaScript socket's full `onclose`/ack-cleanup sequence. The fixes above protect acknowledgement identities, but do not certify complete event-order equivalence on every automatic reconnect.
+
+The legacy `emitWithAck(...).timingOut(...)` and async timeout overload do not participate in the modern ordered retry queue. The legacy API intentionally retains magic-string timeout and different disconnect behavior. JavaScript Promise acknowledgement behavior must not be declared covered solely because a Swift async overload exists.
+
+The native fork rejects `.compress`, `.selfSigned(true)` and `.enableSOCKSProxy(true)` and uses explicit `SocketTLSConfiguration` policies. It does not implement WebTransport, JS `io()` manager caching, all URL inference, custom JSON revivers or all JS transport selection options. These are visible API/feature boundaries. Swift's explicit manager/queue ownership is not the same API as the browser/Node single-event-loop client.
+
+## 5. Outstanding release gates and recommended simplifications
+
+### R1. Bound the entire pipeline, not only individual native packets, high priority
+
+**Static risk, not a measured exhaustion exploit in this review.** `SocketIOClient.sendBuffer`, `retryQueue` and `bufferedRecoveryReplayEvents` remain unbounded. The source explicitly documents the send buffer as unlimited. In addition, native receives can enqueue work onto the manager's DispatchQueue faster than the manager parses it. A per-message WebSocket limit and per-packet parser cap do not bound this accumulated backlog. Polling currently receives its complete response through a URLSession data-task completion, before the parser can enforce its text limit.
+
+Required next implementation: one coherent resource policy covering queued packet count and retained bytes at the application buffer, retry queue, recovery replay and engine-to-manager handoff; a bounded incoming polling body; and a receive permit released after parsing, not merely after dispatch. Define whether overflow fails a new emit or closes the connection, how callbacks complete, and how long a half-reconstructed packet can remain outstanding. Never silently replay partial packets or silently drop reliable emits.
+
+Acceptance: blocked consumer, never-connected socket, never-acked retry head, replay flood, unfinished binary packet, and oversized/chunked HTTP body tests. Measure retained memory and prove release after reset/disconnect. Matching the JavaScript client's unlimited buffer behavior is not a substitute for this safety policy.
+
+### R2. Replace the silent outgoing JSON fallback, high priority
+
+**Confirmed source behavior.** `SocketPacket.completeMessage` still returns an empty-array packet when JSON serialization fails. An unsupported custom `SocketData` representation or non-finite number can thus change the intended operation into a different wire packet rather than producing a typed encoding failure. The outgoing binary shredder recursively traverses graphs; the review has not established bounded behavior for deep or cyclic Foundation object graphs.
+
+Required next implementation: one throwing, depth/node/byte-bounded encoder used before any retry/buffer registration or wire send. Define finite-number, Date, custom representation and Foundation collection behavior explicitly; detect cycles without first triggering recursive bridging. Complete the user's local operation and acknowledgement exactly once on an encoding error and emit no partial header. Remove or deprecate the nonthrowing fallback only under a documented API migration.
+
+Acceptance: NaN/infinity, unsupported objects, cyclic NSMutableArray/NSDictionary, deep nesting, multiple binary attachments, custom conversion throwing, and encoding failure during buffered/retried sends. Add JS-vs-Swift encoder differential tests; the decoder comparison does not cover this.
+
+### R3. Unify lifecycle and acknowledgement contracts instead of maintaining parallel paths
+
+There are multiple acknowledgement APIs/registries and multiple buffering paths. This increases the number of cancellation, identity-reset and reconnect combinations that must remain consistent. Introduce one internal acknowledgement record with explicit timeout/disconnect/retry policy, keep public compatibility adapters at the edge, and express connection/namespace transitions as a small documented state machine.
+
+Decide separately whether the public reconnect-event API should migrate to JavaScript semantics. A silent event rename would break existing consumers. Provide an explicit compatibility/version strategy, then run a differential trace suite for disconnect, retry, middleware refusal, successful recovery, identity change and reconnect exhaustion. The current code review is not permission to silently change TimeMonkey's event handling.
+
+### R4. Finish test traceability and deterministic scheduling
+
+Treat the 297 upstream runtime declarations as a worklist, not as a count to equal by adding unrelated Swift tests. Each applicable row needs an exact assertion mapping and its transport/protocol parameterization. Missing positive async/query/binary-listener cases should be ported before claiming full client-level coverage.
+
+Use injectable schedulers for backoff, acknowledgement and connection timers, with separate real-network tests using realistic timing budgets. The old 10/50 ms localhost retry tests failed in the starting CI; extending the successful-network time budget removes an accidental scheduling assumption. Deterministic tests retain exact retry counts, fresh IDs and once-only callbacks, rather than weakening those invariants to make CI green.
+
+The test server's blocking `availableData` startup read and undrained stderr pipe deserve a bounded/nonblocking process harness. Otherwise a missing READY message can defeat its intended startup deadline and leave CI waiting. This is test-infrastructure risk, not a production transport bug.
+
+### R5. Validate the native runtime and distribution contract
+
+Run device/simulator application tests for background/foreground, network loss/recovery, Wi-Fi/cellular transitions, IPv6, proxy environments and cancellation while suspended. macOS unit tests and SDK framework builds are not equivalent to runtime validation on iPhone or Apple Watch. Run Thread Sanitizer and strict-concurrency builds separately; do not stamp mutable clients `@unchecked Sendable` to silence warnings.
+
+Pin fixture dependency versions/lockfiles and record resolved versions for reproducible comparisons. Test Swift package, framework and CocoaPods consumer integration independently before release. A branch build is not a signed app, a release tag or a published pod.
+
+## 6. Evidence and reproduction
+
+The initial PR's CI ran **435 Swift tests with two retry failures**. The first hardened intermediate snapshot ran **466 tests with zero failures** in [run 35375584340](https://github.com/kaeferfreund/socket.io-client-swift/actions/runs/35375584340), including real server/TLS tests; its four Apple framework SDK builds and wire proofs also passed. That intermediate run preceded the additional heartbeat and identity-reset regressions. Final committed-source validation is recorded in the PR and `ReviewEvidence/Validation.json`; its run/commit, not the intermediate count, controls the merge decision.
+
+Reproduce on macOS with Swift/Xcode, Node and OpenSSL installed:
+
+```sh
+swift test
+bash scripts/test-native-distributions.sh
+bash scripts/test-parser-safety.sh
+cd Tests/TestSocketIO/E2E/Fixtures
+npm install --no-audit --no-fund
+node --test polling-proof-observer.test.mjs
+node upgrade-race-proof.mjs
+node max-payload-proof.mjs
+```
+
+For the decoder comparison, check out the pinned official JavaScript repository and make TypeScript 5.8.3 available to Node through a test-only installation or `NODE_PATH`. Then, from the Swift repository:
+
+```sh
+bash scripts/test-parser-parity.sh /path/to/socket.io decoder-results.json
+node scripts/inventory-upstream-tests.cjs /path/to/socket.io /tmp/inventory
+```
+
+The comparison script checks the relevant official source hashes before executing them. The inventory script produces raw declarations; its output does not automatically certify or replace the manually reviewed status columns in the CSV. Logs and result artifacts should be retained with the exact Swift commit.
+
+**No merge, release publication, physical-device certification, complete JavaScript test-suite execution, full semantic equivalence or zero-defect guarantee is claimed.**

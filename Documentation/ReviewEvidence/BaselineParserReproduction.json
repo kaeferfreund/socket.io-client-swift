@@ -1,0 +1,43 @@
+[
+  {
+    "input": "2123",
+    "returncode": -4,
+    "stderr": [
+      "Swift/StringIndexValidation.swift:80: Fatal error: String index range is out of bounds",
+      "",
+      "*** Signal 4: Backtracing from 0x7f96fed7faa6... done ***"
+    ]
+  },
+  {
+    "input": "2",
+    "returncode": -4,
+    "stderr": [
+      "Swift/ContiguousArrayBuffer.swift:691: Fatal error: Index out of range",
+      "",
+      "*** Signal 4: Backtracing from 0x7f772c9a1aa6... done ***"
+    ]
+  },
+  {
+    "input": "51-[\"x\",{\"_placeholder\":true,\"num\":99}]",
+    "returncode": -4,
+    "stderr": [
+      "Swift/ContiguousArrayBuffer.swift:691: Fatal error: Index out of range",
+      "",
+      "*** Signal 4: Backtracing from 0x7ff52c669aa6... done ***"
+    ]
+  },
+  {
+    "input": "51-",
+    "returncode": -4,
+    "stderr": [
+      "Swift/StringUTF16View.swift:423: Fatal error: String index is out of bounds",
+      "",
+      "*** Signal 4: Backtracing from 0x7f2b6634faa6... done ***"
+    ]
+  },
+  {
+    "input": "6",
+    "returncode": 0,
+    "stderr": []
+  }
+]

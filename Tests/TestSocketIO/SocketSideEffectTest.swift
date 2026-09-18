@@ -114,7 +114,7 @@ class SocketSideEffectTest: XCTestCase {
 
         DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 0.1) {
             // Fake connecting
-            self.manager.parseEngineMessage("0/")
+            self.manager.parseEngineMessage("0/,{\"sid\":\"fake-sid\"}")
         }
 
         waitForExpectations(timeout: 3, handler: nil)
@@ -284,7 +284,7 @@ class SocketSideEffectTest: XCTestCase {
 
         DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 0.1) {
             // Fake connecting
-            self.manager.parseEngineMessage("0/")
+            self.manager.parseEngineMessage("0/,{\"sid\":\"fake-sid\"}")
         }
 
         waitForExpectations(timeout: 2)
@@ -338,7 +338,7 @@ class SocketSideEffectTest: XCTestCase {
 
         DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 0.1) {
             // Fake connecting
-            self.manager.parseEngineMessage("0/swift")
+            self.manager.parseEngineMessage("0/swift,{\"sid\":\"fake-sid\"}")
         }
 
         waitForExpectations(timeout: 2)

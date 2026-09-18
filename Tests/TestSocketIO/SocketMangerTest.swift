@@ -333,7 +333,7 @@ public class TestManager: SocketManager {
     public func fakeConnecting(toNamespace nsp: String = "/") {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             // Fake connecting
-            self.parseEngineMessage("0\(nsp)")
+            self.parseEngineMessage("0\(nsp),{\"sid\":\"fake-sid\"}")
         }
     }
 

@@ -13,6 +13,7 @@
 
 ## Features
 
+- New `.connectTimeout(Double)` / `SocketManager.connectTimeout` (default 20 s, `.infinity` disables), JS-aligned with `Manager.open()` in `socket.io-client/lib/manager.ts`. If the engine.io handshake has not completed in time, every socket gets `.error` with `"timeout"`, the engine is closed, and the reconnect loop starts if enabled.
 - Connection State Recovery support for `.version(.three)` managers talking to Socket.IO 4.x servers with `connectionStateRecovery` enabled. `SocketIOClient` exposes `recovered: Bool` and the `.connect` event payload carries a `"recovered": Bool` key. After an abrupt transport drop, the client can resume the prior session when the server still has recovery state available.
 - New `SocketIOClient.clearRecoveryState()` method. Call it before reconnecting on an identity change to prevent resuming a prior user's session.
 - New `SocketIOClientOption.autoConnect(Bool)`. When `true`, `SocketManager.init` calls `defaultSocket.connect()` and opens the engine before returning, so the default namespace socket is auto-joined. Default `false` preserves existing behavior. JS `Manager` defaults to `true`; Swift inverts to avoid silently changing legacy callers. Only the `defaultSocket` is auto-CONNECTed; non-default namespaces created via `manager.socket(forNamespace:)` still require explicit `socket.connect()`. Engine I/O begins synchronously inside `init`, matching JS.
@@ -34,6 +35,7 @@
 
 ## Breaking
 
+- An engine handshake that never completes now fails after 20 s (`.error` with `"timeout"`, engine closed, reconnect loop starts if enabled) instead of waiting indefinitely; set `.connectTimeout(.infinity)` to restore the old behaviour.
 - An `emit` made while the socket is not connected is now **buffered and sent on the next CONNECT** instead of being dropped with a `Tried emitting when not connected` `.error`. JS-aligned with `sendBuffer` in `socket.io-client/lib/socket.ts` (`emit()` / `emitBuffered()`). Callers that treated that `.error` as "this event is lost, handle it yourself" will no longer see it, and the event will arrive after the reconnect. Like JS, the buffer has no upper bound. Ack *responses* (`emitAck`) are unaffected and still report the error.
 
 ## Breaking (.three managers only)

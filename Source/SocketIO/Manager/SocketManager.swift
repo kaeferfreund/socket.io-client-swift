@@ -113,6 +113,10 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     /// The maximum number of seconds to wait before attempting to reconnect.
     public var reconnectWaitMax = 30
 
+    /// Seconds the engine.io handshake may take before the attempt is failed with `.error("timeout")`
+    /// and the engine is closed; `.infinity` disables; `0` fails on the next queue turn (JS `timeout: 0`).
+    public var connectTimeout: Double = 20
+
     /// The randomization factor for calculating reconnect jitter.
     public var randomizationFactor = 0.5
 
@@ -145,6 +149,8 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     internal var currentReconnectAttempt = 0
     private var pendingConnectPayloads = [String: [String: Any]]()
     private var reconnecting = false
+    private var connectTimeoutTimer: DispatchWorkItem?
+    private var connectAttemptTimedOut = false
 
     // MARK: Initializers
 
@@ -214,6 +220,39 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         status = .connecting
 
         engine?.connect()
+
+        cancelConnectTimeout()
+        connectAttemptTimedOut = false
+        if connectTimeout.isFinite {
+            let timer = DispatchWorkItem { [weak self] in
+                self?.connectDidTimeOut()
+            }
+            connectTimeoutTimer = timer
+            handleQueue.asyncAfter(deadline: .now() + connectTimeout, execute: timer)
+        }
+    }
+
+    /// Fires when the engine.io handshake takes longer than `connectTimeout`.
+    /// Emits `.error("timeout")` to every socket, then closes the engine; the
+    /// resulting close enters the reconnect loop when reconnection is enabled.
+    /// JS-aligned with the timeout callback in `Manager.open()`.
+    private func connectDidTimeOut() {
+        connectTimeoutTimer = nil
+
+        guard status != .connected && status != .disconnected else { return }
+
+        connectAttemptTimedOut = true
+
+        DefaultSocketLogger.Logger.log("Connect attempt timed out after \(connectTimeout)s", type: SocketManager.logType)
+
+        emitAll(clientEvent: .error, data: ["timeout"])
+
+        engine?.disconnect(reason: "timeout")
+    }
+
+    private func cancelConnectTimeout() {
+        connectTimeoutTimer?.cancel()
+        connectTimeoutTimer = nil
     }
 
     /// Connects a socket through this manager's engine.
@@ -324,6 +363,8 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     open func disconnect() {
         DefaultSocketLogger.Logger.log("Manager closing", type: SocketManager.logType)
 
+        cancelConnectTimeout()
+
         status = .disconnected
 
         engine?.disconnect(reason: "Disconnect")
@@ -395,6 +436,8 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     }
 
     private func _engineDidClose(reason: String) {
+        cancelConnectTimeout()
+
         waitingPackets.removeAll()
 
         if status != .disconnected {
@@ -419,6 +462,8 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     }
 
     private func _engineDidError(reason: String) {
+        cancelConnectTimeout()
+
         DefaultSocketLogger.Logger.error("\(reason)", type: SocketManager.logType)
 
         emitAll(clientEvent: .error, data: [reason])
@@ -434,6 +479,15 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     }
 
     private func _engineDidOpen(reason: String) {
+        cancelConnectTimeout()
+
+        // A handshake that completes after the timer fired is ignored, the way
+        // JS destroys its "open" listener before closing the engine; the engine
+        // we already asked to close will report its close and the loop goes on.
+        if connectAttemptTimedOut {
+            return
+        }
+
         DefaultSocketLogger.Logger.log("Engine opened \(reason)", type: SocketManager.logType)
 
         status = .connected
@@ -708,6 +762,8 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
                 reconnectWaitMax = abs(wait)
             case let .randomizationFactor(factor):
                 randomizationFactor = factor
+            case let .connectTimeout(value):
+                connectTimeout = max(0, value)
             case let .log(log):
                 DefaultSocketLogger.Logger.log = log
             case let .logger(logger):

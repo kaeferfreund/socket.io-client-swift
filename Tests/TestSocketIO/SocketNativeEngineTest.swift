@@ -325,7 +325,7 @@ final class SocketNativeEngineTest: XCTestCase {
         manager.engine = engine
         let socket = manager.defaultSocket
         let timedOut = expectation(description: "manager timeout")
-        socket.on(clientEvent: .error) { values, _ in
+        socket.on(clientEvent: .connectError) { values, _ in
             if values.first as? String == "timeout" { timedOut.fulfill() }
         }
         socket.connect(); drain(engine)

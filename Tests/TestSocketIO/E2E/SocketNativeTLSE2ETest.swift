@@ -45,7 +45,7 @@ final class SocketNativeTLSE2ETest: XCTestCase {
         let socket = manager.defaultSocket
         let failed = expectation(description: "TLS must be rejected")
         failed.assertForOverFulfill = false
-        socket.on(clientEvent: .error) { data, _ in
+        socket.on(clientEvent: .connectError) { data, _ in
             XCTAssertNotEqual(data.first as? String, "timeout", "TLS must fail explicitly, not by connection timeout")
             failed.fulfill()
         }

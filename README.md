@@ -1,4 +1,4 @@
-> **Native transport prerelease:** This fork now uses Apple's `URLSessionWebSocketTask` directly. There is no Starscream dependency or runtime fallback. Requires iOS 13 / macOS 10.15 / tvOS 13 / watchOS 6. See [migration and compatibility notes](Documentation/NativeWebSocketTransport.md) before adopting this major prerelease.
+> **Native transport prerelease:** This fork now uses Apple's `URLSessionWebSocketTask` directly. There is no Starscream dependency or runtime fallback. Requires iOS 15 / macOS 12 / tvOS 15 / watchOS 8. See [migration and compatibility notes](Documentation/NativeWebSocketTransport.md) before adopting this major prerelease.
 
 [![Swift validation](https://github.com/kaeferfreund/socket.io-client-swift/actions/workflows/swift.yml/badge.svg?branch=feat/native-urlsession-transport)](https://github.com/kaeferfreund/socket.io-client-swift/actions/workflows/swift.yml)
 
@@ -100,7 +100,7 @@ Checkout the [15to16](https://nuclearace.github.io/Socket.IO-Client-Swift/15to16
 
 ## Installation
 
-This native prerelease requires iOS 13, macOS 10.15, tvOS 13 or watchOS 6,
+This native prerelease requires iOS 15, macOS 12, tvOS 15 or watchOS 8,
 and a Swift 5-compatible toolchain supporting the package's Swift tools 5.4
 manifest. The checked-in framework project builds against all four Apple SDKs.
 Device/runtime support, particularly watchOS, must still be exercised by adopters.

@@ -30,13 +30,10 @@ internal enum SocketServerTrustEvaluator {
         return pins.contains(SecCertificateCopyData(leaf) as Data)
     }
 
-    /// `SecTrustGetCertificateAtIndex` is deprecated from macOS 12 / iOS 15; the
-    /// deployment floor is still macOS 10.15 / iOS 13, so both paths remain.
+    /// Deployment floor is iOS 15 / macOS 12, so the modern certificate
+    /// chain API is always available.
     private static func leafCertificate(of trust: SecTrust) -> SecCertificate? {
-        if #available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *) {
-            return (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first
-        }
-        return SecTrustGetCertificateAtIndex(trust, 0)
+        (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first
     }
 }
 #endif

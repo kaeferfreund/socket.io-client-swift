@@ -42,7 +42,7 @@ final class SocketActiveTest: XCTestCase {
         // Must NOT clear active (matches JS — subs live across reconnect cycles).
         socket.connect()
         XCTAssertTrue(socket.active)
-        socket.didDisconnect(reason: "Got Disconnect")
+        socket.didDisconnect(reason: "io server disconnect")
         XCTAssertTrue(socket.active, "didDisconnect must NOT flip active false; only user disconnect() does")
     }
 

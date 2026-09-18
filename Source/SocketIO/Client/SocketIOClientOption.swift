@@ -74,7 +74,7 @@ public enum SocketIOClientOption : ClientOption {
     /// A dictionary of GET parameters that will be included in the connect url.
     case connectParams([String: Any])
 
-    /// Seconds the engine.io handshake may take before the attempt is failed with `.error("timeout")`
+    /// Seconds the engine.io handshake may take before the attempt is failed with `.connectError("timeout")`
     /// and the engine is closed. Default `20`, JS-aligned with `Manager`'s `timeout` option
     /// (`socket.io-client/lib/manager.ts`). `.infinity` disables the timeout.
     case connectTimeout(Double)

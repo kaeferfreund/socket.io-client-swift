@@ -124,7 +124,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     /// The maximum number of seconds to wait before attempting to reconnect.
     public var reconnectWaitMax = 30
 
-    /// Seconds the engine.io handshake may take before the attempt is failed with `.error("timeout")`
+    /// Seconds the engine.io handshake may take before the attempt is failed with `.connectError("timeout")`
     /// and the engine is closed; `.infinity` disables; `0` fails on the next queue turn (JS `timeout: 0`).
     public var connectTimeout: Double = 20
 
@@ -197,7 +197,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     deinit {
         DefaultSocketLogger.Logger.log("Manager is being released", type: SocketManager.logType)
 
-        engine?.disconnect(reason: "Manager Deinit")
+        engine?.disconnect(reason: "io client disconnect")
     }
 
     // MARK: Methods
@@ -209,7 +209,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             self.engine?.client = nil
 
             // Close old engine so it will not leak because of URLSession if in polling mode
-            self.engine?.disconnect(reason: "Adding new engine")
+            self.engine?.disconnect(reason: "io client disconnect")
         }
 
         engine = SocketEngine(client: self, url: socketURL, config: config)
@@ -378,7 +378,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
         status = .disconnected
 
-        engine?.disconnect(reason: "Disconnect")
+        engine?.disconnect(reason: "io client disconnect")
     }
 
     /// Disconnects the given socket.
@@ -391,7 +391,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         pendingConnectPayloads.removeValue(forKey: socket.nsp)
         engine?.send("1\(socket.nsp),", withData: [])
 
-        socket.didDisconnect(reason: "Namespace leave")
+        socket.didDisconnect(reason: "io client disconnect")
     }
 
     /// Disconnects the socket associated with `forNamespace`.
@@ -690,7 +690,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     open func reconnect() {
         guard !reconnecting else { return }
 
-        engine?.disconnect(reason: "manual reconnect")
+        engine?.disconnect(reason: "transport close")
     }
 
     /// Removes the socket from the manager's control. One of the disconnect methods should be called before calling this

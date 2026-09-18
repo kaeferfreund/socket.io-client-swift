@@ -1126,7 +1126,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             // disconnect event — see `socket.io-client/lib/socket.ts`
             // `onserverdisconnect` ("io server disconnect").
             active = false
-            didDisconnect(reason: "Got Disconnect")
+            didDisconnect(reason: "io server disconnect")
         case .error:
             // JS-aligned: receipt of CONNECT_ERROR calls `destroy()` before
             // emitting `connect_error`. The server has refused the namespace

@@ -14,6 +14,9 @@ final class SocketMaxPayloadE2ETest: XCTestCase {
     private let serverMaxPayload = 200
 
     var server: TestServerProcess!
+    /// Held for the test's lifetime: `SocketIOClient.manager` is weak, so a
+    /// manager kept only in a helper's local scope is gone before the first emit.
+    var manager: SocketManager!
     var serverURL: URL { URL(string: "http://127.0.0.1:\(server.port)")! }
 
     override func setUp() {
@@ -22,12 +25,15 @@ final class SocketMaxPayloadE2ETest: XCTestCase {
     }
 
     override func tearDown() {
+        manager?.disconnect()
+        manager = nil
         server.stop()
         super.tearDown()
     }
 
     private func connectedSocket() -> SocketIOClient {
-        let manager = SocketManager(socketURL: serverURL, config: [.log(false), .forcePolling(true)])
+        manager = SocketManager(socketURL: serverURL, config: [.log(false), .forcePolling(true)])
+
         let socket = manager.defaultSocket
         let connected = expectation(description: "connect")
 
@@ -39,10 +45,10 @@ final class SocketMaxPayloadE2ETest: XCTestCase {
     }
 
     func testEngineTakesMaxPayloadFromTheHandshake() {
-        let socket = connectedSocket()
+        _ = connectedSocket()
 
         XCTAssertEqual(
-            (socket.manager?.engine as? SocketEngine)?.maxPayload,
+            (manager.engine as? SocketEngine)?.maxPayload,
             serverMaxPayload,
             "Without the advertised limit the engine cannot know where to cut a batch"
         )

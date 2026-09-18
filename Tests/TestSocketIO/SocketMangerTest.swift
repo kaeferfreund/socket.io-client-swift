@@ -204,6 +204,51 @@ class SocketMangerTest : XCTestCase {
         XCTAssertNil(manager.engine, "autoConnect=false must NOT have created an engine")
     }
 
+    func testSocketForNamespaceReconnectsInactiveSocketWhenAutoConnect() {
+        setUpSockets()
+        manager.autoConnect = true
+        socket.setTestStatus(.disconnected)
+        socket.setTestActive(false)
+        socket.connectCallCount = 0
+
+        let again = manager.socket(forNamespace: "/")
+
+        XCTAssertTrue(again === socket, "The manager has to hand back the cached socket")
+        XCTAssertEqual(socket.connectCallCount, 1, "Fetching an inactive socket with autoConnect must call connect()")
+        XCTAssertTrue(socket.active)
+        XCTAssertEqual(socket.status, .connecting)
+    }
+
+    func testSocketForNamespaceIsPureLookupWithoutAutoConnect() {
+        setUpSockets()
+        manager.autoConnect = false
+        socket.setTestStatus(.disconnected)
+        socket.setTestActive(false)
+        socket.connectCallCount = 0
+
+        let again = manager.socket(forNamespace: "/")
+
+        XCTAssertTrue(again === socket, "The manager has to hand back the cached socket")
+        XCTAssertEqual(socket.connectCallCount, 0, "Without autoConnect the fetch must not call connect()")
+        XCTAssertFalse(socket.active)
+        XCTAssertEqual(socket.status, .disconnected)
+    }
+
+    func testSocketForNamespaceDoesNotReconnectActiveSocket() {
+        setUpSockets()
+        manager.autoConnect = true
+        socket.setTestStatus(.connected)
+        socket.setTestActive(true)
+        socket.connectCallCount = 0
+
+        let again = manager.socket(forNamespace: "/")
+
+        XCTAssertTrue(again === socket, "The manager has to hand back the cached socket")
+        XCTAssertEqual(socket.connectCallCount, 0, "An already active socket must not be connected again")
+        XCTAssertTrue(socket.active)
+        XCTAssertEqual(socket.status, .connected)
+    }
+
     func testConnectSocketUsesExplicitPayloadWithRecoveryState() throws {
         let engine = CaptureEngine()
         manager.engine = engine
@@ -338,8 +383,11 @@ public class TestManager: SocketManager {
     }
 
     public override func socket(forNamespace nsp: String) -> SocketIOClient {
-        // set socket to our test socket, the superclass method will get this from nsps
-        nsps[nsp] = TestSocket(manager: self, nsp: nsp)
+        // Preserve the cached socket so the superclass exercises its cached path;
+        // only create the test socket on first use for the namespace.
+        if nsps[nsp] == nil {
+            nsps[nsp] = TestSocket(manager: self, nsp: nsp)
+        }
 
         return super.socket(forNamespace: nsp)
     }
@@ -347,6 +395,13 @@ public class TestManager: SocketManager {
 
 public class TestSocket: SocketIOClient {
     public var expectations = [ManagerExpectation: XCTestExpectation]()
+    public var connectCallCount = 0
+
+    public override func connect(withPayload payload: [String: Any]? = nil) {
+        connectCallCount += 1
+
+        super.connect(withPayload: payload)
+    }
 
     public override func didConnect(toNamespace nsp: String, payload: [String: Any]?) {
         expectations[ManagerExpectation.didConnectCalled]?.fulfill()

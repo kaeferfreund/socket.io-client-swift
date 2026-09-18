@@ -38,6 +38,8 @@ jobs:
           correction = Path('.native-migration/adjust.py')
           if correction.exists():
               exec(compile(correction.read_text(), str(correction), 'exec'), {'__name__': '__main__'})
+          fixes = Path('.native-migration/fixes.py')
+          exec(compile(fixes.read_text(), str(fixes), 'exec'), {'__name__': '__main__'})
           PY
       - name: Update existing Xcode framework project
         run: |
@@ -47,12 +49,18 @@ jobs:
         run: |
           set -o pipefail
           swift build 2>&1 | tee /tmp/native-build.log
+      - name: Run focused native and disconnect regressions
+        run: |
+          set -o pipefail
+          swift test --filter 'SocketNative|testNoErrorEventWhenAnEstablishedConnectionDrops|testNoRejoinAfterAMiddlewareFailure' 2>&1 | tee /tmp/native-focused-tests.log
+      - name: Verify all advertised Apple framework build targets
+        run: |
+          set -o pipefail
+          bash scripts/test-native-distributions.sh 2>&1 | tee /tmp/native-distributions.log
       - name: Run complete unit and real-server test suite
         run: |
           set -o pipefail
           swift test 2>&1 | tee /tmp/native-full-tests.log
-      - name: Verify all advertised Apple framework build targets
-        run: bash scripts/test-native-distributions.sh
       - name: Run wire protocol proofs
         working-directory: Tests/TestSocketIO/E2E/Fixtures
         run: |
@@ -62,21 +70,30 @@ jobs:
         run: |
           test "$GITHUB_REPOSITORY" = 'kaeferfreund/socket.io-client-swift'
           test "$GITHUB_REF" = 'refs/heads/feat/native-urlsession-transport'
-          git diff --exit-code -- Source/SocketIO/Manager Source/SocketIO/Client/SocketIOClient.swift
-          git add -A -- Source Tests Package.swift Package.resolved Cartfile Cartfile.resolved Socket.IO-Client-Swift.podspec scripts Documentation README.md CHANGELOG.md PARITY.md
-          git add -u -- Socket.IO-Client-Swift.xcodeproj
+          git diff --exit-code 4458325db9c1c54af6551ef7ddba0febb999cdca -- Source/SocketIO/Manager Source/SocketIO/Client/SocketIOClient.swift
+          git add -A -- Source Tests Package.swift Cartfile Cartfile.resolved Socket.IO-Client-Swift.podspec scripts Documentation README.md CHANGELOG.md PARITY.md
+          git add -u
           git diff --cached --check
           git diff --cached --stat
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'feat!: activate native URLSession transport and remove Starscream' -m 'Integrate ordered native transport with Engine.IO lifecycle, polling upgrades and timeout isolation. Apply shared certificate/hostname policy, reject unsupported legacy options, remove dependency from all distribution paths, and add deterministic engine and real TLS regression coverage. Full Swift and Apple framework tests passed before this commit.'
-          git push origin HEAD:refs/heads/feat/native-urlsession-transport
+          COMMIT=$(git commit-tree "$(git write-tree)" -p "$GITHUB_SHA" -p 4458325db9c1c54af6551ef7ddba0febb999cdca <<'MESSAGE'
+          feat!: activate native URLSession transport and remove Starscream
+
+          Preserve the updated connect-timeout base including ack timeout and cache
+          busting. Replace the engine transport, share strict TLS policy, reject
+          unsupported legacy settings, remove distribution dependencies and cover
+          engine/TLS regressions. Full Swift and Apple SDK builds passed before commit.
+          MESSAGE
+          )
+          git update-ref refs/heads/native-validation-result "$COMMIT"
+          git push origin "$COMMIT:refs/heads/feat/native-urlsession-transport"
       - name: Collect source-only diagnostic snapshot (no Git config or credentials)
         if: always()
         run: |
           git bundle create /tmp/native-history.bundle --all
           git add -A -- Source Tests Package.swift Cartfile Cartfile.resolved Socket.IO-Client-Swift.podspec scripts Documentation README.md CHANGELOG.md PARITY.md
-          git add -u -- Socket.IO-Client-Swift.xcodeproj Package.resolved
+          git add -u
           git diff --cached --binary > /tmp/native-migration.patch
       - uses: actions/upload-artifact@v4
         if: always()
@@ -86,5 +103,7 @@ jobs:
           path: |
             /tmp/native-history.bundle
             /tmp/native-migration.patch
+            /tmp/native-focused-tests.log
+            /tmp/native-distributions.log
             /tmp/native-build.log
             /tmp/native-full-tests.log

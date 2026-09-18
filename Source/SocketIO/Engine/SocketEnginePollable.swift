@@ -31,6 +31,13 @@ public protocol SocketEnginePollable: SocketEngineSpec {
     /// `true` If engine's session has been invalidated.
     var invalidated: Bool { get }
 
+    /// The maximum number of bytes the server accepts in a single polling POST,
+    /// as advertised in the handshake. `nil` when the server does not advertise
+    /// a limit, which is always the case on engine.io v3.
+    ///
+    /// **You should not touch this directly**
+    var maxPayload: Int? { get }
+
     /// A queue of engine.io messages waiting for POSTing
     ///
     /// **You should not touch this directly**
@@ -73,18 +80,54 @@ public protocol SocketEnginePollable: SocketEngineSpec {
 
 // Default polling methods
 extension SocketEnginePollable {
+    /// A server that advertises no limit imposes none on us.
+    public var maxPayload: Int? {
+        return nil
+    }
+
+    /// How many of the queued packets fit into a single POST.
+    ///
+    /// engine.io v4 servers advertise a `maxPayload` in the handshake and answer
+    /// a POST that exceeds it with HTTP 413, discarding every packet it carried.
+    /// The reference implementation therefore batches only as many packets as
+    /// fit and leaves the rest for the next POST (`getWritablePackets()` in
+    /// engine.io-client). A single packet larger than the limit is still sent on
+    /// its own: it cannot be split, and sending it is what the reference client
+    /// does too.
+    func writablePostWaitPrefixCount() -> Int {
+        guard let maxPayload = maxPayload, version.rawValue >= 3, postWait.count > 1 else {
+            return postWait.count
+        }
+
+        var payloadSize = 0
+
+        for (i, packet) in postWait.enumerated() {
+            payloadSize += packet.msg.utf8.count
+
+            if i > 0 && payloadSize > maxPayload {
+                return i
+            }
+
+            payloadSize += 1 // The record separator that precedes the next packet.
+        }
+
+        return postWait.count
+    }
+
     func createRequestForPostWithPostWait() -> URLRequest {
+        let sending = Array(postWait.prefix(writablePostWaitPrefixCount()))
+
         defer {
-            for packet in postWait { packet.completion?() }
-            postWait.removeAll(keepingCapacity: true)
+            for packet in sending { packet.completion?() }
+            postWait.removeFirst(sending.count)
         }
 
         var postStr = ""
 
         if version.rawValue >= 3 {
-            postStr = postWait.lazy.map({ $0.msg }).joined(separator: "\u{1e}")
+            postStr = sending.lazy.map({ $0.msg }).joined(separator: "\u{1e}")
         } else {
-            for packet in postWait {
+            for packet in sending {
                 postStr += "\(packet.msg.utf16.count):\(packet.msg)"
             }
         }

@@ -254,6 +254,122 @@ class SocketEngineTest: XCTestCase {
             engine.canSendUpgradePacket, "Without fastUpgrade there is nothing to upgrade")
     }
 
+    /// engine.io v4 servers advertise a `maxPayload` in the handshake and answer
+    /// a POST above it with HTTP 413, discarding every packet it carried. The
+    /// batch therefore has to stop short of the limit, like `getWritablePackets()`
+    /// in engine.io-client does.
+    func testPostBatchStopsAtTheServersMaxPayload() {
+        engine.setMaxPayload(20)
+        engine.postWait = [
+            (msg: "4aaaaaaaaa", completion: nil), // 10 bytes
+            (msg: "4bbbbbbbbb", completion: nil), // would make 21 with the separator
+            (msg: "4ccccccccc", completion: nil)
+        ]
+
+        let req = engine.createRequestForPostWithPostWait()
+
+        XCTAssertEqual(String(data: req.httpBody!, encoding: .utf8), "4aaaaaaaaa")
+        XCTAssertEqual(engine.postWait.count, 2, "Packets that did not fit stay queued for the next POST")
+    }
+
+    func testPostBatchFillsUpToTheLimitExactly() {
+        engine.setMaxPayload(21)
+        engine.postWait = [
+            (msg: "4aaaaaaaaa", completion: nil),
+            (msg: "4bbbbbbbbb", completion: nil),
+            (msg: "4ccccccccc", completion: nil)
+        ]
+
+        let req = engine.createRequestForPostWithPostWait()
+
+        XCTAssertEqual(req.httpBody!.count, 21, "A payload of exactly maxPayload is still allowed")
+        XCTAssertEqual(engine.postWait.count, 1)
+    }
+
+    /// A packet cannot be split, so the reference client sends it alone and lets
+    /// the server reject it, rather than stalling the queue forever.
+    func testAPacketLargerThanMaxPayloadIsStillSentOnItsOwn() {
+        engine.setMaxPayload(5)
+        engine.postWait = [
+            (msg: "4aaaaaaaaa", completion: nil),
+            (msg: "4b", completion: nil)
+        ]
+
+        let req = engine.createRequestForPostWithPostWait()
+
+        XCTAssertEqual(String(data: req.httpBody!, encoding: .utf8), "4aaaaaaaaa")
+        XCTAssertEqual(engine.postWait.count, 1)
+    }
+
+    func testMaxPayloadCountsBytesNotCharacters() {
+        engine.setMaxPayload(12)
+        engine.postWait = [
+            (msg: "4\u{e4}\u{e4}\u{e4}\u{e4}\u{e4}", completion: nil), // 11 bytes, 6 characters
+            (msg: "4b", completion: nil)
+        ]
+
+        let req = engine.createRequestForPostWithPostWait()
+
+        XCTAssertEqual(req.httpBody!.count, 11)
+        XCTAssertEqual(engine.postWait.count, 1, "Counting characters instead of bytes would have fit both")
+    }
+
+    func testWithoutAnAdvertisedMaxPayloadEverythingGoesInOneBatch() {
+        XCTAssertNil(engine.maxPayload, "No handshake happened, so there is no limit to respect")
+        engine.postWait = [
+            (msg: "4aaaaaaaaa", completion: nil),
+            (msg: "4bbbbbbbbb", completion: nil)
+        ]
+
+        let req = engine.createRequestForPostWithPostWait()
+
+        XCTAssertEqual(req.httpBody!.count, 21)
+        XCTAssertTrue(engine.postWait.isEmpty)
+    }
+
+    /// engine.io v3 has neither the handshake field nor this payload format, so
+    /// the v2 path must stay exactly as it was.
+    func testMaxPayloadIsIgnoredOnEngineIOV3() {
+        engine.setConfigs([.version(.two)])
+        engine.setMaxPayload(5)
+        engine.postWait = [
+            (msg: "4aaaaaaaaa", completion: nil),
+            (msg: "4bbbbbbbbb", completion: nil)
+        ]
+
+        _ = engine.createRequestForPostWithPostWait()
+
+        XCTAssertTrue(engine.postWait.isEmpty, "v2 servers advertise no limit and use a different payload format")
+    }
+
+    func testOnlyTheSentPacketsGetTheirCompletionCalled() {
+        engine.setMaxPayload(20)
+        var firstFired = false
+        var secondFired = false
+        engine.postWait = [
+            (msg: "4aaaaaaaaa", completion: { firstFired = true }),
+            (msg: "4bbbbbbbbb", completion: { secondFired = true })
+        ]
+
+        _ = engine.createRequestForPostWithPostWait()
+
+        XCTAssertTrue(firstFired)
+        XCTAssertFalse(secondFired, "A packet that is still queued has not been written yet")
+    }
+
+    /// A batch capped at `maxPayload` can leave packets queued. They belong to the
+    /// session that was closed, and their ack ids mean nothing to the next one.
+    func testANewSessionDoesNotInheritUnsentPackets() {
+        engine.postWait = [(msg: "4left over from the previous session", completion: nil)]
+
+        let reset = expectation(description: "engine reset")
+        engine.connect()
+        engine.engineQueue.async { reset.fulfill() }
+        wait(for: [reset], timeout: 3)
+
+        XCTAssertTrue(engine.postWait.isEmpty, "Stale packets would be sent under a sid that never issued their ack ids")
+    }
+
     func testChangingEngineHeadersAfterInit() {
         engine.extraHeaders = ["Hello": "World"]
 

@@ -65,9 +65,33 @@ account.
   reconnection *starts* (`setReconnecting`); in JS it fires on *success*. A
   successful reconnect here is observed as another `.connect`. Nothing fires on
   the manager (2 scenarios).
-- Plus, from the engine side: disconnect reasons that are not the JS strings
-  (`io server disconnect`, `ping timeout`, …). (The missing `t=` cache buster
-  on polling requests is closed: every long-polling request now carries one.)
+- (The missing `t=` cache buster on polling requests is closed: every
+  long-polling request now carries one.)
+
+## Disconnect reasons
+
+The `.disconnect` payload now carries the JS reason strings
+(`socket.io-client/lib/socket.ts` + engine.io-client `onclose`):
+
+| Situation | JS reason |
+|---|---|
+| the server sent a DISCONNECT packet | `io server disconnect` |
+| the app disconnected (socket, namespace leave, manager teardown, engine swap) | `io client disconnect` |
+| the engine connection closed cleanly (server close, network drop, reconnect swap) | `transport close` |
+| the engine errored (URLSession error, TLS rejection, invalid configuration) | `transport error` |
+| the client's pong timeout fired | `ping timeout` |
+| an undecodable packet closed the engine | `parse error` |
+
+Two Swift-specific reasons are kept deliberately:
+
+- `"timeout"` — the connect-timeout close. JS has no disconnect after a failed
+  open (it surfaces `connect_error` only); the Swift manager closes the engine
+  and the reconnect loop keys on this close.
+- `"Reconnect Failed"` — the terminal reconnection state. JS exposes
+  `reconnect_failed` as a manager event instead; that is the remaining
+- `"Reconnect Failed"` — the terminal reconnection state. JS exposes
+  `reconnect_failed` as a manager event instead; that is the remaining
+  `.reconnect`-semantics gap above.
 
 ## The `retries` queue
 

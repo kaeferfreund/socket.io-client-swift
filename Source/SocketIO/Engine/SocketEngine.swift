@@ -316,7 +316,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         if connected {
             DefaultSocketLogger.Logger.error("Engine tried opening while connected. Assuming this was a reconnect",
                                              type: SocketEngine.logType)
-            _disconnect(reason: "reconnect")
+            _disconnect(reason: "transport close")
         }
 
         DefaultSocketLogger.Logger.log("Starting engine. Server: \(url)", type: SocketEngine.logType)
@@ -437,7 +437,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             guard let self = self, !self.closed else { return }
             DefaultSocketLogger.Logger.error(reason, type: SocketEngine.logType)
             self.client?.engineDidError(reason: reason)
-            self.closeOutEngine(reason: reason)
+            self.closeOutEngine(reason: "transport error")
         }
         if DispatchQueue.getSpecific(key: engineQueueKey) != nil { fail() }
         else { engineQueue.async(execute: fail) }
@@ -537,7 +537,9 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     }
 
     private func handleClose(_ reason: String) {
-        closeOutEngine(reason: reason)
+        // JS: engine.io-client maps the server's CLOSE packet to
+        // "transport close" (engine.io v4 close packets carry no reason).
+        closeOutEngine(reason: "transport close")
     }
 
     private func handleMessage(_ message: String) {
@@ -632,7 +634,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             guard let this = self, this.generation == attempt && !this.closed else { return }
 
             if abs(this.lastCommunication?.timeIntervalSinceNow ?? deadlineMs) >= deadlineMs {
-                this.closeOutEngine(reason: "Ping timeout")
+                this.closeOutEngine(reason: "ping timeout")
             } else {
                 this.checkPings()
             }
@@ -757,7 +759,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
 
         // Server is not responding
         if pongsMissed > pongsMissedMax {
-            closeOutEngine(reason: "Ping timeout")
+            closeOutEngine(reason: "ping timeout")
             return
         }
 
@@ -904,7 +906,11 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         if error != nil && (!connected || reportSendError) {
             client?.engineDidError(reason: message)
         }
-        closeOutEngine(reason: message)
+        // The disconnect reason is the JS close reason, not the error text —
+        // the detail lives in the engineDidError payload above (engine.io-client
+        // maps a failed transport to "transport error", a clean close to
+        // "transport close").
+        closeOutEngine(reason: error != nil ? "transport error" : "transport close")
     }
 
     /// Polling entry points retain the common implementation and its upgrade barrier.

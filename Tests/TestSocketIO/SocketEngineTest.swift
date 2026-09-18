@@ -205,6 +205,38 @@ class SocketEngineTest: XCTestCase {
         XCTAssertTrue(manager.engine!.forceWebsockets)
     }
 
+    /// Engine.IO has to pause the polling transport before it sends the upgrade
+    /// packet. Sending it while a POST is still on the wire makes the server
+    /// answer that late POST with HTTP 400; the client discards the error and
+    /// never resends, so the payload is lost without a trace.
+    func testUpgradeIsDeferredUntilPollAndPostSettled() {
+        engine.setConnected(true)
+        engine.setFastUpgrade(true)
+
+        engine.waitingForPoll = true
+        engine.waitingForPost = true
+        XCTAssertFalse(engine.canSendUpgradePacket, "Neither poll nor post settled")
+
+        engine.waitingForPoll = false
+        XCTAssertFalse(
+            engine.canSendUpgradePacket, "A POST is still on the wire; upgrading loses it")
+
+        engine.waitingForPost = false
+        XCTAssertTrue(engine.canSendUpgradePacket, "Both settled, the upgrade may proceed")
+
+        engine.waitingForPoll = true
+        XCTAssertFalse(engine.canSendUpgradePacket, "An outstanding poll still blocks the upgrade")
+    }
+
+    func testNoUpgradePacketWithoutAPendingUpgrade() {
+        engine.setConnected(true)
+        engine.waitingForPoll = false
+        engine.waitingForPost = false
+
+        XCTAssertFalse(
+            engine.canSendUpgradePacket, "Without fastUpgrade there is nothing to upgrade")
+    }
+
     func testChangingEngineHeadersAfterInit() {
         engine.extraHeaders = ["Hello": "World"]
 

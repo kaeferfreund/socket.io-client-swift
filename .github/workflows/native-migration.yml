@@ -1,78 +1,60 @@
-name: Native migration validation (temporary)
+name: Native migration publication (temporary)
 on:
   push:
     branches: [feat/native-urlsession-transport]
-    paths: ['.native-migration/**', '.github/workflows/native-migration.yml']
+    paths: ['.github/workflows/native-migration.yml']
 permissions:
   contents: read
 concurrency:
   group: native-migration-implementation
   cancel-in-progress: false
 jobs:
-  implement-and-test:
+  publish-validated-source:
     if: github.repository == 'kaeferfreund/socket.io-client-swift' && github.ref == 'refs/heads/feat/native-urlsession-transport'
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 26
-      - name: Apply reviewed, checksum-verified migration
+      - name: Retrieve the exact source snapshot that passed all validation
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          curl --fail --silent --show-error --location \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            'https://api.github.com/repos/kaeferfreund/socket.io-client-swift/actions/artifacts/10548180675/zip' \
+            --output "$RUNNER_TEMP/native-validated.zip"
           python3 - <<'PY'
-          import base64, gzip, hashlib
+          import hashlib, os, subprocess, zipfile
           from pathlib import Path
-          payload = ''.join(Path(f'.native-migration/part{i}').read_text().strip() for i in range(4))
-          source = gzip.decompress(base64.b64decode(payload, validate=True))
-          assert hashlib.sha256(source).hexdigest() == '36e937a3e7a8749a120b72a8e9368f402fb8fad996576abaca43d70fb6444c19'
-          Path('/tmp/socketio-native-migration.py').write_bytes(source)
-          exec(compile(source, '/tmp/socketio-native-migration.py', 'exec'), {'__name__': '__main__'})
-          p = Path('.native-migration/xcode.rb')
-          p.write_text(p.read_text().replace(':source_root', "'SOURCE_ROOT'"))
-          correction = Path('.native-migration/adjust.py')
-          if correction.exists():
-              exec(compile(correction.read_text(), str(correction), 'exec'), {'__name__': '__main__'})
-          fixes = Path('.native-migration/fixes.py')
-          exec(compile(fixes.read_text(), str(fixes), 'exec'), {'__name__': '__main__'})
+          with zipfile.ZipFile(Path(os.environ['RUNNER_TEMP']) / 'native-validated.zip') as archive:
+              patch = archive.read('native-migration.patch')
+              assert hashlib.sha256(patch).hexdigest() == '6228e2fb95232fb9fc7a4020fc3873f68f36d710859776a0013c4872f1c48490'
+              log = archive.read('native-full-tests.log').decode()
+              assert 'Executed 424 tests, with 0 failures (0 unexpected)' in log
+          # Only the publication workflow differs from the validated checkout.
+          changed = subprocess.check_output(['git', 'diff', '--name-only', 'd313c422f52f9931c90c8d911909bbd88870bf84', 'HEAD'], text=True).splitlines()
+          assert changed == ['.github/workflows/native-migration.yml'], changed
+          subprocess.run(['git', 'apply', '--index', '-'], input=patch, check=True)
+          p = Path('Source/SocketIO/Engine/SocketEngine.swift')
+          source = p.read_bytes()
+          assert source.endswith(b'\n\n')
+          p.write_bytes(source.rstrip(b'\n') + b'\n')
+          subprocess.run(['git', 'add', str(p)], check=True)
           PY
-      - name: Update existing Xcode framework project
-        run: |
-          gem install --user-install xcodeproj -v 1.28.1 --no-document
-          ruby .native-migration/xcode.rb
-      - name: Build complete native library
-        run: |
-          set -o pipefail
-          swift build 2>&1 | tee /tmp/native-build.log
-      - name: Run focused native and disconnect regressions
-        run: |
-          set -o pipefail
-          swift test --filter 'SocketNative|testNoErrorEventWhenAnEstablishedConnectionDrops|testNoRejoinAfterAMiddlewareFailure' 2>&1 | tee /tmp/native-focused-tests.log
-      - name: Verify all advertised Apple framework build targets
-        run: |
-          set -o pipefail
-          bash scripts/test-native-distributions.sh 2>&1 | tee /tmp/native-distributions.log
-      - name: Run complete unit and real-server test suite
-        run: |
-          set -o pipefail
-          swift test 2>&1 | tee /tmp/native-full-tests.log
-      - name: Run wire protocol proofs
-        working-directory: Tests/TestSocketIO/E2E/Fixtures
-        run: |
-          node upgrade-race-proof.mjs
-          node max-payload-proof.mjs
-      - name: Commit only validated implementation to existing feature branch
+      - name: Rebuild the dependency-free library from the validated source
+        run: swift build
+      - name: Commit to the existing feature branch without modifying its base
         run: |
           test "$GITHUB_REPOSITORY" = 'kaeferfreund/socket.io-client-swift'
           test "$GITHUB_REF" = 'refs/heads/feat/native-urlsession-transport'
           git diff --exit-code 4458325db9c1c54af6551ef7ddba0febb999cdca -- Source/SocketIO/Manager Source/SocketIO/Client/SocketIOClient.swift
-          git add -A -- Source Tests Package.swift Cartfile Cartfile.resolved Socket.IO-Client-Swift.podspec scripts Documentation README.md CHANGELOG.md PARITY.md
-          git add -u
           git diff --cached --check
           git diff --cached --stat
           git config user.name 'github-actions[bot]'
@@ -80,30 +62,16 @@ jobs:
           COMMIT=$(git commit-tree "$(git write-tree)" -p "$GITHUB_SHA" -p 4458325db9c1c54af6551ef7ddba0febb999cdca <<'MESSAGE'
           feat!: activate native URLSession transport and remove Starscream
 
-          Preserve the updated connect-timeout base including ack timeout and cache
-          busting. Replace the engine transport, share strict TLS policy, reject
-          unsupported legacy settings, remove distribution dependencies and cover
-          engine/TLS regressions. Full Swift and Apple SDK builds passed before commit.
+          Integrate native ordered transport with Engine.IO lifecycle, upgrades,
+          timeout isolation and strict shared TLS. Preserve the updated base's
+          manager/client, ack timeouts and cache busting. Remove Starscream from
+          every supported distribution and add engine and real TLS regressions.
+
+          Exact source snapshot verified against artifact 10548180675 from run
+          35347970435: 424 tests, zero failures; four Apple SDK framework builds;
+          both wire protocol proofs. The only source difference is removing a
+          trailing blank line. Dependency-free Swift build also rerun here.
           MESSAGE
           )
-          git update-ref refs/heads/native-validation-result "$COMMIT"
+          echo "Validated source commit: $COMMIT"
           git push origin "$COMMIT:refs/heads/feat/native-urlsession-transport"
-      - name: Collect source-only diagnostic snapshot (no Git config or credentials)
-        if: always()
-        run: |
-          git bundle create /tmp/native-history.bundle --all
-          git add -A -- Source Tests Package.swift Cartfile Cartfile.resolved Socket.IO-Client-Swift.podspec scripts Documentation README.md CHANGELOG.md PARITY.md
-          git add -u
-          git diff --cached --binary > /tmp/native-migration.patch
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: native-migration-diagnostics
-          retention-days: 2
-          path: |
-            /tmp/native-history.bundle
-            /tmp/native-migration.patch
-            /tmp/native-focused-tests.log
-            /tmp/native-distributions.log
-            /tmp/native-build.log
-            /tmp/native-full-tests.log

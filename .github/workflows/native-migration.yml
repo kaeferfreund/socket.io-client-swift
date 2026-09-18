@@ -33,6 +33,11 @@ jobs:
           assert hashlib.sha256(source).hexdigest() == '36e937a3e7a8749a120b72a8e9368f402fb8fad996576abaca43d70fb6444c19'
           Path('/tmp/socketio-native-migration.py').write_bytes(source)
           exec(compile(source, '/tmp/socketio-native-migration.py', 'exec'), {'__name__': '__main__'})
+          p = Path('.native-migration/xcode.rb')
+          p.write_text(p.read_text().replace(':source_root', "'SOURCE_ROOT'"))
+          correction = Path('.native-migration/adjust.py')
+          if correction.exists():
+              exec(compile(correction.read_text(), str(correction), 'exec'), {'__name__': '__main__'})
           PY
       - name: Update existing Xcode framework project
         run: |
@@ -63,3 +68,18 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'feat!: activate native URLSession transport and remove Starscream' -m 'Integrate ordered native transport with Engine.IO lifecycle, polling upgrades and timeout isolation. Apply shared certificate/hostname policy, reject unsupported legacy options, remove dependency from all distribution paths, and add deterministic engine and real TLS regression coverage. Full Swift and Apple framework tests passed before this commit.'
           git push origin HEAD:refs/heads/feat/native-urlsession-transport
+      - name: Collect source-only diagnostic snapshot (no Git config or credentials)
+        if: always()
+        run: |
+          git add -A -- Source Tests Package.swift Cartfile Cartfile.resolved Socket.IO-Client-Swift.podspec Socket.IO-Client-Swift.xcodeproj scripts Documentation README.md CHANGELOG.md PARITY.md
+          git diff --cached --binary > /tmp/native-migration.patch
+          git bundle create /tmp/native-history.bundle --all
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-migration-diagnostics
+          retention-days: 2
+          path: |
+            /tmp/native-history.bundle
+            /tmp/native-migration.patch
+            /tmp/native-full-tests.log

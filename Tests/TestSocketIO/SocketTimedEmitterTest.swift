@@ -229,7 +229,6 @@ final class SocketTimedEmitterCallbackTest: XCTestCase {
 // through SocketAckManager.cancelTimedAck(_:fireWith:) so the continuation
 // resumes throwing CancellationError exactly once.
 
-@available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
 final class SocketTimedEmitterAsyncTest: XCTestCase {
     private var manager: SocketManager!
     private var socket: SocketIOClient!

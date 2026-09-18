@@ -58,7 +58,6 @@ public struct SocketTimedEmitter {
     }
 
     /// Variadic async/throws overload.
-    @available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
     public func emit(_ event: String, _ items: SocketData...) async throws -> [Any] {
         return try await emit(event, with: items)
     }
@@ -68,7 +67,6 @@ public struct SocketTimedEmitter {
     /// Throws `SocketAckError.timeout` / `.disconnected` for the corresponding
     /// fire reasons, or `CancellationError` if the awaiting `Task` is cancelled
     /// before the ack arrives.
-    @available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
     public func emit(_ event: String, with items: [SocketData]) async throws -> [Any] {
         // The token is set synchronously by cancellation, even if cancellation
         // arrives before emitTimed's queue block. ID allocation and registration

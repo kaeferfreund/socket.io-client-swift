@@ -51,11 +51,11 @@
 - `SocketIOClient.volatile.emit(...)` chain. Drops packet if `engine.writable == false`; no `.error`, no outgoing-listener fire, no buffering. JS-aligned per `socket.io-client/lib/socket.ts` `emit()` body which gates `discardPacket = volatile && !transport.writable`. No volatile-with-ack overload (JS allows it but the callback orphans on drop — Swift omits the API).
 - `SocketEngineSpec.writable: Bool { get }` — additive protocol requirement with fail-safe `false` default. Concrete `SocketEngine.writable` returns `true` when connected and (WebSocket-mode with active ws) OR (polling-mode with no in-flight POST).
 - `SocketIOClient.setAuth(_:)` — install a callback-form auth provider invoked on `handleQueue` for every CONNECT (initial + reconnect). JS-aligned with `socket.io-client/lib/socket.ts onopen()`. Multi-callback sends multiple CONNECT packets (parity with JS).
-- `SocketIOClient.setAuth(_:)` async/throws overload (iOS 13+ / macOS 10.15+). On throw, fires `.error` clientEvent with the localized error description; CONNECT is not sent (fail-closed). Stale results from a generation-mismatched provider are silently dropped.
+- `SocketIOClient.setAuth(_:)` async/throws overload. On throw, fires `.error` clientEvent with the localized error description; CONNECT is not sent (fail-closed). Stale results from a generation-mismatched provider are silently dropped.
 - `SocketIOClient.clearAuth()` — removes the installed provider and cancels any in-flight async resolution Task.
 - v2 manager guard: installing a provider on a `.version(.two)` manager fires `.error` per CONNECT attempt with a clear bypass message; the provider is never invoked on v2 (where the underlying connect path drops payloads).
 - `SocketIOClient.timeout(after:) -> SocketTimedEmitter` — per-emit ack with typed `SocketAckError.timeout` / `.disconnected` (err-first callback `(Error?, [Any]) -> Void`). JS-aligned with `socket.io-client` `socket.timeout(N).emit(...)`. Atomic one-shot fire across timer / server-ack / cancel paths.
-- Async/throws overload of `SocketTimedEmitter.emit(...)` (iOS 13+ / macOS 10.15+) with `Task.cancel()` support — cancellation surfaces as `CancellationError` thrown from the await.
+- Async/throws overload of `SocketTimedEmitter.emit(...)` with `Task.cancel()` support — cancellation surfaces as `CancellationError` thrown from the await.
 - `SocketAckManager` parallel `timedAcks` storage and 4 internal APIs (`addTimedAck` / `executeTimedAck` / `cancelTimedAck(fireWith:)` / `clearTimedAcks(reason:)`). Legacy `acks` storage and `emitWithAck.timingOut(after:)` path are untouched.
 - `SocketIOClient.didDisconnect` clears `timedAcks` with `.disconnected` (matches JS `_clearAcks` for `withError` callbacks).
 

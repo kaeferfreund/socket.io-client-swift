@@ -210,7 +210,6 @@ final class SocketAuthProviderE2ETest: XCTestCase {
 
     // MARK: E5 — identity-swap stale-auth race
 
-    @available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
     func testIdentitySwapStaleAuthRace() throws {
         try startServer()
         let (_, socket) = makeClient(reconnects: false)

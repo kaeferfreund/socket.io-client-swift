@@ -196,11 +196,9 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// (where the bypass guard normally fires).
     internal var hasAuthProvider: Bool { authProvider != nil }
 
-    /// Type-erased cancel handle for the in-flight async auth `Task`. Storing the
-    /// raw `Task<...>` would require iOS 13 / macOS 10.15 availability on the
-    /// property declaration; capturing `task.cancel` here keeps the property
-    /// availability-neutral and confines the `Task` reference to the async
-    /// overload of `setAuth(_:)`.
+    /// Type-erased cancel handle for the in-flight async auth `Task`. Capturing
+    /// `task.cancel` here confines the `Task` reference to the async overload of
+    /// `setAuth(_:)`.
     private var pendingAuthTask: (() -> Void)?
 
     /// Monotonic generation token bumped on `connect`, `setAuth`, and `clearAuth`.
@@ -1487,12 +1485,10 @@ public extension SocketIOClient {
 /// `SocketIOClient` reference through the `@Sendable` `Task { }` boundary
 /// in `setAuth(_:)`'s async overload. Safe because the boxed reference is
 /// only dereferenced on `handleQueue` after an `async` hop.
-@available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
 private struct WeakClientBox: @unchecked Sendable {
     weak var ref: SocketIOClient?
 }
 
-@available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
 public extension SocketIOClient {
     /// Async/throws variant of `setAuth(_:)`. The async closure is invoked on
     /// every CONNECT (initial + reconnect) and its return value is used as the

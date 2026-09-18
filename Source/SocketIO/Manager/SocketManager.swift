@@ -456,7 +456,14 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             nsps["/"]?.didConnect(toNamespace: "/", payload: nil)
         }
 
-        for (nsp, socket) in nsps where socket.status == .connecting {
+        // `active` is what decides whether a socket still wants this namespace.
+        // A socket the server refused (CONNECT_ERROR) or that the user
+        // disconnected clears it, and must not be rejoined on the next engine
+        // open — JS `destroy()`s the socket in both cases, so the manager stops
+        // driving it until an explicit `connect()`. Without this the client
+        // re-CONNECTs a namespace the server already rejected, on every single
+        // reconnect.
+        for (nsp, socket) in nsps where socket.status == .connecting && socket.active {
             if version.rawValue < 3 && nsp == "/" {
                 continue
             }

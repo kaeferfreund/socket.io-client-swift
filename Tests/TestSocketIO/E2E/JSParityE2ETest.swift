@@ -828,6 +828,7 @@ final class JSParityE2ETest: XCTestCase {
         XCTAssertTrue(again.active, "Fetching an inactive socket with autoConnect must reactivate it")
 
         wait(for: [reconnected], timeout: 5)
+    }
 
     // MARK: engine.io-client — Polling.uri() cache buster
 

@@ -262,6 +262,8 @@ io.engine.on("connection", (rawSocket) => {
 });
 
 io.on("connection", (socket) => {
+  // Read the receiving namespace's identity, never echo a caller-provided ID.
+  socket.on("server-socket-id", (ack) => ack(socket.id));
   totalConnections += 1;
   lastAuthBySid.set(socket.id, socket.handshake.auth);
   reservedCountBySid.set(socket.id, 0);
@@ -354,7 +356,9 @@ io.of("/with-data").use((_socket, next) => {
 });
 
 // Registered so a client can join them; they carry no behaviour of their own.
-io.of("/foo").on("connection", () => {});
+io.of("/foo").on("connection", (socket) => {
+  socket.on("server-socket-id", (ack) => ack(socket.id));
+});
 io.of("/asd").on("connection", () => {});
 io.of("/valid").on("connection", () => {});
 

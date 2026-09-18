@@ -1,0 +1,362 @@
+import Foundation
+import XCTest
+@testable import SocketIO
+
+/// A session-scoped URLProtocol fixture: no DNS, network, shared cookie store,
+/// or global URLProtocol registration. Each test owns its own unique host.
+private final class PollingCloseFixture {
+    struct Request {
+        let method: String
+        let body: String
+        let sid: String?
+        let authorization: String?
+    }
+    let host = UUID().uuidString.lowercased() + ".polling.test"
+    private let lock = NSLock()
+    private var recorded = [Request]()
+    private var heldPosts = [PollingCloseProtocol]()
+    private var handshakes = 0
+    private var postObserver: ((Request) -> Void)?
+    private var stopObserver: ((String) -> Void)?
+
+    var posts: [Request] {
+        lock.lock(); defer { lock.unlock() }
+        return recorded.filter { $0.method == "POST" }
+    }
+
+    var heldPostCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return heldPosts.count
+    }
+
+    /// Installs observers before I/O, without racing the protocol's callback queue.
+    func observePosts(_ observer: @escaping (Request) -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        postObserver = observer
+    }
+
+    func observeStops(_ observer: @escaping (String) -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        stopObserver = observer
+    }
+
+    /// Replies to a held application POST; its URLSession completion drains the barrier.
+    func releasePost() {
+        lock.lock()
+        let pending = heldPosts.isEmpty ? nil : heldPosts.removeFirst()
+        lock.unlock()
+        pending?.reply("ok")
+    }
+
+    /// Captures a request and completes handshakes/close packets; other I/O stays held.
+    func start(_ request: PollingCloseProtocol) {
+        let url = request.request.url!
+        let sid = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+            .first(where: { $0.name == "sid" })?.value
+        let method = request.request.httpMethod ?? "GET"
+        let body = request.body()
+        let observed = Request(method: method, body: body, sid: sid,
+                               authorization: request.request.value(forHTTPHeaderField: "Authorization"))
+        lock.lock()
+        recorded.append(observed)
+        if method == "GET" && sid == nil { handshakes += 1 }
+        let handshakeID = "session-\(handshakes)"
+        if method == "POST" && body != "1" { heldPosts.append(request) }
+        let observer = postObserver
+        lock.unlock()
+        if method == "GET" && sid == nil {
+            request.reply("0{\"sid\":\"\(handshakeID)\",\"upgrades\":[],\"maxPayload\":32,\"pingInterval\":25000,\"pingTimeout\":20000}")
+        } else if method == "POST" {
+            observer?(observed)
+            if body == "1" { request.reply("ok") }
+        }
+    }
+
+    /// Reports cancellation so timeout tests await an actual cancelled task.
+    func stop(_ request: PollingCloseProtocol) {
+        lock.lock()
+        let observer = stopObserver
+        heldPosts.removeAll { $0 === request }
+        lock.unlock()
+        observer?(request.request.httpMethod ?? "GET")
+    }
+}
+
+private final class PollingCloseProtocol: URLProtocol {
+    private static let registryLock = NSLock()
+    private static var fixtures = [String: PollingCloseFixture]()
+    private let stateLock = NSLock()
+    private var ended = false
+
+    static func register(_ fixture: PollingCloseFixture) {
+        registryLock.lock(); defer { registryLock.unlock() }
+        fixtures[fixture.host] = fixture
+    }
+
+    static func unregister(_ fixture: PollingCloseFixture) {
+        registryLock.lock(); defer { registryLock.unlock() }
+        fixtures.removeValue(forKey: fixture.host)
+    }
+
+    private var fixture: PollingCloseFixture? {
+        Self.registryLock.lock(); defer { Self.registryLock.unlock() }
+        return Self.fixtures[request.url?.host ?? ""]
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host?.hasSuffix(".polling.test") == true
+    }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let fixture = fixture else {
+            client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+            return
+        }
+        fixture.start(self)
+    }
+    override func stopLoading() {
+        stateLock.lock()
+        let wasEnded = ended
+        ended = true
+        stateLock.unlock()
+        if !wasEnded { fixture?.stop(self) }
+    }
+
+    /// URLSession may move an upload body into a stream before invoking URLProtocol.
+    func body() -> String {
+        if let data = request.httpBody { return String(decoding: data, as: UTF8.self) }
+        guard let stream = request.httpBodyStream else { return "" }
+        stream.open(); defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count > 0 else { break }
+            data.append(contentsOf: buffer.prefix(count))
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Completes a held request at most once, ignoring release after cancellation.
+    func reply(_ body: String) {
+        stateLock.lock()
+        let wasEnded = ended
+        ended = true
+        stateLock.unlock()
+        guard !wasEnded else { return }
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+                                       headerFields: ["Content-Type": "text/plain; charset=UTF-8"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+/// Notifications are written/read on the engine queue; XCTest expectations may
+/// be fulfilled from that queue while the test waits on the main queue.
+private final class PollingCloseClient: NSObject, SocketEngineClient {
+    var onOpen: (() -> Void)?
+    var closes = [String]()
+    var errors = [String]()
+    func engineDidOpen(reason: String) { onOpen?() }
+    func engineDidClose(reason: String) { closes.append(reason) }
+    func engineDidError(reason: String) { errors.append(reason) }
+    func engineDidReceivePing() {}
+    func engineDidReceivePong() {}
+    func engineDidSendPing() {}
+    func engineDidSendPong() {}
+    func parseEngineMessage(_ msg: String) {}
+    func parseEngineBinaryData(_ data: Data) {}
+    func engineDidWebsocketUpgrade(headers: [String: String]) {}
+}
+
+final class SocketPollingCloseTest: XCTestCase {
+    private var fixture: PollingCloseFixture!
+    private var client: PollingCloseClient!
+    private var engine: SocketEngine!
+
+    /// Creates an actual URLSession whose requests are controlled by this test.
+    override func setUp() {
+        super.setUp()
+        fixture = PollingCloseFixture()
+        PollingCloseProtocol.register(fixture)
+        client = PollingCloseClient()
+        engine = SocketEngine(client: client, url: URL(string: "http://\(fixture.host)")!,
+                              config: [.forcePolling(true), .extraHeaders(["Authorization": "fixture-only"])])
+        engine.pollingSessionConfigurationFactory = {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [PollingCloseProtocol.self]
+            configuration.httpCookieStorage = nil
+            return configuration
+        }
+    }
+
+    /// Stops I/O without opening a graceful close after the fixture has been removed.
+    override func tearDown() {
+        engine.engineQueue.sync {
+            if !engine.closed { engine.didError(reason: "fixture teardown") }
+        }
+        engine = nil
+        client = nil
+        PollingCloseProtocol.unregister(fixture)
+        fixture = nil
+        super.tearDown()
+    }
+
+    /// Waits for the Engine.IO handshake, not merely a URLSession start callback.
+    private func connect() {
+        let opened = expectation(description: "engine opened")
+        engine.engineQueue.sync { client.onOpen = { opened.fulfill() } }
+        engine.connect()
+        wait(for: [opened], timeout: 5)
+        engine.engineQueue.sync { client.onOpen = nil }
+    }
+
+    /// The final close must not sit behind application packets cut off by maxPayload.
+    func testDisconnectSendsCloseOnlyWithBoundedPendingQueue() {
+        connect()
+        let closedOnWire = expectation(description: "close-only POST")
+        fixture.observePosts { post in
+            XCTAssertEqual(post.body, "1")
+            XCTAssertEqual(post.sid, "session-1")
+            XCTAssertEqual(post.authorization, "fixture-only")
+            closedOnWire.fulfill()
+        }
+        var completions = 0
+        engine.engineQueue.sync {
+            XCTAssertEqual(engine.maxPayload, 32)
+            engine.postWait = [(String(repeating: "x", count: 32), { completions += 1 }),
+                               (String(repeating: "y", count: 32), { completions += 1 })]
+        }
+        engine.disconnect(reason: "io client disconnect")
+        wait(for: [closedOnWire], timeout: 5)
+        engine.engineQueue.sync {
+            XCTAssertTrue(engine.closed)
+            XCTAssertNil(engine.session)
+            XCTAssertTrue(engine.postWait.isEmpty)
+            XCTAssertEqual(completions, 2)
+            XCTAssertEqual(client.closes, ["io client disconnect"])
+        }
+        XCTAssertEqual(fixture.posts.count, 1)
+    }
+
+    /// An in-flight POST must settle before the close; unsent packets are not flushed.
+    func testCloseWaitsForInFlightPostAndCompletesPendingWritesOnce() {
+        connect()
+        let started = expectation(description: "application POST started")
+        let closedOnWire = expectation(description: "close follows application POST")
+        let premature = expectation(description: "no overlapping close POST")
+        premature.isInverted = true
+        fixture.observePosts { [weak fixture = fixture] post in
+            if post.body == "4first" { started.fulfill() }
+            else {
+                XCTAssertEqual(post.body, "1")
+                if fixture?.heldPostCount != 0 { premature.fulfill() }
+                closedOnWire.fulfill()
+            }
+        }
+        var completions = 0
+        engine.write("first", withType: .message, withData: []) { completions += 1 }
+        wait(for: [started], timeout: 5)
+        engine.engineQueue.sync { engine.postWait.append(("4unsent", { completions += 1 })) }
+        engine.disconnect(reason: "io client disconnect")
+        engine.disconnect(reason: "duplicate")
+        engine.engineQueue.sync { XCTAssertEqual(client.closes.count, 1) }
+        // A negative observation is followed by a positive close after releasing
+        // the actual request, so a non-running shutdown cannot make this pass.
+        wait(for: [premature], timeout: 0.05)
+        fixture.releasePost()
+        wait(for: [closedOnWire], timeout: 5)
+        engine.engineQueue.sync { XCTAssertEqual(completions, 2); XCTAssertTrue(client.errors.isEmpty) }
+        XCTAssertEqual(fixture.posts.map { $0.body }, ["4first", "1"])
+    }
+
+    /// A paused upgrade blocks ordinary polling writes, but not the retiring close.
+    func testCloseIsSentWhenUpgradeIsPaused() {
+        connect()
+        let closedOnWire = expectation(description: "close during upgrade")
+        fixture.observePosts { post in XCTAssertEqual(post.body, "1"); closedOnWire.fulfill() }
+        engine.engineQueue.sync { engine.setFastUpgrade(true) }
+        engine.disconnect(reason: "io client disconnect")
+        wait(for: [closedOnWire], timeout: 5)
+        XCTAssertEqual(fixture.posts.map { $0.body }, ["1"])
+    }
+
+    /// A stuck POST is cancelled at the teardown deadline without a late close POST.
+    func testStalledPostIsCancelledWithoutSendingAfterTheDeadline() {
+        connect()
+        let started = expectation(description: "stalled POST started")
+        let cancelled = expectation(description: "stalled POST cancelled")
+        fixture.observePosts { post in
+            if post.body == "4stalled" { started.fulfill() }
+            else { XCTFail("A close POST was sent after the teardown deadline") }
+        }
+        fixture.observeStops { method in if method == "POST" { cancelled.fulfill() } }
+        engine.write("stalled", withType: .message, withData: [])
+        wait(for: [started], timeout: 5)
+        let oldGroup = engine.engineQueue.sync { engine.pollingPostGroup }
+        engine.disconnect(reason: "io client disconnect")
+        wait(for: [cancelled], timeout: 5)
+        let drained = expectation(description: "cancelled POST completion drained")
+        oldGroup.notify(queue: .main) { drained.fulfill() }
+        wait(for: [drained], timeout: 5)
+        engine.engineQueue.sync { XCTAssertTrue(engine.closed); XCTAssertEqual(client.closes.count, 1) }
+        XCTAssertEqual(fixture.posts.map { $0.body }, ["4stalled"])
+    }
+
+    /// Retired POST/close callbacks must not mutate or close a replacement session.
+    func testRetiredCloseUsesOnlyTheOldSessionAfterReconnect() {
+        connect()
+        let started = expectation(description: "old POST started")
+        let oldClosedOnWire = expectation(description: "old SID closed")
+        fixture.observePosts { post in
+            if post.body == "4old" { started.fulfill() }
+            if post.body == "1" {
+                XCTAssertEqual(post.sid, "session-1")
+                oldClosedOnWire.fulfill()
+            }
+        }
+        engine.write("old", withType: .message, withData: [])
+        wait(for: [started], timeout: 5)
+        engine.disconnect(reason: "io client disconnect")
+        connect()
+        engine.engineQueue.sync { XCTAssertEqual(engine.sid, "session-2") }
+        fixture.releasePost()
+        wait(for: [oldClosedOnWire], timeout: 5)
+        engine.engineQueue.sync {
+            XCTAssertTrue(engine.connected)
+            XCTAssertFalse(engine.closed)
+            XCTAssertEqual(engine.sid, "session-2")
+            XCTAssertEqual(client.closes.count, 1)
+            XCTAssertTrue(client.errors.isEmpty)
+        }
+    }
+
+    /// Engine.IO 3 uses a length-prefixed close; Engine.IO 4 uses the bare packet.
+    func testCloseRequestRetainsLegacyAndModernWireEncoding() {
+        engine.engineQueue.sync {
+            let modern = engine.createRequestForPost(with: ["1"])
+            XCTAssertEqual(modern.httpBody, Data("1".utf8))
+            engine.setConfigs([.version(.two)])
+            let legacy = engine.createRequestForPost(with: ["1"])
+            XCTAssertEqual(legacy.httpBody, Data("1:1".utf8))
+            XCTAssertEqual(legacy.value(forHTTPHeaderField: "Content-Length"), "3")
+        }
+    }
+
+    /// Batch callbacks may clear/repopulate the queue without removing new packets.
+    func testPostBatchDetachesBeforeReentrantCompletion() {
+        engine.engineQueue.sync {
+            var completions = 0
+            engine.postWait = [("4first", {
+                completions += 1
+                self.engine.postWait.removeAll()
+                self.engine.postWait.append(("4replacement", nil))
+            }), ("4second", { completions += 1 })]
+            let request = engine.createRequestForPostWithPostWait()
+            XCTAssertEqual(request.httpBody, Data("4first\u{1e}4second".utf8))
+            XCTAssertEqual(engine.postWait.map { $0.msg }, ["4replacement"])
+            XCTAssertEqual(completions, 2)
+        }
+    }
+}

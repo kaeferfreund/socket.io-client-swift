@@ -65,8 +65,9 @@ account.
   reconnection *starts* (`setReconnecting`); in JS it fires on *success*. A
   successful reconnect here is observed as another `.connect`. Nothing fires on
   the manager (2 scenarios).
-- (The missing `t=` cache buster on polling requests is closed: every
-  long-polling request now carries one.)
+- (The missing `t=` cache buster on polling requests is closed: long-polling
+  requests carry it by default, or when timestamping is explicitly enabled.
+  `.timestampRequests(false)` omits it; `.timestampParam(...)` changes its name.)
 
 ## Disconnect reasons
 
@@ -87,8 +88,6 @@ Two Swift-specific reasons are kept deliberately:
 - `"timeout"` — the connect-timeout close. JS has no disconnect after a failed
   open (it surfaces `connect_error` only); the Swift manager closes the engine
   and the reconnect loop keys on this close.
-- `"Reconnect Failed"` — the terminal reconnection state. JS exposes
-  `reconnect_failed` as a manager event instead; that is the remaining
 - `"Reconnect Failed"` — the terminal reconnection state. JS exposes
   `reconnect_failed` as a manager event instead; that is the remaining
   `.reconnect`-semantics gap above.
@@ -185,9 +184,9 @@ successful reconnection.
 
 | Scenario | Status | Where |
 |---|---|---|
-| should have an accessible socket id equal to the server-side socket id (default namespace) | ✅ ported | `testSocketIdIsClearedOnDisconnect` |
-| should have an accessible socket id equal to the server-side socket id (custom namespace) | ✅ ported | `testSocketIdOnACustomNamespace` |
-| clears socket.id upon disconnection | ✅ ported | `testSocketIdIsClearedOnDisconnect` |
+| should have an accessible socket id equal to the server-side socket id (default namespace) | ✅ ported | `testSocketIdIsClearedOnDisconnect` (server-reported ID equality, then clearing) |
+| should have an accessible socket id equal to the server-side socket id (custom namespace) | ✅ ported | `testSocketIdOnACustomNamespace` (server-reported root and `/foo` ID equality) |
+| clears socket.id upon disconnection | ✅ ported | `testSocketIdIsClearedOnDisconnect` (server-reported ID equality, then clearing) |
 | doesn't fire an error event if we force disconnect in opening state | ✅ ported | `testNoErrorWhenDisconnectingWhileStillOpening` |
 | fire a connect_error event when the connection cannot be established | 🔧 fixed | **gap closed** — `.connectError` client event (`.engineDidError` while not connected) |
 | fire a connect_error event on open timeout (polling) | 🔧 fixed | **gap closed** — `.connectTimeout`, `testConnectErrorOnOpenTimeoutPolling` |

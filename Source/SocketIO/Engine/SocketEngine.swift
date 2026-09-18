@@ -42,6 +42,10 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     internal private(set) var webSocketTransport: EngineWebSocketTransport?
     internal var webSocketTransportFactory: ((URLRequest) -> EngineWebSocketTransport)?
     internal var webSocketProbeTimeout: TimeInterval = 10
+    /// Per-session barrier for HTTP POSTs, including callbacks discarded after close.
+    internal private(set) var pollingPostGroup = DispatchGroup()
+    /// Internal test seam; production polling retains the default session configuration.
+    internal var pollingSessionConfigurationFactory: () -> URLSessionConfiguration = { .default }
     private var tlsConfiguration: SocketTLSConfiguration = .systemDefault
     private var webSocketOptions = SocketWebSocketOptions()
     private var configurationError: String?
@@ -258,7 +262,10 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         }
     }
 
-    private func closeOutEngine(reason: String, graceful: Bool = false) {
+    /// Retires the current attempt once and completes abandoned writes locally.
+    /// A graceful polling close owns its old session until the final POST or deadline.
+    private func closeOutEngine(reason: String, graceful: Bool = false,
+                                pollingCloseRequest: URLRequest? = nil) {
         guard !closed else { return }
         let oldTransport = webSocketTransport
         let wasWebSocketOpen = wsConnected
@@ -279,11 +286,21 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         probeWait.removeAll()
         let oldSession = session
         session = nil
-        if graceful && wasPolling {
-            // Allow the already-enqueued final polling POST to leave before
-            // invalidating the old session, but bound a stuck outstanding GET.
-            oldSession?.finishTasksAndInvalidate()
-            engineQueue.asyncAfter(deadline: .now() + 1) { oldSession?.invalidateAndCancel() }
+        if graceful && wasPolling, let oldSession = oldSession, let request = pollingCloseRequest {
+            // Engine.IO permits only one POST at a time. Wait for the old
+            // session's actual POST completions, even though their engine
+            // callbacks are now stale. Never read the replacement session here.
+            let sendClose = DispatchWorkItem {
+                oldSession.dataTask(with: request) { _, _, _ in }.resume()
+                oldSession.finishTasksAndInvalidate()
+            }
+            pollingPostGroup.notify(queue: engineQueue, work: sendClose)
+            engineQueue.asyncAfter(deadline: .now() + 1) {
+                // A stalled write must not retain the session forever or send
+                // a close after invalidation when its barrier eventually drains.
+                sendClose.cancel()
+                oldSession.invalidateAndCancel()
+            }
         } else {
             oldSession?.invalidateAndCancel()
         }
@@ -464,13 +481,12 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         }
     }
 
-    // We need to take special care when we're polling that we send it ASAP
-    // Also make sure we're on the emitQueue since we're touching postWait
+    /// Sends a close-only POST for the retiring SID, independently of maxPayload
+    /// and an unfinished upgrade. Queued application packets are cancelled locally;
+    /// an already-started POST is allowed to finish before this final request.
     private func disconnectPolling(reason: String) {
-        postWait.append((String(SocketEnginePacketType.close.rawValue), {}))
-
-        doRequest(for: createRequestForPostWithPostWait()) {_, _, _ in }
-        closeOutEngine(reason: reason, graceful: true)
+        let request = createRequestForPost(with: [String(SocketEnginePacketType.close.rawValue)])
+        closeOutEngine(reason: reason, graceful: true, pollingCloseRequest: request)
     }
 
     /// Called to switch from HTTP long-polling to WebSockets. After calling this method the engine will be in
@@ -708,7 +724,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         }
     }
 
-    // Puts the engine back in its default state
+    /// Starts a new attempt with independent session, POST barrier and callback identity.
     private func resetEngine() {
         // Retire all callbacks before constructing a new session. A SID alone is
         // not a sufficient identity while either attempt is still handshaking.
@@ -747,7 +763,9 @@ open class SocketEngine: NSObject, URLSessionDelegate,
                   let error = error else { return }
             self.didError(reason: error.localizedDescription)
         }
-        session = Foundation.URLSession(configuration: .default, delegate: proxy, delegateQueue: queue)
+        pollingPostGroup = DispatchGroup()
+        session = Foundation.URLSession(configuration: pollingSessionConfigurationFactory(),
+                                        delegate: proxy, delegateQueue: queue)
         for pending in pendingPosts { pending.completion?() }
         for pending in pendingProbes { pending.completion?() }
     }

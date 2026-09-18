@@ -37,12 +37,13 @@ final class SocketActiveTest: XCTestCase {
         XCTAssertFalse(socket.active, "user disconnect() must flip active false")
     }
 
+    /// A clean engine close preserves the subscription needed for reconnection.
     func testActiveSurvivesDidDisconnect() {
         // didDisconnect simulates engine-close / transport error / reconnect cycle.
         // Must NOT clear active (matches JS — subs live across reconnect cycles).
         socket.connect()
         XCTAssertTrue(socket.active)
-        socket.didDisconnect(reason: "io server disconnect")
+        socket.didDisconnect(reason: "transport close")
         XCTAssertTrue(socket.active, "didDisconnect must NOT flip active false; only user disconnect() does")
     }
 

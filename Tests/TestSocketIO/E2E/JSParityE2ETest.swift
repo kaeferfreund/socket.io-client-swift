@@ -69,6 +69,19 @@ final class JSParityE2ETest: XCTestCase {
         return json?["count"] as? Int ?? -1
     }
 
+    /// Reads the receiving namespace's own server-side ID, not an echoed client ID.
+    private func serverSocketId(for socket: SocketIOClient) throws -> String {
+        let replied = expectation(description: "server ID for \(socket.nsp)")
+        var serverID: String?
+        socket.emitWithAck("server-socket-id").timingOut(after: 5) { data in
+            serverID = data.first as? String
+            XCTAssertNotEqual(serverID, SocketAckStatus.noAck.rawValue)
+            replied.fulfill()
+        }
+        wait(for: [replied], timeout: 6)
+        return try XCTUnwrap(serverID)
+    }
+
     /// Drops the engine from the server side, the way `StateRecoveryE2ETest`
     /// does. The JS tests call `socket.io.engine.close()`, but a client-initiated
     /// close is a *clean* shutdown here and does not reliably trigger a
@@ -146,11 +159,12 @@ final class JSParityE2ETest: XCTestCase {
         // transport to kill and something to prove it came back.
         let root = manager.socket(forNamespace: "/")
         let rootConnected = expectation(description: "root connected")
-        rootConnected.assertForOverFulfill = false
+        let rootReconnected = expectation(description: "root reconnected")
         var rootConnects = 0
         root.on(clientEvent: .connect) { _, _ in
             rootConnects += 1
-            rootConnected.fulfill()
+            if rootConnects == 1 { rootConnected.fulfill() }
+            if rootConnects == 2 { rootReconnected.fulfill() }
         }
         root.connect()
         wait(for: [rootConnected], timeout: 5)
@@ -169,12 +183,13 @@ final class JSParityE2ETest: XCTestCase {
         let sid = try XCTUnwrap(root.sid)
         try killTransport(ofSocketWithId: sid)
 
-        let reconnected = expectation(description: "engine came back")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { reconnected.fulfill() }
-        wait(for: [reconnected], timeout: 10)
-
-        XCTAssertGreaterThan(rootConnects, 1, "The engine has to actually reconnect, or this proves nothing")
+        wait(for: [rootReconnected], timeout: 10)
+        // A server round trip after reconnect is a processing barrier, not a
+        // guessed sleep: a mistakenly re-sent /no CONNECT precedes this event.
+        XCTAssertEqual(try serverSocketId(for: root), root.sid)
+        XCTAssertEqual(rootConnects, 2, "The engine has to actually reconnect, or this proves nothing")
         XCTAssertEqual(errorCount, 1, "The namespace must not be rejoined after the server refused it")
+        XCTAssertEqual(try connectFrameCount(), 3, "Only initial root, refused namespace and reconnected root CONNECTs are allowed")
     }
 
     // MARK: socket.ts — "should not discard an unsent ack (callback)"
@@ -205,14 +220,15 @@ final class JSParityE2ETest: XCTestCase {
 
     // MARK: socket.ts — "clears socket.id upon disconnection"
 
-    func testSocketIdIsClearedOnDisconnect() {
+    /// Root IDs match the server's ID and are cleared by explicit disconnection.
+    func testSocketIdIsClearedOnDisconnect() throws {
         let socket = makeManager().socket(forNamespace: "/")
 
         let connected = expectation(description: "connect")
         socket.on(clientEvent: .connect) { _, _ in connected.fulfill() }
         socket.connect()
         wait(for: [connected], timeout: 5)
-        XCTAssertNotNil(socket.sid)
+        XCTAssertEqual(try serverSocketId(for: socket), try XCTUnwrap(socket.sid))
 
         let disconnected = expectation(description: "disconnect")
         disconnected.assertForOverFulfill = false
@@ -374,19 +390,21 @@ final class JSParityE2ETest: XCTestCase {
 
     // MARK: connection.ts — "should not reopen a cached but active socket"
 
-    /// Asking the manager for the same namespace twice must hand back the same
-    /// socket and put exactly one CONNECT on the wire. A second frame is a
-    /// duplicate session the server has to clean up.
+    /// Looking up a connected, active socket must not send another CONNECT.
+    /// A post-lookup server round trip precedes the raw-frame count assertion.
     func testFetchingTheSameNamespaceTwiceSendsOneConnectFrame() throws {
-        let manager = makeManager()
-
-        let socket = manager.socket(forNamespace: "/")
+        let manager = makeManager(.autoConnect(true))
+        let socket = manager.defaultSocket
+        // autoConnect starts I/O asynchronously; install the handler before
+        // yielding the main handle queue instead of calling connect twice.
+        let connected = expectation(description: "auto-connected cached socket")
+        socket.once(clientEvent: .connect) { _, _ in connected.fulfill() }
+        wait(for: [connected], timeout: 5)
+        XCTAssertEqual(socket.status, .connected)
+        XCTAssertTrue(socket.active)
         let again = manager.socket(forNamespace: "/")
         XCTAssertTrue(socket === again, "The manager has to hand back the cached socket")
-
-        connect(socket)
-        settle(1)
-
+        XCTAssertEqual(try serverSocketId(for: again), socket.sid)
         XCTAssertEqual(try connectFrameCount(), 1)
     }
 
@@ -404,12 +422,14 @@ final class JSParityE2ETest: XCTestCase {
 
     // MARK: socket.ts — "should have an accessible socket id equal to the server-side socket id (custom namespace)"
 
-    func testSocketIdOnACustomNamespace() {
+    /// Both namespace IDs must equal IDs independently supplied by their servers.
+    func testSocketIdOnACustomNamespace() throws {
         let manager = makeManager()
         let root = connect(manager.socket(forNamespace: "/"))
         let foo = connect(manager.socket(forNamespace: "/foo"))
 
-        XCTAssertFalse(foo.sid?.isEmpty ?? true)
+        XCTAssertEqual(try serverSocketId(for: root), try XCTUnwrap(root.sid))
+        XCTAssertEqual(try serverSocketId(for: foo), try XCTUnwrap(foo.sid))
         XCTAssertNotEqual(foo.sid, root.sid, "Each namespace gets its own server-side id")
     }
 

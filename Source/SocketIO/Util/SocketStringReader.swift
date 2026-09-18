@@ -28,25 +28,10 @@ struct SocketStringReader {
     var currentIndex: String.UTF16View.Index
     private(set) var failed = false
     var hasNext: Bool { !failed && currentIndex < message.utf16.endIndex }
-    var currentCharacter: String {
-        guard hasNext, let scalar = UnicodeScalar(message.utf16[currentIndex]) else { return "" }
-        return String(scalar)
-    }
 
     init(message: String) {
         self.message = message
         currentIndex = message.utf16.startIndex
-    }
-
-    @discardableResult
-    mutating func advance(by count: Int) -> String.UTF16View.Index {
-        let limit = count < 0 ? message.utf16.startIndex : message.utf16.endIndex
-        guard let next = message.utf16.index(currentIndex, offsetBy: count, limitedBy: limit) else {
-            failed = true
-            return currentIndex
-        }
-        currentIndex = next
-        return next
     }
 
     /// Fails without trapping or accepting an unpaired UTF-16 surrogate.

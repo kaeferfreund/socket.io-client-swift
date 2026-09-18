@@ -218,6 +218,35 @@ final class JSParityE2ETest: XCTestCase {
         wait(for: [acked], timeout: 10)
     }
 
+    // MARK: socket.ts — "should not ack upon disconnection (callback)"
+
+    /// The mirror image of the test above: an ack registered with no timeout on
+    /// a socket that is then disconnected is dropped silently. It must never
+    /// fire — not with data, not with an error — and it must not stay in the
+    /// registry (JS `_clearAcks` empties `socket.acks`).
+    func testANoTimeoutAckIsNotCalledAfterDisconnecting() {
+        let socket = makeManager().socket(forNamespace: "/")
+        connect(socket)
+
+        let neverAcked = expectation(description: "the ack must not fire after disconnecting")
+        neverAcked.isInverted = true
+        socket.emit("echo", "a", ack: { _, _ in neverAcked.fulfill() })
+        // JS registers the ack synchronously inside `emit()` and disconnects on
+        // the very next line. Here registration is dispatched to the manager's
+        // handleQueue, so the disconnect goes through that same serial queue: it
+        // lands after the registration and before any ack the server sends back,
+        // which a wall-clock wait could not guarantee. (`handleQueue.sync` is not
+        // an option — this manager's handleQueue is the queue we are on.)
+        manager.handleQueue.async { socket.disconnect() }
+        settle(0.2)
+        // Read on handleQueue: it is the main queue, which is this thread.
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+
+        // The server may well answer the echo; none of it may reach the callback.
+        settle(1)
+        wait(for: [neverAcked], timeout: 0.1)
+    }
+
     // MARK: socket.ts — "clears socket.id upon disconnection"
 
     /// Root IDs match the server's ID and are cleared by explicit disconnection.

@@ -166,6 +166,26 @@ Remove `.compress` and `.useCustomEngine(...)` from normal configurations. Migra
 custom `.security(...)` values to `SocketTLSConfiguration`; unsupported legacy
 SOCKS and trust-all requests are explicitly rejected rather than ignored.
 
+### Parser limits (`.parserOptions`)
+
+The defaults decode everything the JavaScript client decodes: only
+`maximumAttachments` (10) is a limit JS itself has, and the byte limits are
+unlimited. Opt into hardening against a hostile peer by passing your own
+limits:
+
+```swift
+let manager = SocketManager(socketURL: url, config: [
+    .parserOptions(SocketParserOptions(maximumTextPacketBytes: 1 << 20,
+                                       maximumBinaryPacketBytes: 1 << 20))
+])
+```
+
+`maximumNestingDepth` (default 512, hard cap 1024) is the one limit that is on
+by default and a deliberate deviation from JS: `JSONSerialization` can overflow
+the stack on deeply nested input. An invalid option set is rejected before
+connecting. See the "Deliberate deviations" section of
+[PARITY.md](PARITY.md).
+
 The checked-in generated `docs/` HTML and the
 [upstream API reference](https://nuclearace.github.io/Socket.IO-Client-Swift/index.html)
 are **historical 16.x documentation**, not an API contract for this prerelease.

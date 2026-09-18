@@ -31,10 +31,14 @@ that all assertions of an upstream test have been ported.
 
 The local decoder comparison exercised 5,000 generated valid text/binary vectors
 against the actual pinned JavaScript decoder and current Swift decoder, with zero
-normalized-output differences. Eight of 29 malformed/noncanonical probes differ:
-Swift deliberately rejects truncated/missing payloads and non-decimal attachment
-counts accepted by that JavaScript snapshot. This is decoder evidence only, not
-complete Socket.IO lifecycle, transport or application equivalence.
+normalized-output differences. Eight of 29 malformed/noncanonical probes differ.
+Three are representation only: payload-less EVENT/ACK packets (`2`, `3`, `2123`)
+decode in both, JS with `data === undefined` and Swift with empty data. Five are
+deliberate: Swift rejects a CONNECT or CONNECT_ERROR without payload (which JS
+decodes and then fails on in `onpacket`, closing with the same `parse error`), a
+binary header without payload, and a non-decimal attachment count. This is
+decoder evidence only, not complete Socket.IO lifecycle, transport or
+application equivalence.
 
 Native transport uses URLSessionWebSocketTask with separate polling URLSession.
 The native queue, TLS policy, graceful polling teardown and parser limits have

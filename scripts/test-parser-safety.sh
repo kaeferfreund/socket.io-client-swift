@@ -28,13 +28,32 @@ SWIFT
 cat > "$TMP/main.swift" <<'SWIFT'
 import Foundation
 let parser = Parser()
-let rejected = ["", "2", "3", "5", "6", "2123", "51-", "51", "50-[\"x\"]",
+// Everything socket.io-parser's "throw an error upon parsing error" rejects,
+// plus the Swift-only binary placeholder and attachment-overflow guards.
+let rejected = ["", "5", "6", "51-", "51", "50-[\"x\"]", "5a-", "51.23-", "999",
+    "442[\"some\",\"data\"", "0/admin,\"invalid\"", "0[]", "1[]", "1/admin,{}",
+    "2/admin,\"invalid", "2/admin,{}", "2[]", "3{}", "2[{\"toString\":\"foo\"}]",
+    "2[true,\"foo\"]", "2[null,\"bar\"]", "2[\"connect\"]", "2[\"disconnect\",\"123\"]",
     "51-[\"x\",{\"_placeholder\":true,\"num\":99}]",
     "51-[\"x\",{\"_placeholder\":true,\"num\":-1}]",
-    "51-[\"x\",{\"_placeholder\":true}]", "29999999999999999999999[\"x\"]"]
+    "51-[\"x\",{\"_placeholder\":true}]", "59999999999999999999999-[\"x\"]"]
 for message in rejected {
     precondition((try? parser.parseString(message)) == nil, "Accepted invalid packet: \(message)")
 }
+// JS parses a payload only `if (str.charAt(++i))`: these decode to a packet
+// whose data is `undefined`, which the client turns into a no-op.
+for message in ["2", "3", "2123", "2/namespace,", "399"] {
+    guard let packet = try? parser.parseString(message), packet.data.isEmpty else {
+        preconditionFailure("Rejected payload-less packet: \(message)")
+    }
+}
+let numbered = try parser.parseString("2123")
+precondition(numbered.id == 123 && numbered.nsp == "/")
+let namespaced = try parser.parseString("2/namespace,")
+precondition(namespaced.nsp == "/namespace" && namespaced.id == -1)
+// An ack id beyond Int is a float in JS: the packet survives, the ack is dropped.
+let overflowed = try parser.parseString("29999999999999999999999[\"x\"]")
+precondition(overflowed.id == -1 && overflowed.event == "x")
 let good = try parser.parseString("2/é🦧,0[\"x\"]")
 precondition(good.id == 0 && good.nsp == "/é🦧")
 var binary = try parser.parseString("51-[\"x\",{\"_placeholder\":true,\"num\":0}]")
@@ -58,7 +77,7 @@ for _ in 0..<20000 {
         }
     }
 }
-print("PASS: 13 known malformed headers rejected; Unicode/binary valid controls; 20,000 seeded malformed inputs, no crash")
+print("PASS: \(rejected.count) known malformed headers rejected; payload-less/overflowed-id, Unicode and binary valid controls; 20,000 seeded malformed inputs, no crash")
 SWIFT
 swiftc "$TMP/Shims.swift" \
     "$ROOT/Source/SocketIO/Parse/SocketParsable.swift" \

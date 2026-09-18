@@ -311,6 +311,46 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
         _ = await task.value  // Must NOT deadlock.
     }
 
+    /// socket.io-client/test/socket.ts — "should ack with an error upon
+    /// disconnection (promise)": the awaiting Task is rejected instead of being
+    /// left waiting. `.infinity` means only the disconnect can resume it, so a
+    /// regression hangs rather than passing on a stray timer.
+    func testAsyncEmitThrowsDisconnectedOnDisconnect() async {
+        let socket = self.socket!
+        let task = Task { () -> Error? in
+            do {
+                _ = try await socket.timeout(after: .infinity).emit("echo", "a")
+                return nil
+            } catch {
+                return error
+            }
+        }
+        // Let the await register the timed ack on handleQueue before disconnecting.
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        socket.didDisconnect(reason: "test")
+        let error = await task.value
+        XCTAssertEqual(error as? SocketAckError, .disconnected)
+        manager.handleQueue.sync { XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty) }
+    }
+
+    /// socket.io-client/test/socket.ts — "should ack with an error upon
+    /// disconnection (promise & timeout)": the disconnect wins over the timer.
+    func testAsyncEmitWithTimeoutThrowsDisconnectedOnDisconnect() async {
+        let socket = self.socket!
+        let task = Task { () -> Error? in
+            do {
+                _ = try await socket.timeout(after: 30).emit("echo", "a")
+                return nil
+            } catch {
+                return error
+            }
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        socket.didDisconnect(reason: "test")
+        let error = await task.value
+        XCTAssertEqual(error as? SocketAckError, .disconnected)
+    }
+
     func testAsyncCancelClearsTimedAck() async {
         let socket = self.socket!
         let task = Task { try? await socket.timeout(after: 60).emit("ping") }

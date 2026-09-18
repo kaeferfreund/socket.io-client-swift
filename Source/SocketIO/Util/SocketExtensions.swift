@@ -102,8 +102,10 @@ extension Dictionary where Key == String, Value == Any {
             return .enableSOCKSProxy(enable)
         case let ("version", version as Int):
             return .version(SocketIOVersion(rawValue: version) ?? .three)
+        case ("parserOptions", _):
+            return .invalidConfiguration("invalid value for parserOptions; expected SocketParserOptions")
         case ("security", _), ("secure", _), ("selfSigned", _), ("sessionDelegate", _),
-             ("enableSOCKSProxy", _), ("compress", _), ("webSocketOptions", _), ("parserOptions", _),
+             ("enableSOCKSProxy", _), ("compress", _), ("webSocketOptions", _),
              ("useCustomEngine", _), ("customEngine", _):
             return .invalidConfiguration("invalid value for " + key + "; legacy security objects must migrate to SocketTLSConfiguration")
         case _:

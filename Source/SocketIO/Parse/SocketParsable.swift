@@ -24,20 +24,29 @@ import Foundation
 
 /// Bounds retained protocol data independently of individual WebSocket messages.
 /// Configure before connecting; the same policy applies to polling and WebSocket.
+///
+/// The defaults decode everything the JavaScript decoder decodes. `maximumAttachments`
+/// is the only limit JS itself has (`Decoder`'s `maxAttachments`, default 10); the
+/// byte limits are opt-in hardening and default to unlimited. `maximumNestingDepth`
+/// is a deliberate deviation: `JSONSerialization` can overflow the stack on deeply
+/// nested input, so the pre-check stays with a default no real payload reaches.
 public struct SocketParserOptions {
-    /// Maximum binary attachments declared by one packet. Matches the reviewed JS decoder default.
+    /// Maximum binary attachments declared by one packet. Matches the JS decoder default.
     public var maximumAttachments: Int
     /// Maximum combined bytes retained while reconstructing a binary packet.
+    /// `Int.max` (the default) imposes no limit, like JS.
     public var maximumBinaryPacketBytes: Int
     /// Maximum UTF-8 bytes in a Socket.IO text packet, including its JSON payload.
+    /// `Int.max` (the default) imposes no limit, like JS.
     public var maximumTextPacketBytes: Int
     /// Maximum JSON array/object nesting before Foundation is asked to decode it.
+    /// Crash guard only; JS has no such limit.
     public var maximumNestingDepth: Int
 
     public init(maximumAttachments: Int = 10,
-                maximumBinaryPacketBytes: Int = 16 * 1024 * 1024,
-                maximumTextPacketBytes: Int = 16 * 1024 * 1024,
-                maximumNestingDepth: Int = 100) {
+                maximumBinaryPacketBytes: Int = .max,
+                maximumTextPacketBytes: Int = .max,
+                maximumNestingDepth: Int = 512) {
         self.maximumAttachments = maximumAttachments
         self.maximumBinaryPacketBytes = maximumBinaryPacketBytes
         self.maximumTextPacketBytes = maximumTextPacketBytes
@@ -46,7 +55,7 @@ public struct SocketParserOptions {
 
     internal var isValid: Bool {
         maximumAttachments > 0 && maximumBinaryPacketBytes > 0 &&
-        maximumTextPacketBytes > 0 && (1...512).contains(maximumNestingDepth)
+        maximumTextPacketBytes > 0 && (1...1024).contains(maximumNestingDepth)
     }
 }
 
@@ -116,18 +125,19 @@ public extension SocketParsable where Self: SocketManagerSpec & SocketDataBuffer
             throw SocketParsableError.invalidPacketType
         }
         var cursor = 1
-        func readInteger() throws -> Int? {
+        /// Consumes a run of ASCII digits and advances past it. `nil` means there
+        /// was no run, or one too long for `Int`; both callers treat those alike.
+        func readDigits() -> Int? {
             let start = cursor
             while cursor < bytes.count && bytes[cursor] >= 48 && bytes[cursor] <= 57 { cursor += 1 }
             guard cursor > start else { return nil }
-            guard let value = Int(String(decoding: bytes[start..<cursor], as: UTF8.self)) else {
-                throw SocketParsableError.invalidPacket
-            }
-            return value
+            return Int(String(decoding: bytes[start..<cursor], as: UTF8.self))
         }
         var placeholders = 0
         if type.isBinary {
-            guard let count = try readInteger(), count > 0, count <= limits.maximumAttachments,
+            // An attachment count that overflows `Int` is "too many attachments"
+            // in JS as well, so it stays a parse error.
+            guard let count = readDigits(), count > 0, count <= limits.maximumAttachments,
                   cursor < bytes.count, bytes[cursor] == 45 else {
                 throw SocketParsableError.invalidPacket
             }
@@ -143,9 +153,22 @@ public extension SocketParsable where Self: SocketManagerSpec & SocketDataBuffer
         }
         // Socket.IO 2 ERROR permits primitive payloads, including a leading
         // number. Modern packets use the optional acknowledgement-id grammar.
-        let id = (type == .error && version == .two) ? -1 : (try readInteger() ?? -1)
+        //
+        // JS reads the id with `Number(...)`, which never fails: an id too large
+        // for `Int` becomes a float no registered handler can match. The packet
+        // stays valid — the ACK is dropped ("bad ack") and the EVENT is delivered
+        // without an acknowledgement — so overflow yields the no-ack sentinel.
+        let id: Int
+        if type == .error && version == .two { id = -1 } else { id = readDigits() ?? -1 }
         guard cursor < bytes.count else {
-            guard type == .connect || type == .disconnect || (type == .error && version == .two) else {
+            // JS `decodeString` only parses a payload `if (str.charAt(++i))`, so
+            // "2", "2/nsp,", "2123", "3" and "399" decode with `data === undefined`:
+            // `onevent` uses `packet.data || []` and emits nothing (only onAny
+            // listeners see the empty event), `onack` logs "bad ack". Binary
+            // headers still require a payload — their placeholders cannot exist
+            // without one.
+            guard type == .connect || type == .disconnect || type == .event || type == .ack
+                    || (type == .error && version == .two) else {
                 throw SocketParsableError.invalidDataArray
             }
             return SocketPacket(type: type, id: id, nsp: namespace)

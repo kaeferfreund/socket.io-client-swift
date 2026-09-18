@@ -193,6 +193,9 @@ open class SocketEngine: NSObject, URLSessionDelegate,
 
     private var pongsMissed = 0
     private var pongsMissedMax = 0
+    /// Set while a graceful close waits for an unfinished upgrade to settle.
+    /// Non-nil is JS's `readyState === "closing"`: no new packet may be written.
+    private var pendingCloseReason: String?
     private var probeWait = ProbeWaitQueue()
     private var secure = false
     private var selfSigned = false
@@ -243,20 +246,21 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     // MARK: Methods
 
     private func checkAndHandleEngineError(_ msg: String) {
-        do {
-            let dict = try msg.toDictionary()
-            guard let error = dict["message"] as? String else { return }
+        /*
+         A message that is not a valid Engine.IO packet is JS's
+         `{ type: "error", data: "parser error" }` (engine.io-parser
+         `decodePacket`): `_onPacket` routes it through `_onError`, which closes
+         with "transport error". Reporting it without closing would leave the
+         engine attached to a transport the server has already given up on.
 
-            /*
-             0: Unknown transport
-             1: Unknown sid
-             2: Bad handshake request
-             3: Bad request
-             */
-            didError(reason: error)
-        } catch {
-            client?.engineDidError(reason: "Got unknown error from server \(msg)")
-        }
+         A server error body names the reason:
+         0: Unknown transport
+         1: Unknown sid
+         2: Bad handshake request
+         3: Bad request
+         */
+        let reason = (try? msg.toDictionary())?["message"] as? String
+        didError(reason: reason ?? "Got unknown error from server \(msg)")
     }
 
     private func handleBase64(message: String) {
@@ -272,7 +276,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     /// Retires the current attempt once and completes abandoned writes locally.
     /// A graceful polling close owns its old session until the final POST or deadline.
     private func closeOutEngine(reason: String, graceful: Bool = false,
-                                pollingCloseRequest: URLRequest? = nil) {
+                                flushPollingQueue: Bool = false) {
         guard !closed else { return }
         cancelHeartbeat()
         let oldTransport = webSocketTransport
@@ -280,6 +284,10 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         let wasPolling = polling
         let pendingPosts = postWait
         let pendingProbes = probeWait
+        pendingCloseReason = nil
+        // Every request has to be built while the SID below is still current.
+        let retiringRequests = graceful && wasPolling && flushPollingQueue
+            ? pollingCloseRequests(for: pendingPosts) : []
         sid = ""
         closed = true
         invalidated = true
@@ -299,20 +307,21 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         let retiringPostGroup = pollingPostGroup
         session = nil
         pollingPostGroup = DispatchGroup()
-        if graceful && wasPolling, let oldSession = oldSession, let request = pollingCloseRequest {
+        var retiringSender: RetiringPollingSender?
+        if let oldSession = oldSession, !retiringRequests.isEmpty {
             // Engine.IO permits only one POST at a time. Wait for the old
             // session's actual POST completions, even though their engine
             // callbacks are now stale. Never read the replacement session here.
-            let sendClose = DispatchWorkItem {
-                oldSession.dataTask(with: request) { _, _, _ in }.resume()
-                oldSession.finishTasksAndInvalidate()
-            }
-            retiringPostGroup.notify(queue: engineQueue, work: sendClose)
+            let sender = RetiringPollingSender(session: oldSession, queue: engineQueue,
+                                               requests: retiringRequests, timeout: 1)
+            retiringSender = sender
+            retiringPostGroup.notify(queue: engineQueue) { sender.start() }
             engineQueue.asyncAfter(deadline: .now() + 1) {
-                // A stalled write must not retain the session forever or send
-                // a close after invalidation when its barrier eventually drains.
-                sendClose.cancel()
-                oldSession.invalidateAndCancel()
+                // A write stalled at close time must not retain the session
+                // forever or send a close after invalidation when its barrier
+                // eventually drains. Requests this sender starts itself are
+                // bounded individually, at the moment they go out.
+                sender.abandonIfNotStarted()
             }
         } else {
             oldSession?.invalidateAndCancel()
@@ -331,8 +340,41 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             oldTransport?.abort()
         }
         client?.engineDidClose(reason: reason)
-        for pending in pendingPosts { pending.completion?() }
+        // The retiring sender owns the queued packets' completions: each fires
+        // when its batch reaches the wire, and any batch it gives up on is
+        // completed locally there instead.
+        if retiringSender == nil {
+            for pending in pendingPosts { pending.completion?() }
+        }
         for pending in pendingProbes { pending.completion?() }
+    }
+
+    /// Batches the abandoned polling queue exactly like a live flush would, then
+    /// appends the Engine.IO close packet as its own final request.
+    ///
+    /// JS `close()` waits for `drain` — every buffered packet flushed, sliced by
+    /// `maxPayload` — before `_onClose` tells the transport to close, and
+    /// socket.io-client's `disconnect()` puts the namespace DISCONNECT packet
+    /// into that buffer first. Dropping the queue here would silently swallow it.
+    private func pollingCloseRequests(for pending: [Post]) -> [RetiringPollingRequest] {
+        var batches = [RetiringPollingRequest]()
+        var remaining = pending
+
+        while !remaining.isEmpty {
+            let batch = Array(remaining.prefix(writablePrefixCount(of: remaining)))
+            remaining.removeFirst(batch.count)
+            batches.append(RetiringPollingRequest(request: createRequestForPost(with: batch.map { $0.msg }),
+                                                  completions: batch.compactMap { $0.completion }))
+        }
+
+        // The close is its own request: it must never be dropped by a maxPayload
+        // slice, and the server ends the session the moment it arrives.
+        batches.append(RetiringPollingRequest(
+            request: createRequestForPost(with: [String(SocketEnginePacketType.close.rawValue)]),
+            completions: []
+        ))
+
+        return batches
     }
 
     /// Starts the connection to the server.
@@ -347,6 +389,10 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             DefaultSocketLogger.Logger.error("Engine tried opening while connected. Assuming this was a reconnect",
                                              type: SocketEngine.logType)
             _disconnect(reason: "transport close")
+            // A reconnect cannot wait for an upgrade to settle — `resetEngine()`
+            // below replaces the session either way, so close the old one now
+            // instead of deferring a close that would never run.
+            closeAfterUpgradeSettled(overPolling: polling)
         }
 
         DefaultSocketLogger.Logger.log("Starting engine. Server: \(url)", type: SocketEngine.logType)
@@ -487,6 +533,18 @@ open class SocketEngine: NSObject, URLSessionDelegate,
 
         DefaultSocketLogger.Logger.log("Engine is being closed.", type: SocketEngine.logType)
 
+        // JS `close()` calls `waitForUpgrade()` while `this.upgrading`: packets
+        // cannot be written through a transport paused for an upgrade, so the
+        // close waits for `upgrade` or `upgradeError` and the buffer then leaves
+        // over whichever transport won. Recording the reason marks the engine as
+        // closing, which is what stops further writes (see `_write`).
+        if polling && (probing || fastUpgrade) {
+            guard pendingCloseReason == nil else { return }
+            DefaultSocketLogger.Logger.log("Deferring close until the upgrade settles", type: SocketEngine.logType)
+            pendingCloseReason = reason
+            return
+        }
+
         if polling {
             disconnectPolling(reason: reason)
         } else {
@@ -494,12 +552,18 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         }
     }
 
-    /// Sends a close-only POST for the retiring SID, independently of maxPayload
-    /// and an unfinished upgrade. Queued application packets are cancelled locally;
-    /// an already-started POST is allowed to finish before this final request.
+    /// Flushes the queued packets for the retiring SID and then its close packet.
+    /// An already-started POST is allowed to finish before those requests.
     private func disconnectPolling(reason: String) {
-        let request = createRequestForPost(with: [String(SocketEnginePacketType.close.rawValue)])
-        closeOutEngine(reason: reason, graceful: true, pollingCloseRequest: request)
+        closeOutEngine(reason: reason, graceful: true, flushPollingQueue: true)
+    }
+
+    /// Resumes a close that `_disconnect` deferred behind an unfinished upgrade.
+    private func closeAfterUpgradeSettled(overPolling: Bool) {
+        guard let reason = pendingCloseReason else { return }
+        pendingCloseReason = nil
+        if overPolling { disconnectPolling(reason: reason) }
+        else { closeOutEngine(reason: reason, graceful: true) }
     }
 
     /// Called to switch from HTTP long-polling to WebSockets. After calling this method the engine will be in
@@ -517,13 +581,25 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         guard !closed else { return }
         flushWaitingForPostToWebSocket()
         flushProbeWait()
+        // JS `waitForUpgrade()` resumes on `upgrade`, i.e. after the buffered
+        // packets have gone out over the transport that won.
+        closeAfterUpgradeSettled(overPolling: false)
     }
 
+    /// Re-issues the writes held while the transport was paused for an upgrade.
+    /// These packets are already buffered, so a close deferred behind the same
+    /// upgrade must not drop them: JS keeps one `writeBuffer` and flushes it
+    /// after `upgrade`/`upgradeError`, whereas `closing` only blocks new writes.
     private func flushProbeWait() {
         let waiting = probeWait
         probeWait.removeAll(keepingCapacity: false)
         for waiter in waiting {
-            _write(waiter.msg, withType: waiter.type, withData: waiter.data, completion: waiter.completion)
+            guard connected, !closed else { waiter.completion?(); continue }
+            if polling {
+                sendPollMessage(waiter.msg, withType: waiter.type, withData: waiter.data, completion: waiter.completion)
+            } else {
+                sendWebSocketMessage(waiter.msg, withType: waiter.type, withData: waiter.data, completion: waiter.completion)
+            }
         }
     }
 
@@ -593,17 +669,23 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             return
         }
 
-        // Timers originate at the peer. Bound to the JavaScript timer range
-        // before integer addition and Dispatch's millisecond conversion.
+        // JS `onHandshake` stores the timers as-is and lets `_resetPingTimeout`
+        // schedule `pingInterval + pingTimeout`: `pingInterval: 0` with a real
+        // timeout is a working handshake, fractional milliseconds are fine, and
+        // a missing timer makes that sum NaN so the heartbeat fires at once and
+        // closes with "ping timeout". Only values this client cannot represent
+        // as a Dispatch deadline stay a transport error: they originate at the
+        // peer and must not overflow the integer addition below.
         func milliseconds(_ value: Any?) -> Int? {
-            guard let value = value, SocketPacket.isJSONNumber(value),
-                  let number = value as? NSNumber, let integer = Int(exactly: number.doubleValue),
-                  integer >= 0, integer <= 2_147_483_647 else { return nil }
-            return integer
+            guard let value = value else { return 0 }
+            guard SocketPacket.isJSONNumber(value), let number = value as? NSNumber else { return nil }
+            let raw = number.doubleValue
+            guard raw >= 0, raw <= 2_147_483_647 else { return nil }
+            return Int(raw.rounded(.down))
         }
         guard let interval = milliseconds(json["pingInterval"]),
               let timeout = milliseconds(json["pingTimeout"]),
-              interval > 0, interval <= 2_147_483_647 - timeout else {
+              interval <= 2_147_483_647 - timeout else {
             didError(reason: "Open packet contained invalid heartbeat timers")
             return
         }
@@ -805,6 +887,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         pingInterval = nil
         pingTimeout = 0
         pongsMissed = 0
+        pendingCloseReason = nil
         let proxy = SocketSessionDelegateProxy(tlsConfiguration: tlsConfiguration, forwardingDelegate: sessionDelegate)
         proxy.onInvalidation = { [weak self] invalidSession, error in
             guard let self = self, self.session === invalidSession, self.polling, !self.closed,
@@ -922,7 +1005,10 @@ open class SocketEngine: NSObject, URLSessionDelegate,
 
     private func _write(_ msg: String, withType type: SocketEnginePacketType,
                         withData data: [Data], completion: (() -> Void)?) {
-        guard connected, !closed else { completion?(); return }
+        // JS `sendPacket` returns early once `readyState` is "closing"/"closed",
+        // so a `send()` after `close()` never produces a packet — including
+        // while the close is deferred behind an upgrade.
+        guard connected, !closed, pendingCloseReason == nil else { completion?(); return }
         guard !probing else {
             probeWait.append((msg, type, data, completion))
             return
@@ -959,6 +1045,14 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             // polling connection. Resume both paused write and poll paths.
             probing = false
             fastUpgrade = false
+            if pendingCloseReason != nil {
+                // JS `waitForUpgrade()` also resumes on `upgradeError`: the
+                // packets held for the upgrade go out over polling, followed by
+                // the close. Queue them first so the close is POSTed last.
+                flushProbeWait()
+                closeAfterUpgradeSettled(overPolling: true)
+                return
+            }
             if !waitingForPost { flushWaitingForPost() }
             flushProbeWait()
             doPoll()
@@ -977,6 +1071,25 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         // maps a failed transport to "transport error", a clean close to
         // "transport close").
         closeOutEngine(reason: error != nil ? "transport error" : "transport close")
+    }
+
+    /// Retires the polling session instead of merely draining it. JS builds a
+    /// fresh transport per attempt; here the same engine object is reused, so an
+    /// invalidated session that stayed in `session` would be handed to
+    /// `dataTask` by a later `doPoll()` — an ObjC exception on Darwin. The
+    /// retiring session keeps its own POST barrier; the engine takes a new one.
+    open func stopPolling() {
+        guard DispatchQueue.getSpecific(key: engineQueueKey) != nil else {
+            engineQueue.async { self.stopPolling() }
+            return
+        }
+        waitingForPoll = false
+        waitingForPost = false
+        invalidated = true
+        let retiring = session
+        session = nil
+        pollingPostGroup = DispatchGroup()
+        retiring?.finishTasksAndInvalidate()
     }
 
     /// Polling entry points retain the common implementation and its upgrade barrier.
@@ -1003,6 +1116,88 @@ open class SocketEngine: NSObject, URLSessionDelegate,
 
     func setMaxPayload(_ value: Int?) {
         maxPayload = value
+    }
+}
+
+/// One request of a retiring polling session, with the write completions of the
+/// packets it carries.
+private struct RetiringPollingRequest {
+    let request: URLRequest
+    let completions: [() -> Void]
+}
+
+/// Drains a retired polling session: the packets that were still queued at close
+/// time, then the Engine.IO close packet — one request at a time, because
+/// Engine.IO permits only one POST per session at a time.
+///
+/// Every method runs on the engine queue it is constructed with, and the session
+/// is retired exactly once. The per-request bound is armed when the request goes
+/// out, so a slow earlier POST cannot consume the budget of the close after it.
+private final class RetiringPollingSender {
+    private let session: URLSession
+    private let queue: DispatchQueue
+    private let requests: [RetiringPollingRequest]
+    private let timeout: TimeInterval
+    private var index = 0
+    private var started = false
+    private var finished = false
+
+    init(session: URLSession, queue: DispatchQueue, requests: [RetiringPollingRequest], timeout: TimeInterval) {
+        self.session = session
+        self.queue = queue
+        self.requests = requests
+        self.timeout = timeout
+    }
+
+    /// Called once the retiring session's own POST barrier has drained.
+    func start() {
+        guard !started, !finished else { return }
+        started = true
+        sendNext()
+    }
+
+    /// Called at the barrier deadline: a POST that was already in flight when the
+    /// engine closed never settled, so nothing more may be written on this session.
+    func abandonIfNotStarted() {
+        guard !started else { return }
+        finish(cancelling: true)
+    }
+
+    private func sendNext() {
+        guard !finished else { return }
+        guard index < requests.count else { return finish(cancelling: false) }
+
+        let entry = requests[index]
+        let attempt = index
+        // The task's completion deliberately retains this sender: once the
+        // barrier's notify block has run, nothing else holds it, and the chain
+        // has to survive as far as the close packet. The per-request bound below
+        // always cancels the task, so the retain is always released.
+        let task = session.dataTask(with: entry.request) { _, _, _ in
+            self.queue.async {
+                guard !self.finished, self.index == attempt else { return }
+                for completion in entry.completions { completion() }
+                self.index += 1
+                self.sendNext()
+            }
+        }
+        task.resume()
+        queue.asyncAfter(deadline: .now() + timeout) { [weak task] in
+            guard !self.finished, self.index == attempt else { return }
+            task?.cancel()
+            self.finish(cancelling: true)
+        }
+    }
+
+    private func finish(cancelling: Bool) {
+        guard !finished else { return }
+        finished = true
+        if cancelling { session.invalidateAndCancel() } else { session.finishTasksAndInvalidate() }
+        // A write that never reached the wire still completes locally: the
+        // callback reports the end of this attempt, not delivery.
+        for entry in requests[index...] {
+            for completion in entry.completions { completion() }
+        }
     }
 }
 

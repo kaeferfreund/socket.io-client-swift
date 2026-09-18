@@ -66,6 +66,10 @@ class SocketEngineTest: XCTestCase {
         waitForExpectations(timeout: 3, handler: nil)
     }
 
+    /// engine.io-parser/test/index.ts — "should fail to decode a malformed
+    /// payload": an undecodable packet becomes `{type: "error", data: "parser
+    /// error"}`, which `_onPacket` routes through `_onError` → `_onClose
+    /// ("transport error")`. Reporting the error without closing is not enough.
     func testEngineDoesErrorOnUnknownMessage() {
         let finalExpectation = expectation(description: "Engine Errors")
 
@@ -75,6 +79,23 @@ class SocketEngineTest: XCTestCase {
 
         engine.parseEngineMessage("afafafda")
         waitForExpectations(timeout: 3, handler: nil)
+        engine.engineQueue.sync {
+            XCTAssertTrue(engine.closed)
+            XCTAssertFalse(engine.connected)
+        }
+    }
+
+    /// The other malformed payloads from the same JS test. `{}` decodes as JSON
+    /// but names no error, and must still close rather than be ignored.
+    func testEngineClosesOnEveryMalformedEnginePayload() {
+        for message in ["{", "{}", "[\"a123\", \"a456\"]"] {
+            let manager = SocketManager(socketURL: URL(string: "http://localhost")!,
+                                        config: [.log(false), .reconnects(false)])
+            let engine = SocketEngine(client: manager, url: URL(string: "http://localhost")!, options: nil)
+            manager.engine = engine
+            engine.parseEngineMessage(message)
+            engine.engineQueue.sync { XCTAssertTrue(engine.closed, message) }
+        }
     }
 
     func testEngineDecodesUTF8Properly() {

@@ -35,7 +35,11 @@
         "data": null
       },
       "swift": {
-        "status": "error"
+        "data": [],
+        "id": -1,
+        "nsp": "/",
+        "status": "ok",
+        "type": 2
       }
     },
     {
@@ -52,7 +56,11 @@
         "data": null
       },
       "swift": {
-        "status": "error"
+        "data": [],
+        "id": -1,
+        "nsp": "/",
+        "status": "ok",
+        "type": 3
       }
     },
     {
@@ -86,7 +94,11 @@
         "data": null
       },
       "swift": {
-        "status": "error"
+        "data": [],
+        "id": 123,
+        "nsp": "/",
+        "status": "ok",
+        "type": 2
       }
     },
     {

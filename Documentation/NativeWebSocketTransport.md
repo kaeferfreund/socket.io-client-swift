@@ -77,6 +77,12 @@ Zero-length messages still count. Every limit must be positive. Limits are
 independent of Engine.IO's polling `maxPayload`. Queue overflow is surfaced as a
 transport failure rather than silently dropping a nonvolatile application packet.
 
+`.parserOptions(SocketParserOptions(...))` is a separate, Socket.IO-level policy
+and is **not** part of these transport limits. Its defaults decode everything the
+JavaScript parser decodes — only `maximumAttachments` (10, JS `maxAttachments`)
+bounds a well-formed packet — so the byte limits there are opt-in. See the
+"Deliberate deviations" section of `PARITY.md`.
+
 ## Distribution and release
 
 SPM, CocoaPods and Xcode/Carthage definitions contain no Starscream dependency.

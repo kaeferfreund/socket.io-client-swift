@@ -14,7 +14,7 @@ Source review focused on peer-controlled parsing, native transport/session owner
 
 [Comment 5733052285](https://github.com/kaeferfreund/socket.io-client-swift/pull/18#issuecomment-5733052285) alleged that an immediate reconnect could cancel the retiring polling session before its close-only POST. The original PR already captured the session and assigned `session = nil` before invoking client callbacks. Thus the specific claim that this detachment was missing was **not reproduced**.
 
-The ownership contract is now more explicit: `closeOutEngine` captures **both the retiring session and its POST completion group**, detaches the active session, and replaces the active POST group before exposing the close to reentrant client code. The close-only POST waits only for the retiring session's outstanding POSTs. It cannot be blocked by a new session's writes or sent under its SID. A bounded one-second teardown remains.
+The ownership contract is now more explicit: `closeOutEngine` captures **both the retiring session and its POST completion group**, detaches the active session, and replaces the active POST group before exposing the close to reentrant client code. The close-only POST waits only for the retiring session's outstanding POSTs. It cannot be blocked by a new session's writes or sent under its SID. The wait for an in-flight POST remains bounded to one second; since the council follow-up (section 7) the retiring session then flushes its queued packets and the close packet as individually bounded requests instead of a close-only POST.
 
 `SocketPollingCloseTest` now includes a held in-flight POST followed by immediate reconnect, alongside the existing `testRetiredCloseUsesOnlyTheOldSessionAfterReconnect`. A second regression verifies that a local POST completion which synchronously enqueues more work cannot open an overlapping POST. These are controlled URLSession/URLProtocol tests, not claims about every network condition.
 
@@ -66,7 +66,7 @@ Static review found that the old Engine.IO 4 heartbeat checked `lastCommunicatio
 
 The Swift engine now owns a cancellable monotonic heartbeat deadline reset by OPEN/PING only. Cancellation plus attempt/token guards prevent old timer callbacks from closing a replacement attempt. `hasPingExpired` detects an expired deadline even before a delayed timer callback executes, schedules the once-only timeout close, and prevents a normal emit from being sent over the stale connection. That emit remains buffered for reconnect. Native volatile writability also accounts for expiry. Other `SocketEngineSpec` conformers receive a source-compatible default property.
 
-Handshake heartbeat intervals are untrusted inputs. Boolean, negative, fractional and overflowing values and a sum outside the supported timer range are rejected before constructing Dispatch deadlines. Acknowledgement timeout conversion likewise treats infinity without scheduling an overflowing timer and bounds finite values.
+Handshake heartbeat intervals are untrusted inputs. Boolean, string, negative and overflowing values and a sum outside the supported timer range are rejected before constructing Dispatch deadlines. Following the council follow-up (section 7), `pingInterval: 0`, fractional milliseconds (floored) and absent timers are accepted exactly as engine.io-client accepts them: the socket opens and, with a zero-length deadline, closes from the heartbeat with `ping timeout`. Acknowledgement timeout conversion likewise treats infinity without scheduling an overflowing timer and bounds finite values.
 
 Tests: `testApplicationTrafficCannotRefreshTheServerHeartbeatDeadline`, `testOnlyPingResetsTheDeadlineAndExpiredChecksCloseOnce`, `testExpiredHeartbeatBuffersInsteadOfSendingOnTheStaleConnection`, and malformed-heartbeat tests. The clock seam is test-only; no sleeps are used to prove the deadline arithmetic.
 
@@ -109,7 +109,7 @@ For the tested ordinary Socket.IO packet semantics, the evidence is stronger tha
 
 **5,000 seeded generated valid vectors produced zero normalized decoder-output differences.** They include namespaces, Unicode, IDs including zero, JSON primitives/objects/arrays, CONNECT/ERROR/EVENT/ACK packets, and multipart binary event/ack data. Binary packet types and native Data/Buffer representations are normalized for comparison.
 
-**Eight of 29 malformed/noncanonical probes differ.** This JavaScript snapshot accepts some missing/truncated payloads and an exponential attachment count that the hardened Swift decoder rejects. The exact inputs and both outputs are in `ReviewEvidence/DecoderDifferential.json`. They remain visible as deliberate strictness, not hidden to produce a perfect match number. This finite corpus is not an exhaustive equivalence proof, and it does not exercise all encoder outputs, network lifetimes or application behavior.
+**Eight of 29 malformed/noncanonical probes differ.** Three (`2`, `3`, `2123`) are representation only: both decoders accept a payload-less EVENT/ACK, JS with `data === undefined` and Swift with empty data, and both clients then deliver nothing. Five are deliberate: this JavaScript snapshot decodes a CONNECT/CONNECT_ERROR without payload (then fails in `onpacket`, closing with the same `parse error`), a binary header without payload, and an exponential attachment count, all of which the hardened Swift decoder rejects at decode time. The exact inputs and both outputs are in `ReviewEvidence/DecoderDifferential.json`. They remain visible as deliberate strictness, not hidden to produce a perfect match number. This finite corpus is not an exhaustive equivalence proof, and it does not exercise all encoder outputs, network lifetimes or application behavior.
 
 The separate malformed-input smoke harness processes **20,000 deterministic generated strings**, plus explicit former-crash cases and positive controls, without a parser process crash. This is seeded smoke/fuzz-style coverage, not coverage-guided fuzzing or an assurance that all malicious inputs are safe.
 
@@ -186,3 +186,84 @@ node scripts/inventory-upstream-tests.cjs /path/to/socket.io /tmp/inventory
 The comparison script checks the relevant official source hashes before executing them. The inventory script produces raw declarations; its output does not automatically certify or replace the manually reviewed status columns in the CSV. Logs and result artifacts should be retained with the exact Swift commit.
 
 **No merge, release publication, physical-device certification, complete JavaScript test-suite execution, full semantic equivalence or zero-defect guarantee is claimed.**
+
+## 7. Council follow-up (2026-09-18): behavioral changes after this review
+
+A six-model review council (Fable, Codex, Grok, CodeRabbit, GLM 5.3 Flash,
+Gemini 3.8 Flash) reviewed the PR after sections 1–6 were written; every
+finding was adjudicated against the pinned JavaScript sources before it was
+fixed. The fixes below change behavior that the sections above still describe
+as strict; where they conflict, this section is current. The decoder
+differential in `ReviewEvidence/DecoderDifferential.json` was re-recorded.
+
+## Engine.IO close and upgrade
+
+Ported from `engine.io-client/test/connection.js` and `lib/socket.ts`:
+
+- **`close()` waits for the buffer to drain.** JS closes only after `drain`,
+  and socket.io-client's `disconnect()` puts the namespace DISCONNECT packet in
+  that same buffer. A graceful polling close therefore POSTs the packets still
+  queued — sliced by `maxPayload` exactly like a live flush, one request at a
+  time — and then the close packet as a request of its own. It used to send
+  only `1` and complete the queued packets as if they had been written, which
+  silently dropped the DISCONNECT frame. (`testCloseWaitsForInFlightPostAndCompletesPendingWritesOnce`,
+  `testDisconnectFlushesQueueInMaxPayloadBatchesBeforeClosing`.)
+- **`close()` defers while upgrading** (`waitForUpgrade()`): nothing can be
+  written through a transport paused for an upgrade, so the close waits for
+  `upgrade` or `upgradeError` — bounded by the existing probe timeout — and the
+  buffer then leaves over whichever transport won. The client used to POST the
+  close straight through the paused transport.
+  (`testCloseIsDeferredWhileUpgradeIsPaused`,
+  `testCloseDeferredDuringUpgradeFlushesOverWebSocketAfterUpgrade`,
+  `testCloseDeferredDuringUpgradeResumesOverPollingOnUpgradeError`.)
+- **A `send()` after `close()` produces no packet**, while the close is
+  deferred too — JS `sendPacket` returns early once `readyState` is `closing`.
+  (`testSendAfterCloseProducesNoPacket`.)
+- **Handshake timers are stored as JS stores them.** `pingInterval: 0` with a
+  real `pingTimeout` opens the socket, fractional milliseconds are ordinary
+  values, and zero/absent timers open and then close from the heartbeat with
+  `ping timeout` instead of failing the handshake. Only values that cannot
+  become a Dispatch deadline (negative, non-numeric, or an interval+timeout sum
+  past 2³¹−1) remain a transport error. (`SocketNativeEngineTest`.)
+- **An undecodable Engine.IO packet closes the engine.** engine.io-parser turns
+  it into an `error` packet, which `_onPacket` routes through `_onError` →
+  `_onClose("transport error")`; the client used to only report `.error` and
+  stay attached. (`testEngineDoesErrorOnUnknownMessage`,
+  `testEngineClosesOnEveryMalformedEnginePayload`.)
+
+### Socket.IO parser
+
+Ported from `socket.io-parser/test/parser.js`:
+
+- **Payload-less EVENT/ACK packets are not errors.** `2`, `2/nsp,`, `2123`, `3`
+  and `399` decode with empty data, exactly as JS's `data === undefined`: the
+  event reaches only the any-listeners, and the ack is dropped ("bad ack"). JS
+  parses a payload only `if (str.charAt(++i))`. Everything "throw an error upon
+  parsing error" rejects stays rejected
+  (`testPayloadLessEventAndAckDecodeAsEmptyData`,
+  `testTruncatedAndOverflowingHeadersAreRejectedWithoutTrapping`).
+- **An acknowledgement id larger than `Int` is not an error.** JS parses it with
+  `Number(...)` into a float that matches no handler; Swift keeps the packet
+  with the no-ack sentinel, so the EVENT is delivered without an ack and an ACK
+  is dropped (`testAckIdBeyondIntIsDeliveredWithoutAnAcknowledgement`).
+- **Decoding resumes after a parser failure is reset.** JS `Decoder.destroy()`
+  drops the half-built binary packet; here the reconnect in
+  `SocketManager.connect()` clears `parserFailed`/`waitingPackets`
+  (`testDecodingResumesAfterReconnectClearsTheParserFailure`).
+
+### Deliberate deviations
+
+- **`SocketParserOptions` limits.** JS's `Decoder` has exactly one limit,
+  `maxAttachments` (default 10), and `maximumAttachments` matches it. The byte
+  limits (`maximumTextPacketBytes`, `maximumBinaryPacketBytes`) default to
+  unlimited so the defaults decode everything JS decodes; set them via
+  `.parserOptions(SocketParserOptions(maximumTextPacketBytes: 1 << 20))` to opt
+  into hardening against a hostile peer. `maximumNestingDepth` is the one limit
+  that stays on by default (512, hard cap 1024): `JSONSerialization` can
+  overflow the stack on deeply nested input, which no real payload approaches
+  but a malicious one can. An invalid option set is rejected before connecting.
+- **A payload-less CONNECT_ERROR (`4`, `4/nsp,`) is a parse error on `.three`.**
+  JS decodes it, then throws in `onpacket` reading `packet.data.message`, which
+  its manager reports as the same `parse error` close — so the observable
+  outcome matches for the socket that owns the namespace. `.two` managers still
+  accept it, because the v2 grammar allows a bare ERROR packet.

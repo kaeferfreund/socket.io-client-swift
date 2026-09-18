@@ -164,10 +164,11 @@ class SocketAckManager {
     ///
     /// **Re-entrancy:** when `fireWith` is non-nil, the user callback is
     /// invoked synchronously here while still on the owning queue
-    /// (`handleQueue`). Callers re-entering by issuing a new emit from inside
-    /// the callback are supported because the public emit path dispatches via
-    /// `handleQueue.async`, deferring registration to the next queue tick
-    /// rather than nesting under this stack frame.
+    /// (`handleQueue`), and a new emit issued from inside that callback may
+    /// register its ack under this very stack frame. That is safe because this
+    /// entry is already removed from `timedAcks` before the callback runs: the
+    /// nested registration can only touch a different id, and no path can fire
+    /// this entry a second time.
     func cancelTimedAck(_ id: Int, fireWith error: Error? = nil) {
         guard let entry = timedAcks.removeValue(forKey: id) else { return }
         entry.timer?.cancel()

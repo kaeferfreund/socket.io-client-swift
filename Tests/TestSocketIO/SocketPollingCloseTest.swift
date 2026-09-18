@@ -18,6 +18,7 @@ private final class PollingCloseFixture {
     private var handshakes = 0
     private var postObserver: ((Request) -> Void)?
     private var stopObserver: ((String) -> Void)?
+    private var holdPosts = true
 
     var posts: [Request] {
         lock.lock(); defer { lock.unlock() }
@@ -38,6 +39,13 @@ private final class PollingCloseFixture {
     func observeStops(_ observer: @escaping (String) -> Void) {
         lock.lock(); defer { lock.unlock() }
         stopObserver = observer
+    }
+
+    /// Answers application POSTs as they arrive. Only tests about an in-flight
+    /// POST need to hold them; a chained flush would otherwise deadlock itself.
+    func replyToPostsImmediately() {
+        lock.lock(); defer { lock.unlock() }
+        holdPosts = false
     }
 
     /// Replies to a held application POST; its URLSession completion drains the barrier.
@@ -61,14 +69,15 @@ private final class PollingCloseFixture {
         recorded.append(observed)
         if method == "GET" && sid == nil { handshakes += 1 }
         let handshakeID = "session-\(handshakes)"
-        if method == "POST" && body != "1" { heldPosts.append(request) }
+        let held = method == "POST" && body != "1" && holdPosts
+        if held { heldPosts.append(request) }
         let observer = postObserver
         lock.unlock()
         if method == "GET" && sid == nil {
             request.reply("0{\"sid\":\"\(handshakeID)\",\"upgrades\":[],\"maxPayload\":32,\"pingInterval\":25000,\"pingTimeout\":20000}")
         } else if method == "POST" {
             observer?(observed)
-            if body == "1" { request.reply("ok") }
+            if !held { request.reply("ok") }
         }
     }
 
@@ -212,21 +221,24 @@ final class SocketPollingCloseTest: XCTestCase {
         engine.engineQueue.sync { client.onOpen = nil }
     }
 
-    /// The final close must not sit behind application packets cut off by maxPayload.
-    func testDisconnectSendsCloseOnlyWithBoundedPendingQueue() {
+    /// The abandoned queue is batched by maxPayload exactly like a live flush,
+    /// and the close packet is always a request of its own so no slice can drop
+    /// it. Previously the queue was discarded and only "1" was sent.
+    func testDisconnectFlushesQueueInMaxPayloadBatchesBeforeClosing() {
         connect()
+        fixture.replyToPostsImmediately()
+        let first = String(repeating: "x", count: 32)
+        let second = String(repeating: "y", count: 32)
         let closedOnWire = expectation(description: "close-only POST")
         fixture.observePosts { post in
-            XCTAssertEqual(post.body, "1")
             XCTAssertEqual(post.sid, "session-1")
             XCTAssertEqual(post.authorization, "fixture-only")
-            closedOnWire.fulfill()
+            if post.body == "1" { closedOnWire.fulfill() }
         }
         var completions = 0
         engine.engineQueue.sync {
             XCTAssertEqual(engine.maxPayload, 32)
-            engine.postWait = [(String(repeating: "x", count: 32), { completions += 1 }),
-                               (String(repeating: "y", count: 32), { completions += 1 })]
+            engine.postWait = [(first, { completions += 1 }), (second, { completions += 1 })]
         }
         engine.disconnect(reason: "io client disconnect")
         wait(for: [closedOnWire], timeout: 5)
@@ -237,19 +249,29 @@ final class SocketPollingCloseTest: XCTestCase {
             XCTAssertEqual(completions, 2)
             XCTAssertEqual(client.closes, ["io client disconnect"])
         }
-        XCTAssertEqual(fixture.posts.count, 1)
+        XCTAssertEqual(fixture.posts.map { $0.body }, [first, second, "1"])
     }
 
-    /// An in-flight POST must settle before the close; unsent packets are not flushed.
+    /// An in-flight POST settles first, then the still-queued packets go out on
+    /// the retiring session, then the close. engine.io-client/test/connection.js
+    /// — "should send all buffered packets if closing is deferred". This used to
+    /// assert that unsent packets are dropped, which silently discarded the
+    /// namespace DISCONNECT that socket.io-client buffers in the same queue.
     func testCloseWaitsForInFlightPostAndCompletesPendingWritesOnce() {
         connect()
         let started = expectation(description: "application POST started")
-        let closedOnWire = expectation(description: "close follows application POST")
+        let flushed = expectation(description: "queued packet posted on the retiring session")
+        let closedOnWire = expectation(description: "close follows the queued packets")
         let premature = expectation(description: "no overlapping close POST")
         premature.isInverted = true
         fixture.observePosts { [weak fixture = fixture] post in
-            if post.body == "4first" { started.fulfill() }
-            else {
+            switch post.body {
+            case "4first":
+                started.fulfill()
+            case "4unsent":
+                XCTAssertEqual(post.sid, "session-1")
+                flushed.fulfill()
+            default:
                 XCTAssertEqual(post.body, "1")
                 if fixture?.heldPostCount != 0 { premature.fulfill() }
                 closedOnWire.fulfill()
@@ -263,22 +285,58 @@ final class SocketPollingCloseTest: XCTestCase {
         engine.disconnect(reason: "duplicate")
         engine.engineQueue.sync { XCTAssertEqual(client.closes.count, 1) }
         // A negative observation is followed by a positive close after releasing
-        // the actual request, so a non-running shutdown cannot make this pass.
+        // the actual requests, so a non-running shutdown cannot make this pass.
         wait(for: [premature], timeout: 0.05)
+        fixture.releasePost()
+        wait(for: [flushed], timeout: 5)
         fixture.releasePost()
         wait(for: [closedOnWire], timeout: 5)
         engine.engineQueue.sync { XCTAssertEqual(completions, 2); XCTAssertTrue(client.errors.isEmpty) }
-        XCTAssertEqual(fixture.posts.map { $0.body }, ["4first", "1"])
+        XCTAssertEqual(fixture.posts.map { $0.body }, ["4first", "4unsent", "1"])
     }
 
-    /// A paused upgrade blocks ordinary polling writes, but not the retiring close.
-    func testCloseIsSentWhenUpgradeIsPaused() {
+    /// engine.io-client/test/connection.js — "should defer close when upgrading"
+    /// and "should not send packets if closing is deferred". JS `close()` calls
+    /// `waitForUpgrade()` while upgrading, because nothing can be written through
+    /// a paused transport. This test previously asserted the opposite — that the
+    /// close POST is sent straight through the paused transport.
+    func testCloseIsDeferredWhileUpgradeIsPaused() {
         connect()
-        let closedOnWire = expectation(description: "close during upgrade")
-        fixture.observePosts { post in XCTAssertEqual(post.body, "1"); closedOnWire.fulfill() }
+        let premature = expectation(description: "no POST while the upgrade is unfinished")
+        premature.isInverted = true
+        fixture.observePosts { _ in premature.fulfill() }
         engine.engineQueue.sync { engine.setFastUpgrade(true) }
         engine.disconnect(reason: "io client disconnect")
+        // A send() after close() must not reach the wire either: JS `sendPacket`
+        // returns early once `readyState` is "closing".
+        engine.write("late", withType: .message, withData: [])
+        wait(for: [premature], timeout: 0.3)
+        engine.engineQueue.sync {
+            XCTAssertFalse(engine.closed)
+            XCTAssertTrue(engine.connected)
+            XCTAssertTrue(engine.postWait.isEmpty)
+            XCTAssertTrue(client.closes.isEmpty)
+        }
+        XCTAssertTrue(fixture.posts.isEmpty)
+    }
+
+    /// engine.io-client/test/connection.js — "should not send packets if socket
+    /// closes": a `send()` issued after `close()` produces no packet at all.
+    func testSendAfterCloseProducesNoPacket() {
+        connect()
+        let closedOnWire = expectation(description: "close-only POST")
+        fixture.observePosts { post in
+            XCTAssertEqual(post.body, "1")
+            closedOnWire.fulfill()
+        }
+        var completed = false
+        engine.disconnect(reason: "io client disconnect")
+        engine.write("hi", withType: .message, withData: []) { completed = true }
         wait(for: [closedOnWire], timeout: 5)
+        engine.engineQueue.sync {
+            XCTAssertTrue(engine.postWait.isEmpty)
+            XCTAssertTrue(completed, "a refused write still completes locally")
+        }
         XCTAssertEqual(fixture.posts.map { $0.body }, ["1"])
     }
 
@@ -385,6 +443,28 @@ final class SocketPollingCloseTest: XCTestCase {
         wait(for: [second], timeout: 3)
         XCTAssertEqual(fixture.posts.map { $0.body }, ["4first", "4second"])
         fixture.releasePost()
+    }
+
+    /// `stopPolling()` retires the session instead of leaving an invalidated one
+    /// in the active slot: a later `doPoll()` would hand it to `dataTask`, which
+    /// raises an ObjC exception on Darwin.
+    func testStopPollingInvalidatesAndDetachesTheSession() {
+        connect()
+        let barrier = engine.engineQueue.sync { engine.pollingPostGroup }
+        engine.engineQueue.sync {
+            XCTAssertNotNil(engine.session)
+            XCTAssertFalse(engine.invalidated)
+            engine.stopPolling()
+            XCTAssertTrue(engine.invalidated)
+            XCTAssertNil(engine.session)
+            XCTAssertFalse(engine.waitingForPoll)
+            XCTAssertFalse(engine.waitingForPost)
+            XCTAssertFalse(engine.pollingPostGroup === barrier)
+            // The poll now refuses to start instead of touching a dead session.
+            engine.doPoll()
+            XCTAssertNil(engine.session)
+        }
+        XCTAssertTrue(fixture.posts.isEmpty)
     }
 
     /// Engine.IO 3 uses a length-prefixed close; Engine.IO 4 uses the bare packet.

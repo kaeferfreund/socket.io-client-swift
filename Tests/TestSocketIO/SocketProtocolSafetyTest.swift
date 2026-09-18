@@ -9,13 +9,61 @@ final class SocketProtocolSafetyTest: XCTestCase {
         SocketManager(socketURL: URL(string: "http://localhost")!, config: [.log(false), .parserOptions(options)])
     }
 
+    // socket.io-parser/test/parser.js — "throw an error upon parsing error"
+    // (every input JS rejects), plus the Swift-only binary attachment guards.
     func testTruncatedAndOverflowingHeadersAreRejectedWithoutTrapping() {
         let manager = parser()
-        for input in ["", "2", "3", "5", "6", "2123", "51-", "51", "5-", "5x-[\"x\"]",
-                      "50-[\"x\"]", "511-[\"x\"]", "299999999999999999999999999[\"x\"]",
-                      "2/namespace,", "2[]", "2{}", "2[true]", "2[null]", "3{}", "1[]", "8"] {
+        for input in ["", "5", "6", "51-", "51", "5-", "5x-[\"x\"]", "5a-", "51.23-",
+                      "50-[\"x\"]", "511-[\"x\"]", "59999999999999999999999-[\"x\"]", "999",
+                      "442[\"some\",\"data\"", "0/admin,\"invalid\"", "0[]", "1[]", "1/admin,{}",
+                      "2/admin,\"invalid", "2/admin,{}", "2[]", "2{}", "2[true]", "2[null]",
+                      "2[true,\"foo\"]", "2[null,\"bar\"]", "2[{\"toString\":\"foo\"}]",
+                      "2[\"disconnect\",\"123\"]", "3{}", "8"] {
             XCTAssertThrowsError(try manager.parseString(input), input)
         }
+    }
+
+    /// JS `Decoder.decodeString` only parses a payload `if (str.charAt(++i))`, so
+    /// these decode with `data === undefined`. `onevent` (`packet.data || []`)
+    /// then emits nothing and `onack` logs "bad ack" — neither is a parse error.
+    func testPayloadLessEventAndAckDecodeAsEmptyData() throws {
+        let manager = parser()
+        for input in ["2", "3", "2/namespace,", "2123", "399"] {
+            XCTAssertTrue(try manager.parseString(input).data.isEmpty, input)
+        }
+        XCTAssertEqual(try manager.parseString("2").type, .event)
+        XCTAssertEqual(try manager.parseString("2").id, -1)
+        XCTAssertEqual(try manager.parseString("2123").id, 123)
+        XCTAssertEqual(try manager.parseString("2/namespace,").nsp, "/namespace")
+        XCTAssertEqual(try manager.parseString("399").id, 99)
+        XCTAssertEqual(try manager.parseString("2").event, "")
+        // A binary header without a payload has no placeholders to fill.
+        XCTAssertThrowsError(try manager.parseString("51-"))
+    }
+
+    /// JS reads the id with `Number(...)`: an id past `Int` becomes a float that
+    /// matches no handler, so the packet is delivered without an acknowledgement
+    /// instead of killing the connection.
+    func testAckIdBeyondIntIsDeliveredWithoutAnAcknowledgement() throws {
+        let manager = parser()
+        let event = try manager.parseString("299999999999999999999999999[\"x\"]")
+        XCTAssertEqual(event.id, -1)
+        XCTAssertEqual(event.event, "x")
+        XCTAssertEqual(try manager.parseString("399999999999999999999999999[\"x\"]").id, -1)
+    }
+
+    /// The shipped defaults decode everything JS decodes: only `maximumAttachments`
+    /// (JS `maxAttachments`) limits a well-formed packet out of the box.
+    func testDefaultParserOptionsImposeNoJavaScriptForeignLimits() throws {
+        let manager = parser()
+        let options = SocketParserOptions()
+        XCTAssertEqual(options.maximumAttachments, 10)
+        XCTAssertEqual(options.maximumBinaryPacketBytes, .max)
+        XCTAssertEqual(options.maximumTextPacketBytes, .max)
+        let big = String(repeating: "ü", count: 9 * 1024 * 1024) // > the former 16 MiB cap
+        XCTAssertEqual(try manager.parseString("2[\"x\",\"\(big)\"]").args.first as? String, big)
+        let deep = String(repeating: "[", count: 120) + String(repeating: "]", count: 120)
+        XCTAssertNotNil(try manager.parseString("2[\"x\",\(deep)]"))
     }
 
     func testAllProtocolReservedNamesAreRejectedAsIncomingEvents() {
@@ -92,7 +140,8 @@ final class SocketProtocolSafetyTest: XCTestCase {
         XCTAssertNotNil(try manager.parseString("512-[\"x\"]"))
         XCTAssertThrowsError(try manager.parseString("513-[\"x\"]"))
         XCTAssertFalse(SocketParserOptions(maximumAttachments: 0).isValid)
-        XCTAssertFalse(SocketParserOptions(maximumNestingDepth: 513).isValid)
+        XCTAssertTrue(SocketParserOptions(maximumNestingDepth: 1024).isValid)
+        XCTAssertFalse(SocketParserOptions(maximumNestingDepth: 1025).isValid)
     }
 
     func testUTF16ReaderRejectsNegativeOversizedAndSplitSurrogateReads() {
@@ -104,7 +153,7 @@ final class SocketProtocolSafetyTest: XCTestCase {
         var reader = SocketStringReader(message: "🦧é")
         XCTAssertEqual(reader.readSafely(count: 2), "🦧")
         XCTAssertEqual(reader.readSafely(count: 1), "é")
-        XCTAssertEqual(reader.currentCharacter, "")
+        XCTAssertFalse(reader.hasNext)
     }
 
     func testTextCannotInterleaveBinaryAndFailureIsTerminalUntilReconnect() {
@@ -126,6 +175,45 @@ final class SocketProtocolSafetyTest: XCTestCase {
         XCTAssertEqual(engine.reasons, ["parse error"])
         XCTAssertTrue(manager.waitingPackets.isEmpty)
         XCTAssertEqual(events, 0)
+    }
+
+    /// socket.io-parser/test/parser.js — "should resume decoding after calling
+    /// destroy()". Swift's `destroy()` is the reconnect in `SocketManager.connect()`,
+    /// which clears `parserFailed` and `waitingPackets`; the next packet must
+    /// decode and be delivered again.
+    func testDecodingResumesAfterReconnectClearsTheParserFailure() {
+        let manager = parser()
+        let engine = ReviewParseEngine(client: manager, url: manager.socketURL, options: nil)
+        manager.engine = engine
+        manager.setTestStatus(.connected)
+        let socket = manager.defaultSocket
+        socket.setTestStatus(.connected)
+        var received = 0
+        socket.on("hello") { _, _ in received += 1 }
+
+        // A binary header owns the stream; the text packet that follows loses
+        // framing, which is fatal (JS `Decoder.add` throws "got plaintext data").
+        manager.parseEngineMessage("51-[\"hello\",{\"_placeholder\":true,\"num\":0}]")
+        manager.parseEngineMessage("2[\"hello\"]")
+        drainHandleQueue(of: manager)
+        XCTAssertEqual(engine.reasons, ["parse error"])
+        XCTAssertEqual(received, 0)
+
+        manager.setTestStatus(.notConnected)
+        manager.connect()
+        manager.setTestStatus(.connected)
+        socket.setTestStatus(.connected)
+        manager.parseEngineMessage("2[\"hello\"]")
+        drainHandleQueue(of: manager)
+        XCTAssertTrue(manager.waitingPackets.isEmpty)
+        XCTAssertEqual(received, 1)
+        XCTAssertEqual(engine.reasons, ["parse error"])
+    }
+
+    private func drainHandleQueue(of manager: SocketManager) {
+        let drained = expectation(description: "queued parser operations finished")
+        manager.handleQueue.async { drained.fulfill() }
+        wait(for: [drained], timeout: 3)
     }
 
     func testTwoBinaryHeadersAndEmptyEngineMessageAreFatal() {

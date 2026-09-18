@@ -603,13 +603,10 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             let mapped = [event] + (try items.map({ try $0.socketRepresentation() }))
 
             // JS `emit()`: with `retries` set, the queue takes over and the
-            // per-attempt timeout is `flags.timeout ?? ackTimeout`. The
+            // per-attempt timeout is `flags.timeout ?? ackTimeout` — which is
+            // exactly what `enqueueRetriableIfActive` defaults to. The
             // `flags.timeout` variant arrives through `emitTimed` below.
-            if let defaultTimeout = (manager as? SocketManager)?.ackTimeout {
-                if enqueueRetriableIfActive(mapped, userAck: ack, attemptTimeout: defaultTimeout) { return }
-            } else {
-                if enqueueRetriableIfActive(mapped, userAck: ack) { return }
-            }
+            if enqueueRetriableIfActive(mapped, userAck: ack) { return }
 
             if let defaultTimeout = (manager as? SocketManager)?.ackTimeout {
                 emitTimed(event: event, items: [], timeout: defaultTimeout, mappedItems: mapped, ack: ack)
@@ -618,10 +615,18 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             }
 
             // Modern no-timeout acks are removed silently on disconnect, unlike
-            // the deliberately retained legacy OnAckCallback API.
-            guard let queue = manager?.handleQueue else { return }
+            // the deliberately retained legacy OnAckCallback API. A missing
+            // manager or a released socket can never deliver the ack, so report
+            // it as `emitTimed` does instead of dropping the callback.
+            guard let queue = manager?.handleQueue else {
+                ack(SocketAckError.disconnected, [])
+                return
+            }
             performAckRegistration { [weak self] in
-                guard let self = self else { return }
+                guard let self = self else {
+                    ack(SocketAckError.disconnected, [])
+                    return
+                }
                 guard !self.failIfReserved(mapped) else {
                     ack(NSError(domain: "SocketIO.Emit", code: 1,
                                 userInfo: [NSLocalizedDescriptionKey: "Reserved event name: " + event]), [])
@@ -1042,8 +1047,9 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// behind the drain instead of racing it (JS retry.ts "should not emit a
     /// packet twice in the 'connect' handler").
     private func drainRetriableQueueOnConnect() {
-        // didConnect is already confined to handleQueue. Deferring a forced
-        // drain lets it resend a packet emitted by the new connect handler.
+        // The drain must stay synchronous: deferring it would resend a packet
+        // emitted from the new connect handler (JS `onconnect` drains before
+        // `connect`). didConnect is already confined to handleQueue.
         drainRetriableQueue(force: true)
     }
 
@@ -1599,9 +1605,9 @@ public extension SocketIOClient {
 }
 
 extension SocketIOClient {
-    /// Internal — called from `SocketTimedEmitter`. Allocates an ack id (when
-    /// not pre-allocated by the async overload), registers the timed ack BEFORE
-    /// running the emit funnel, then routes through the funnel.
+    /// Internal — called from `SocketTimedEmitter`. Allocates an ack id,
+    /// registers the timed ack BEFORE running the emit funnel, then routes
+    /// through the funnel.
     ///
     /// Registration-before-funnel ordering is critical: if the funnel's
     /// connected guard fires `.error` and early-returns, the timer is already
@@ -1616,7 +1622,6 @@ extension SocketIOClient {
     func emitTimed(event: String,
                    items: [SocketData],
                    timeout: Double,
-                   ackId: Int? = nil,
                    cancellation: SocketAsyncAckState? = nil,
                    mappedItems: [Any]? = nil,
                    ack: @escaping (Error?, [Any]) -> Void) {
@@ -1633,10 +1638,10 @@ extension SocketIOClient {
                                 userInfo: [NSLocalizedDescriptionKey: "Reserved event name: " + event]), [])
                     return
                 }
-                if ackId == nil, cancellation == nil,
+                if cancellation == nil,
                    self.enqueueRetriableIfActive(mapped, userAck: ack, attemptTimeout: timeout) { return }
                 // Retry queue entries allocate their IDs per attempt, never here.
-                let id = ackId ?? self.allocateAckId()
+                let id = self.allocateAckId()
                 cancellation?.register(id)
                 let ackDroppingBuffered: (Error?, [Any]) -> Void = { [weak self] err, data in
                     if err != nil { self?.dropBufferedEmit(ack: id) }

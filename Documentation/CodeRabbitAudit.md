@@ -83,6 +83,10 @@ builds the four Apple SDK framework targets, and runs both wire proofs plus the
 new Node regressions. Inspect the follow-up PR's CI for commit-specific results.
 
 No old review thread was marked resolved before this follow-up is merged. No
-change was pushed directly to `master`. The temporary read-only snapshot workflow
-is removed from the final source tree. The snapshot workflow never changed source,
-persisted credentials, or granted itself repository write permission.
+change was pushed directly to `master`. Every temporary review artefact has been
+removed from this branch: the read-only `parity-review-snapshot` and
+`protocol-review-validation` workflows and the `.protocol-review/` payload
+directory are all deleted, leaving `swift.yml` as the only workflow. The
+snapshot workflow was read-only. The validation workflow did hold `contents:
+write` and used it once, to push the macOS-validated commit `3ec4d24` onto this
+branch; it never touched `master`, and it no longer exists.

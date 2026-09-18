@@ -95,13 +95,21 @@ extension SocketEnginePollable {
     /// its own: it cannot be split, and sending it is what the reference client
     /// does too.
     func writablePostWaitPrefixCount() -> Int {
-        guard let maxPayload = maxPayload, version.rawValue >= 3, postWait.count > 1 else {
-            return postWait.count
+        return writablePrefixCount(of: postWait)
+    }
+
+    /// The same slicing applied to an arbitrary queue — used by the graceful
+    /// close, which batches a queue it has already detached from the engine.
+    /// Always at least 1 for a non-empty queue, so a caller can drain by
+    /// repeatedly taking the prefix.
+    func writablePrefixCount(of pending: [Post]) -> Int {
+        guard let maxPayload = maxPayload, version.rawValue >= 3, pending.count > 1 else {
+            return pending.count
         }
 
         var payloadSize = 0
 
-        for (i, packet) in postWait.enumerated() {
+        for (i, packet) in pending.enumerated() {
             payloadSize += packet.msg.utf8.count
 
             if i > 0 && payloadSize > maxPayload {
@@ -111,7 +119,7 @@ extension SocketEnginePollable {
             payloadSize += 1 // The record separator that precedes the next packet.
         }
 
-        return postWait.count
+        return pending.count
     }
 
     /// Detaches the bounded batch before invoking callbacks, which may re-enter
@@ -354,12 +362,5 @@ extension SocketEnginePollable {
         if !waitingForPost {
             flushWaitingForPost()
         }
-    }
-
-    /// Call to stop polling and invalidate the URLSession.
-    public func stopPolling() {
-        waitingForPoll = false
-        waitingForPost = false
-        session?.finishTasksAndInvalidate()
     }
 }

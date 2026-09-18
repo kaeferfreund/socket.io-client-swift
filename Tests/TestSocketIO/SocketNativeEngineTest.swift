@@ -103,16 +103,63 @@ final class SocketNativeEngineTest: XCTestCase {
         engine.engineQueue.sync { XCTAssertEqual(client.closes, ["ping timeout"]) }
     }
 
+    /// Only timers this client cannot turn into a Dispatch deadline are a
+    /// transport error. `1.5` and `0` used to be listed here and have moved to
+    /// the two tests below: JS opens on both, so pinning them as errors was wrong.
     func testMalformedHeartbeatIntervalsCannotTrapOrOpenEngine() {
         for timers in ["\"pingInterval\":9223372036854775807,\"pingTimeout\":1",
                        "\"pingInterval\":-1,\"pingTimeout\":1",
+                       "\"pingInterval\":1,\"pingTimeout\":-1",
                        "\"pingInterval\":true,\"pingTimeout\":1",
-                       "\"pingInterval\":1.5,\"pingTimeout\":1",
-                       "\"pingInterval\":0,\"pingTimeout\":0"] {
+                       "\"pingInterval\":\"25000\",\"pingTimeout\":1",
+                       "\"pingInterval\":2147483647,\"pingTimeout\":2147483647"] {
             let (engine, client, transport) = make()
             transport.onEvent?(.opened(protocol: nil)); drain(engine)
             transport.onEvent?(.message(.text("0{\"sid\":\"x\",\"upgrades\":[]," + timers + "}"))); drain(engine)
-            engine.engineQueue.sync { XCTAssertTrue(engine.closed); XCTAssertFalse(engine.connected); XCTAssertEqual(client.opens, 0) }
+            engine.engineQueue.sync { XCTAssertTrue(engine.closed, timers); XCTAssertFalse(engine.connected, timers); XCTAssertEqual(client.opens, 0, timers) }
+        }
+    }
+
+    /// engine.io-client `onHandshake` stores `pingInterval`/`pingTimeout` as-is:
+    /// `pingInterval: 0, pingTimeout: 20000` opens with a 20 s deadline, and
+    /// fractional milliseconds are ordinary values.
+    func testJavaScriptAcceptedHeartbeatTimersOpenTheEngine() {
+        for timers in ["\"pingInterval\":0,\"pingTimeout\":20000",
+                       "\"pingInterval\":1.5,\"pingTimeout\":1000",
+                       "\"pingInterval\":25000.9,\"pingTimeout\":20000.4"] {
+            let (engine, client, transport) = make()
+            defer { engine.disconnect(reason: "test"); drain(engine) }
+            transport.onEvent?(.opened(protocol: nil)); drain(engine)
+            transport.onEvent?(.message(.text("0{\"sid\":\"x\",\"upgrades\":[]," + timers + "}"))); drain(engine)
+            engine.engineQueue.sync {
+                XCTAssertFalse(engine.closed, timers)
+                XCTAssertTrue(engine.connected, timers)
+                XCTAssertEqual(client.opens, 1, timers)
+                XCTAssertEqual(client.closes, [], timers)
+            }
+        }
+    }
+
+    /// A handshake whose timers are zero or absent sums to a zero-length (JS:
+    /// `NaN`) deadline. JS opens the socket and then closes it from the
+    /// heartbeat with "ping timeout"; it is never a transport error.
+    func testZeroAndMissingHeartbeatTimersOpenThenPingTimeout() {
+        for handshake in ["0{\"sid\":\"x\",\"upgrades\":[],\"pingInterval\":0,\"pingTimeout\":0}",
+                          "0{\"sid\":\"x\",\"upgrades\":[]}"] {
+            let (engine, client, transport) = make()
+            transport.onEvent?(.opened(protocol: nil)); drain(engine)
+            transport.onEvent?(.message(.text(handshake))); drain(engine)
+            engine.engineQueue.sync { XCTAssertEqual(client.opens, 1, handshake) }
+            // The zero-length heartbeat deadline is already in the past, so one
+            // later engine-queue block observes the close it scheduled.
+            let expired = expectation(description: "heartbeat deadline expired")
+            engine.engineQueue.asyncAfter(deadline: .now() + .milliseconds(100)) { expired.fulfill() }
+            wait(for: [expired], timeout: 5)
+            engine.engineQueue.sync {
+                XCTAssertTrue(engine.closed, handshake)
+                XCTAssertEqual(client.closes, ["ping timeout"], handshake)
+                XCTAssertEqual(client.errors, [], handshake)
+            }
         }
     }
 
@@ -288,6 +335,54 @@ final class SocketNativeEngineTest: XCTestCase {
         XCTAssertTrue(client.errors.isEmpty)
         XCTAssertTrue(engine.pollingWrites.contains("4held"))
         engine.disconnect(reason: "test"); drain(engine)
+    }
+
+    /// engine.io-client/test/connection.js — "should defer close when upgrading",
+    /// "should send all buffered packets if closing is deferred" and "should not
+    /// send packets if closing is deferred". JS `close()` calls `waitForUpgrade()`
+    /// while upgrading; the buffer then leaves over the transport that won,
+    /// followed by the close packet, and nothing new may be written meanwhile.
+    func testCloseDeferredDuringUpgradeFlushesOverWebSocketAfterUpgrade() {
+        let client = NativeEngineClient()
+        let engine = NativePollingTestEngine(client: client, url: url, config: [])
+        let candidate = NativeEngineTransport()
+        engine.webSocketTransportFactory = { _ in candidate }
+        engine.engineQueue.sync { engine.parseEngineMessage(upgradeHandshake) }
+        candidate.onEvent?(.opened(protocol: nil)); drain(engine)
+        engine.write("buffered", withType: .message, withData: []); drain(engine)
+        engine.disconnect(reason: "io client disconnect"); drain(engine)
+        XCTAssertFalse(engine.closed)
+        XCTAssertTrue(engine.connected)
+        XCTAssertTrue(client.closes.isEmpty)
+        engine.write("late", withType: .message, withData: []); drain(engine)
+        candidate.onEvent?(.message(.text("3probe"))); drain(engine)
+        engine.engineQueue.sync { engine.doFastUpgrade() }
+        drain(engine)
+        XCTAssertFalse(engine.polling)
+        XCTAssertEqual(candidate.batches.flatMap { $0 },
+                       [.text("2probe"), .text("5"), .text("4buffered"), .text("1")])
+        XCTAssertEqual(client.closes, ["io client disconnect"])
+        XCTAssertTrue(client.errors.isEmpty)
+    }
+
+    /// engine.io-client/test/connection.js — "should close on upgradeError if
+    /// closing is deferred": `waitForUpgrade()` also resumes on `upgradeError`,
+    /// and the held packets then go out over polling before the close.
+    func testCloseDeferredDuringUpgradeResumesOverPollingOnUpgradeError() {
+        let client = NativeEngineClient()
+        let engine = NativePollingTestEngine(client: client, url: url, config: [])
+        let candidate = NativeEngineTransport()
+        engine.webSocketTransportFactory = { _ in candidate }
+        engine.engineQueue.sync { engine.parseEngineMessage(upgradeHandshake) }
+        candidate.onEvent?(.opened(protocol: nil)); drain(engine)
+        engine.write("held", withType: .message, withData: []); drain(engine)
+        engine.disconnect(reason: "io client disconnect"); drain(engine)
+        XCTAssertFalse(engine.closed)
+        candidate.onEvent?(.closed(code: nil, reason: nil, error: EngineWebSocketError.closed)); drain(engine)
+        XCTAssertTrue(engine.closed)
+        XCTAssertTrue(engine.pollingWrites.contains("4held"))
+        XCTAssertEqual(client.closes, ["io client disconnect"])
+        XCTAssertTrue(client.errors.isEmpty)
     }
 
     func testUpgradeWaitsForGetAndPostAndQueuesUpgradeFirst() {

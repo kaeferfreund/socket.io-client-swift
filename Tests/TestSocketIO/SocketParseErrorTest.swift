@@ -75,7 +75,7 @@ class SocketParseErrorTest: XCTestCase {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { settled.fulfill() }
         waitForExpectations(timeout: 3, handler: nil)
         // Only the explicit disconnect; the late "bad" packet must not close again.
-        XCTAssertEqual(fake.disconnectReasons, ["Disconnect"])
+        XCTAssertEqual(fake.disconnectReasons, ["io client disconnect"])
     }
 }
 

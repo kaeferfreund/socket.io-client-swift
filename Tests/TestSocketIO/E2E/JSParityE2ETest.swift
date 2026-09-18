@@ -39,6 +39,16 @@ final class JSParityE2ETest: XCTestCase {
         return manager
     }
 
+    /// Drops the engine from the server side, the way `StateRecoveryE2ETest`
+    /// does. The JS tests call `socket.io.engine.close()`, but a client-initiated
+    /// close is a *clean* shutdown here and does not reliably trigger a
+    /// reconnect — killing the transport server-side reproduces the unexpected
+    /// drop those tests mean to simulate.
+    private func killTransport(ofSocketWithId sid: String) throws {
+        let (status, _) = try server.admin("/admin/kill-transport?sid=\(sid)")
+        XCTAssertEqual(status, 200)
+    }
+
     /// CONNECT_ERROR arrives as the `error` client event here; JS calls it
     /// `connect_error`. What has to match is that the server's message reaches
     /// the application at all.
@@ -99,26 +109,41 @@ final class JSParityE2ETest: XCTestCase {
     /// would hammer a server that already said no, so JS does not: it destroys
     /// the socket's subscriptions on CONNECT_ERROR and waits for an explicit
     /// `connect()`.
-    func testNoRejoinAfterAMiddlewareFailure() {
+    func testNoRejoinAfterAMiddlewareFailure() throws {
         let manager = makeManager(.reconnectWait(1))
-        let socket = manager.socket(forNamespace: "/no")
 
+        // A socket on a namespace the server accepts, so the engine has a
+        // transport to kill and something to prove it came back.
+        let root = manager.socket(forNamespace: "/")
+        let rootConnected = expectation(description: "root connected")
+        rootConnected.assertForOverFulfill = false
+        var rootConnects = 0
+        root.on(clientEvent: .connect) { _, _ in
+            rootConnects += 1
+            rootConnected.fulfill()
+        }
+        root.connect()
+        wait(for: [rootConnected], timeout: 5)
+
+        let refused = manager.socket(forNamespace: "/no")
         var errorCount = 0
         let firstError = expectation(description: "first connect error")
-        socket.on(clientEvent: .error) { _, _ in
+        firstError.assertForOverFulfill = false
+        refused.on(clientEvent: .error) { _, _ in
             errorCount += 1
-            if errorCount == 1 { firstError.fulfill() }
+            firstError.fulfill()
         }
-        socket.connect()
+        refused.connect()
         wait(for: [firstError], timeout: 5)
 
-        // Force a reconnect, the way the JS test does with `socket.io.engine.close()`.
-        manager.engine?.disconnect(reason: "test")
+        let sid = try XCTUnwrap(root.sid)
+        try killTransport(ofSocketWithId: sid)
 
-        let settled = expectation(description: "give the manager time to rejoin")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { settled.fulfill() }
-        wait(for: [settled], timeout: 5)
+        let reconnected = expectation(description: "engine came back")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { reconnected.fulfill() }
+        wait(for: [reconnected], timeout: 10)
 
+        XCTAssertGreaterThan(rootConnects, 1, "The engine has to actually reconnect, or this proves nothing")
         XCTAssertEqual(errorCount, 1, "The namespace must not be rejoined after the server refused it")
     }
 
@@ -169,26 +194,31 @@ final class JSParityE2ETest: XCTestCase {
 
     // MARK: socket.ts — "should change socket.id upon reconnection"
 
-    func testSocketIdChangesOnReconnection() {
+    func testSocketIdChangesOnReconnection() throws {
         let manager = makeManager(.reconnectWait(1))
         let socket = manager.socket(forNamespace: "/")
 
         let connected = expectation(description: "connect")
         // The handler stays registered and fires again on the reconnect below.
         connected.assertForOverFulfill = false
-        socket.on(clientEvent: .connect) { _, _ in connected.fulfill() }
+        var connects = 0
+        socket.on(clientEvent: .connect) { _, _ in
+            connects += 1
+            connected.fulfill()
+        }
         socket.connect()
         wait(for: [connected], timeout: 5)
 
-        let firstId = socket.sid
-        XCTAssertNotNil(firstId)
+        let firstId = try XCTUnwrap(socket.sid)
+
+        try killTransport(ofSocketWithId: firstId)
 
         let reconnected = expectation(description: "reconnect")
         reconnected.assertForOverFulfill = false
         socket.on(clientEvent: .connect) { _, _ in reconnected.fulfill() }
-        manager.engine?.disconnect(reason: "test")
+        wait(for: [reconnected], timeout: 15)
 
-        wait(for: [reconnected], timeout: 10)
+        XCTAssertGreaterThan(connects, 1)
         XCTAssertNotEqual(socket.sid, firstId, "A new session must not reuse the old id")
     }
 

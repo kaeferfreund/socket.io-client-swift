@@ -1,5 +1,11 @@
 # Unreleased
 
+## Fixes
+
+- The polling transport is paused before the WebSocket upgrade. Previously only the outstanding long-poll was awaited; a POST still on the wire reached the server after it had switched transports, which answers it with HTTP 400 and drops the packet without surfacing an error. JS-aligned with `pause()` in engine.io-client's polling transport.
+- Polling POSTs now respect the `maxPayload` the server advertises in the handshake. Previously the whole queue went out in one request; above the limit the server answers HTTP 413 and discards every packet it carried, while the session stays open. The batch is now cut at the limit and the rest follows in the next POST, JS-aligned with `getWritablePackets()` in engine.io-client. A single packet larger than the limit is still sent on its own, as in the reference client. engine.io v3 is unaffected — those servers advertise no limit.
+- New `SocketEnginePollable.maxPayload: Int?` — additive protocol requirement with a `nil` default, so existing conformers keep the previous unbounded behavior.
+
 ## Features
 
 - Connection State Recovery support for `.version(.three)` managers talking to Socket.IO 4.x servers with `connectionStateRecovery` enabled. `SocketIOClient` exposes `recovered: Bool` and the `.connect` event payload carries a `"recovered": Bool` key. After an abrupt transport drop, the client can resume the prior session when the server still has recovery state available.

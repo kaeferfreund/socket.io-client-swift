@@ -9,6 +9,13 @@ const recoveryWindowMs = Number.isFinite(recoveryWindowMsEnv) && recoveryWindowM
   ? recoveryWindowMsEnv
   : 60_000;
 
+// Also what the server advertises as `maxPayload` in the engine.io handshake.
+// Lowering it makes the polling batch limit observable without megabyte payloads.
+const maxHttpBufferSizeEnv = Number(process.env.MAX_HTTP_BUFFER_SIZE);
+const maxHttpBufferSize = Number.isFinite(maxHttpBufferSizeEnv) && maxHttpBufferSizeEnv > 0
+  ? maxHttpBufferSizeEnv
+  : 1e6;
+
 const readJson = (req) => new Promise((resolve, reject) => {
   let buf = "";
   req.on("data", (c) => { buf += c; if (buf.length > 1_000_000) reject(new Error("body too large")); });
@@ -209,6 +216,7 @@ const httpServer = http.createServer(async (req, res) => {
 });
 
 const io = new Server(httpServer, {
+  maxHttpBufferSize,
   allowRequest: (_req, callback) => {
     callback(null, !blockNewConnectionsPending && Date.now() >= blockNewConnectionsUntil);
   },

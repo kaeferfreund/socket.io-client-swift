@@ -109,6 +109,11 @@ open class SocketEngine: NSObject, WebSocketDelegate, URLSessionDelegate,
     /// If `true`, the engine is currently in HTTP long-polling mode.
     public private(set) var polling = true
 
+    /// The maximum number of bytes this server accepts in a single polling POST,
+    /// taken from the handshake. `nil` before the handshake, and on engine.io v3
+    /// where servers do not advertise a limit.
+    public private(set) var maxPayload: Int?
+
     /// If `true`, the engine is currently seeing whether it can upgrade to WebSockets.
     public private(set) var probing = false
 
@@ -463,6 +468,10 @@ open class SocketEngine: NSObject, WebSocketDelegate, URLSessionDelegate,
             self.pingTimeout = pingTimeout
         }
 
+        // engine.io v4 only. v3 servers do not advertise a limit, and `nil` means
+        // we batch without one, which is how this client always behaved.
+        maxPayload = json["maxPayload"] as? Int
+
         if !forcePolling && !forceWebsockets && upgradeWs {
             createWebSocketAndConnect()
         }
@@ -574,6 +583,7 @@ open class SocketEngine: NSObject, WebSocketDelegate, URLSessionDelegate,
         closed = false
         connected = false
         fastUpgrade = false
+        maxPayload = nil
         polling = true
         probing = false
         invalidated = false
@@ -581,6 +591,12 @@ open class SocketEngine: NSObject, WebSocketDelegate, URLSessionDelegate,
         sid = ""
         waitingForPoll = false
         waitingForPost = false
+
+        // A new session shares nothing with the old one: packets left over from it
+        // would be POSTed under the new sid, carrying ack ids the server never
+        // issued. Previously a POST always drained the whole queue, so this could
+        // not happen; capping the batch at `maxPayload` can leave a remainder.
+        postWait.removeAll(keepingCapacity: true)
     }
 
     private func sendPing() {
@@ -743,6 +759,10 @@ open class SocketEngine: NSObject, WebSocketDelegate, URLSessionDelegate,
 
     func setFastUpgrade(_ value: Bool) {
         fastUpgrade = value
+    }
+
+    func setMaxPayload(_ value: Int?) {
+        maxPayload = value
     }
 }
 

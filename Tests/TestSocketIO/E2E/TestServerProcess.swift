@@ -33,7 +33,11 @@ final class TestServerProcess {
         if p.terminationStatus != 0 { throw Error.nodeMissing }
     }
 
-    static func start(serverScript: String = "server.js", recoveryWindowMs: Int? = nil) throws -> TestServerProcess {
+    static func start(
+        serverScript: String = "server.js",
+        recoveryWindowMs: Int? = nil,
+        maxHttpBufferSize: Int? = nil
+    ) throws -> TestServerProcess {
         try ensureNodeModules()
 
         let p = Process()
@@ -42,6 +46,7 @@ final class TestServerProcess {
         p.arguments = ["node", serverScript]
         var env = ProcessInfo.processInfo.environment
         if let w = recoveryWindowMs { env["RECOVERY_WINDOW_MS"] = String(w) }
+        if let m = maxHttpBufferSize { env["MAX_HTTP_BUFFER_SIZE"] = String(m) }
         p.environment = env
 
         let out = Pipe()

@@ -332,6 +332,61 @@ final class SocketPollingCloseTest: XCTestCase {
         }
     }
 
+    /// Regression for PR18 comment 5733052285: the old request remains alive
+    /// while a completely independent replacement handshake finishes.
+    func testReconnectCannotCancelDetachedRetiringPostBeforeBarrierRelease() {
+        connect()
+        let started = expectation(description: "retiring POST held")
+        let closedOnWire = expectation(description: "retiring close delivered")
+        let prematurelyCancelled = expectation(description: "old POST not cancelled by reset")
+        prematurelyCancelled.isInverted = true
+        fixture.observeStops { if $0 == "POST" { prematurelyCancelled.fulfill() } }
+        fixture.observePosts { post in
+            if post.body == "4held" { started.fulfill() }
+            else { XCTAssertEqual(post.sid, "session-1"); XCTAssertEqual(post.body, "1"); closedOnWire.fulfill() }
+        }
+        engine.write("held", withType: .message, withData: [])
+        wait(for: [started], timeout: 3)
+        let oldSession = engine.engineQueue.sync { engine.session }
+        let oldBarrier = engine.engineQueue.sync { engine.pollingPostGroup }
+        engine.disconnect(reason: "io client disconnect")
+        engine.engineQueue.sync {
+            XCTAssertNil(engine.session)
+            XCTAssertFalse(engine.pollingPostGroup === oldBarrier)
+        }
+        connect()
+        engine.engineQueue.sync { XCTAssertFalse(engine.session === oldSession); XCTAssertEqual(engine.sid, "session-2") }
+        wait(for: [prematurelyCancelled], timeout: 0.1)
+        XCTAssertEqual(fixture.heldPostCount, 1)
+        XCTAssertEqual(fixture.posts.count, 1)
+        fixture.observeStops { _ in }
+        fixture.releasePost()
+        wait(for: [closedOnWire], timeout: 3)
+        engine.engineQueue.sync { XCTAssertTrue(engine.connected); XCTAssertTrue(client.errors.isEmpty) }
+    }
+
+    /// A local write completion can enqueue another message synchronously. It
+    /// must neither start a concurrent POST nor reverse their order.
+    func testReentrantWriteCompletionCannotStartOverlappingPost() {
+        connect()
+        let first = expectation(description: "first POST started")
+        let second = expectation(description: "second POST started after first")
+        fixture.observePosts { post in
+            if post.body == "4first" { first.fulfill() }
+            else if post.body == "4second" { second.fulfill() }
+        }
+        engine.write("first", withType: .message, withData: []) { [weak engine = engine] in
+            engine?.sendPollMessage("second", withType: .message, withData: [], completion: nil)
+        }
+        wait(for: [first], timeout: 3)
+        engine.engineQueue.sync { XCTAssertTrue(engine.waitingForPost); XCTAssertEqual(engine.postWait.count, 1) }
+        XCTAssertEqual(fixture.posts.map { $0.body }, ["4first"])
+        fixture.releasePost()
+        wait(for: [second], timeout: 3)
+        XCTAssertEqual(fixture.posts.map { $0.body }, ["4first", "4second"])
+        fixture.releasePost()
+    }
+
     /// Engine.IO 3 uses a length-prefixed close; Engine.IO 4 uses the bare packet.
     func testCloseRequestRetainsLegacyAndModernWireEncoding() {
         engine.engineQueue.sync {

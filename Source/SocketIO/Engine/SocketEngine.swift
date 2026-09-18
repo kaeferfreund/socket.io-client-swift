@@ -284,8 +284,13 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         webSocketTransport = nil
         postWait.removeAll()
         probeWait.removeAll()
+        // Transfer ownership before notifying clients or running completions.
+        // resetEngine() may only invalidate the active slot, never this detached
+        // retiring session. Its own POST group and deadline outlive a reconnect.
         let oldSession = session
+        let retiringPostGroup = pollingPostGroup
         session = nil
+        pollingPostGroup = DispatchGroup()
         if graceful && wasPolling, let oldSession = oldSession, let request = pollingCloseRequest {
             // Engine.IO permits only one POST at a time. Wait for the old
             // session's actual POST completions, even though their engine
@@ -294,7 +299,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
                 oldSession.dataTask(with: request) { _, _, _ in }.resume()
                 oldSession.finishTasksAndInvalidate()
             }
-            pollingPostGroup.notify(queue: engineQueue, work: sendClose)
+            retiringPostGroup.notify(queue: engineQueue, work: sendClose)
             engineQueue.asyncAfter(deadline: .now() + 1) {
                 // A stalled write must not retain the session forever or send
                 // a close after invalidation when its barrier eventually drains.
@@ -574,12 +579,26 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             return
         }
 
-        guard let sid = json["sid"] as? String else {
+        guard let sid = json["sid"] as? String, !sid.isEmpty else {
             didError(reason: "Open packet contained no sid")
 
             return
         }
 
+        // Timers originate at the peer. Bound to the JavaScript timer range
+        // before integer addition and Dispatch's millisecond conversion.
+        func milliseconds(_ value: Any?) -> Int? {
+            guard let value = value, SocketPacket.isJSONNumber(value),
+                  let number = value as? NSNumber, let integer = Int(exactly: number.doubleValue),
+                  integer >= 0, integer <= 2_147_483_647 else { return nil }
+            return integer
+        }
+        guard let interval = milliseconds(json["pingInterval"]),
+              let timeout = milliseconds(json["pingTimeout"]),
+              interval > 0, interval <= 2_147_483_647 - timeout else {
+            didError(reason: "Open packet contained invalid heartbeat timers")
+            return
+        }
         let upgradeWs: Bool
 
         self.sid = sid
@@ -592,10 +611,8 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             upgradeWs = false
         }
 
-        if let pingInterval = json["pingInterval"] as? Int, let pingTimeout = json["pingTimeout"] as? Int {
-            self.pingInterval = pingInterval
-            self.pingTimeout = pingTimeout
-        }
+        self.pingInterval = interval
+        self.pingTimeout = timeout
 
         // engine.io v4 only. v3 servers do not advertise a limit, and `nil` means
         // we batch without one, which is how this client always behaved.

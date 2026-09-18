@@ -70,6 +70,31 @@ final class SocketNativeEngineTest: XCTestCase {
         transport.onEvent?(.message(.text(handshake))); drain(engine)
     }
 
+    func testMalformedHeartbeatIntervalsCannotTrapOrOpenEngine() {
+        for timers in ["\"pingInterval\":9223372036854775807,\"pingTimeout\":1",
+                       "\"pingInterval\":-1,\"pingTimeout\":1",
+                       "\"pingInterval\":true,\"pingTimeout\":1",
+                       "\"pingInterval\":1.5,\"pingTimeout\":1",
+                       "\"pingInterval\":0,\"pingTimeout\":0"] {
+            let (engine, client, transport) = make()
+            transport.onEvent?(.opened(protocol: nil)); drain(engine)
+            transport.onEvent?(.message(.text("0{\"sid\":\"x\",\"upgrades\":[]," + timers + "}"))); drain(engine)
+            engine.engineQueue.sync { XCTAssertTrue(engine.closed); XCTAssertFalse(engine.connected); XCTAssertEqual(client.opens, 0) }
+        }
+    }
+
+    func testMalformedLegacyPollingLengthsAreRejectedWithoutTrapping() {
+        for message in ["-1:x", "999999999999999999999999:x", "99:x", "1:🦧", "3:ab", "x:abc"] {
+            let (engine, client, _) = make()
+            engine.engineQueue.sync {
+                engine.setConfigs([.version(.two)])
+                engine.parsePollingMessage(message)
+                XCTAssertTrue(engine.closed, message)
+                XCTAssertEqual(client.errors.count, 1, message)
+            }
+        }
+    }
+
     func testWebSocketOpenAloneDoesNotOpenEngineIO() {
         let (engine, client, transport) = make()
         defer { engine.disconnect(reason: "test"); drain(engine) }

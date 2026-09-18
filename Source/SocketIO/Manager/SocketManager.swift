@@ -110,7 +110,20 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     /// called on.
     ///
     /// **This should be a serial queue! Concurrent queues are not supported and might cause crashes and races**.
-    public var handleQueue = DispatchQueue.main
+    private let handleQueueKey = DispatchSpecificKey<UInt8>()
+    public var handleQueue = DispatchQueue.main {
+        didSet {
+            oldValue.setSpecific(key: handleQueueKey, value: nil)
+            handleQueue.setSpecific(key: handleQueueKey, value: 1)
+        }
+    }
+
+    /// Registration is synchronous when the caller obeys the handleQueue contract.
+    /// This preserves emit(); disconnect() ordering without synchronous cross-queue hops.
+    internal var isOnHandleQueue: Bool {
+        DispatchQueue.getSpecific(key: handleQueueKey) != nil
+            || (Thread.isMainThread && handleQueue === DispatchQueue.main)
+    }
 
     /// The sockets in this manager indexed by namespace.
     public var nsps = [String: SocketIOClient]()
@@ -146,6 +159,10 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
     public private(set) var version = SocketIOVersion.three
 
+    /// Shared incoming packet and reconstruction limits. Set via `.parserOptions` before connecting.
+    public private(set) var parserOptions = SocketParserOptions()
+    private var parserFailed = false
+
     /// A list of packets that are waiting for binary data.
     ///
     /// The way that socket.io works all data should be sent directly after each packet.
@@ -176,6 +193,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         super.init()
 
         setConfigs(_config)
+        handleQueue.setSpecific(key: handleQueueKey, value: 1)
 
         if autoConnect {
             defaultSocket.connect()  // sets defaultSocket.status = .connecting (so _engineDidOpen will CONNECT it)
@@ -195,6 +213,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
     /// :nodoc:
     deinit {
+        handleQueue.setSpecific(key: handleQueueKey, value: nil)
         DefaultSocketLogger.Logger.log("Manager is being released", type: SocketManager.logType)
 
         engine?.disconnect(reason: "io client disconnect")
@@ -229,7 +248,13 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         }
 
         status = .connecting
-
+        parserFailed = false
+        waitingPackets.removeAll()
+        guard parserOptions.isValid else {
+            status = .disconnected
+            emitAll(clientEvent: .connectError, data: ["Invalid parser limits"])
+            return
+        }
         engine?.connect()
 
         cancelConnectTimeout()
@@ -625,13 +650,15 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     }
 
     private func _parseEngineMessage(_ msg: String) {
+        guard !parserFailed, status != .disconnected else { return }
+        guard waitingPackets.isEmpty else {
+            engineDidReceiveUndecodableData("Text received before binary reconstruction completed")
+            return
+        }
         guard let packet = parseSocketMessage(msg) else {
-            // `parseSocketMessage` returns nil for an empty message (nothing to
-            // decode, legitimately ignorable) and for genuinely malformed
-            // packets. Only the latter is fatal here.
-            if !msg.isEmpty {
-                engineDidReceiveUndecodableData("Undecodable socket.io packet: \(msg)")
-            }
+            // Engine.IO MESSAGE must carry a Socket.IO packet. Empty or invalid
+            // data loses framing just like any other parser error.
+            engineDidReceiveUndecodableData("Undecodable socket.io packet (\(msg.utf8.count) bytes)")
 
             return
         }
@@ -654,6 +681,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     }
 
     private func _parseEngineBinaryData(_ data: Data) {
+        guard !parserFailed, status != .disconnected else { return }
         guard let packet = parseBinaryData(data) else {
             // `parseBinaryData` returns nil both while a multi-attachment packet
             // is still incomplete (benign: more chunks are on the way) and when
@@ -677,8 +705,9 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     /// → `_engineDidClose` tells the sockets and starts the reconnect loop
     /// when `reconnects` is on.
     private func engineDidReceiveUndecodableData(_ description: String) {
-        guard status != .disconnected else { return }
-
+        guard status != .disconnected, !parserFailed else { return }
+        parserFailed = true
+        waitingPackets.removeAll()
         DefaultSocketLogger.Logger.error(description, type: SocketManager.logType)
         engine?.disconnect(reason: "parse error")
     }
@@ -769,6 +798,8 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     open func setConfigs(_ config: SocketIOClientConfiguration) {
         for option in config {
             switch option {
+            case let .parserOptions(options):
+                parserOptions = options
             case let .ackTimeout(value):
                 ackTimeout = max(0, value)
             case let .retries(count):

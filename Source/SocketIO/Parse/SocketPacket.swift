@@ -24,6 +24,7 @@
 //
 
 import Foundation
+import CoreFoundation
 
 /// A struct that represents a socket.io packet.
 public struct SocketPacket : CustomStringConvertible {
@@ -59,6 +60,8 @@ public struct SocketPacket : CustomStringConvertible {
     }
 
     private let placeholders: Int
+    internal private(set) var receivedBinaryBytes = 0
+    internal private(set) var reconstructionFailed = false
 
     /// A string representation of this packet.
     public var description: String {
@@ -68,7 +71,7 @@ public struct SocketPacket : CustomStringConvertible {
 
     /// The event name for this packet.
     public var event: String {
-        return String(describing: data[0])
+        return data.first.map { String(describing: $0) } ?? ""
     }
 
     /// A string representation of this packet.
@@ -86,19 +89,54 @@ public struct SocketPacket : CustomStringConvertible {
         self.binary = binary
     }
 
+    /// Adds one complete attachment without trusting unvalidated placeholder indices.
     mutating func addData(_ data: Data) -> Bool {
-        if placeholders == binary.count {
-            return true
-        }
-
-        binary.append(data)
-
-        if placeholders == binary.count {
-            fillInPlaceholders()
-            return true
-        } else {
+        guard !reconstructionFailed, placeholders > 0, binary.count < placeholders,
+              Self.validPlaceholders(in: self.data, count: placeholders) else {
+            reconstructionFailed = true
+            binary.removeAll()
             return false
         }
+        let total = receivedBinaryBytes.addingReportingOverflow(data.count)
+        guard !total.overflow else { reconstructionFailed = true; binary.removeAll(); return false }
+        receivedBinaryBytes = total.partialValue
+        binary.append(data)
+        guard binary.count == placeholders else { return false }
+        fillInPlaceholders()
+        return true
+    }
+
+    /// JSON booleans bridge to NSNumber too, but are not numeric event names or indices.
+    static func isJSONNumber(_ value: Any) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) != CFBooleanGetTypeID()
+    }
+
+    private static func placeholderIndex(_ value: Any?, count: Int) -> Int? {
+        guard let value = value, isJSONNumber(value), let number = value as? NSNumber else { return nil }
+        let double = number.doubleValue
+        guard double.isFinite, double >= 0, double < Double(count),
+              let index = Int(exactly: double), index < count else { return nil }
+        return index
+    }
+
+    /// Iterative validation prevents a malformed binary header from retaining data
+    /// until its last attachment, or crashing while recursively replacing a marker.
+    static func validPlaceholders(in data: [Any], count: Int) -> Bool {
+        var pending = data
+        while let object = pending.popLast() {
+            if let dictionary = object as? JSON {
+                if let marker = dictionary["_placeholder"] as? NSNumber,
+                   CFGetTypeID(marker) == CFBooleanGetTypeID(), marker.boolValue {
+                    guard placeholderIndex(dictionary["num"], count: count) != nil else { return false }
+                } else {
+                    // Only the actual JSON Boolean true is a binary marker.
+                    // Other ordinary dictionary values remain application data.
+                    pending.append(contentsOf: dictionary.values)
+                }
+            } else if let array = object as? [Any] { pending.append(contentsOf: array) }
+        }
+        return true
     }
 
     private func completeMessage(_ message: String) -> String {
@@ -139,8 +177,10 @@ public struct SocketPacket : CustomStringConvertible {
     private func _fillInPlaceholders(_ object: Any) -> Any {
         switch object {
         case let dict as JSON:
-            if dict["_placeholder"] as? Bool ?? false {
-                return binary[dict["num"] as! Int]
+            if let marker = dict["_placeholder"] as? NSNumber,
+               CFGetTypeID(marker) == CFBooleanGetTypeID(), marker.boolValue,
+               let index = Self.placeholderIndex(dict["num"], count: binary.count) {
+                return binary[index]
             } else {
                 return dict.reduce(into: JSON(), {cur, keyValue in
                     cur[keyValue.0] = _fillInPlaceholders(keyValue.1)

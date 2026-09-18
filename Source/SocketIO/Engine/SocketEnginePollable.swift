@@ -117,11 +117,17 @@ extension SocketEnginePollable {
     /// Detaches the bounded batch before invoking callbacks, which may re-enter
     /// the engine. Only packets actually selected for this request are completed.
     func createRequestForPostWithPostWait() -> URLRequest {
+        let (request, completions) = takePostBatch()
+        for completion in completions { completion() }
+        return request
+    }
+
+    /// Selects a batch without entering user code. Production starts its POST
+    /// before delivering these local callbacks, so a callback cannot overtake it.
+    private func takePostBatch() -> (URLRequest, [() -> Void]) {
         let sending = Array(postWait.prefix(writablePostWaitPrefixCount()))
         postWait.removeFirst(sending.count)
-        let request = createRequestForPost(with: sending.map { $0.msg })
-        for packet in sending { packet.completion?() }
-        return request
+        return (createRequestForPost(with: sending.map { $0.msg }), sending.compactMap { $0.completion })
     }
 
     /// Encodes explicit wire packets without draining the application queue.
@@ -237,7 +243,7 @@ extension SocketEnginePollable {
     }
 
     func flushWaitingForPost() {
-        guard postWait.count != 0 && connected else { return }
+        guard !postWait.isEmpty, connected, !closed, !invalidated, !waitingForPost else { return }
         guard polling else {
             flushWaitingForPostToWebSocket()
 
@@ -249,9 +255,9 @@ extension SocketEnginePollable {
         // packets leave over the WebSocket in `doFastUpgrade` instead.
         guard !fastUpgrade else { return }
 
-        let req = createRequestForPostWithPostWait()
-
+        guard session != nil else { return }
         waitingForPost = true
+        let (req, completions) = takePostBatch()
 
         DefaultSocketLogger.Logger.log("POSTing", type: "SocketEnginePolling")
 
@@ -283,6 +289,9 @@ extension SocketEnginePollable {
                 this.doPoll()
             }
         }
+        // doRequest has now entered the concrete session's POST group. A
+        // reentrant disconnect/emit can neither overlap nor bypass this write.
+        for completion in completions { completion() }
     }
 
     func parsePollingMessage(_ str: String) {
@@ -306,13 +315,15 @@ extension SocketEnginePollable {
 
             var reader = SocketStringReader(message: str)
 
-            while reader.hasNext {
-                if let n = Int(reader.readUntilOccurence(of: ":")) {
-                    parseEngineMessage(reader.read(count: n))
-                } else {
-                    parseEngineMessage(str)
-                    break
+            while reader.hasNext && !closed {
+                let length = reader.readUntilOccurence(of: ":")
+                guard !length.isEmpty, length.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+                      let count = Int(length), count > 0, reader.hasNext,
+                      let packet = reader.readSafely(count: count) else {
+                    didError(reason: "Invalid Engine.IO 3 polling payload length")
+                    return
                 }
+                parseEngineMessage(packet)
             }
         }
     }

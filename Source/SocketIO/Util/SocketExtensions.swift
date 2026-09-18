@@ -44,6 +44,8 @@ extension CharacterSet {
 extension Dictionary where Key == String, Value == Any {
     private static func keyValueToSocketIOClientOption(key: String, value: Any) -> SocketIOClientOption? {
         switch (key, value) {
+        case let ("parserOptions", options as SocketParserOptions):
+            return .parserOptions(options)
         case let ("webSocketOptions", options as SocketWebSocketOptions):
             return .webSocketOptions(options)
         case let ("connectTimeout", timeout as Double):
@@ -101,7 +103,7 @@ extension Dictionary where Key == String, Value == Any {
         case let ("version", version as Int):
             return .version(SocketIOVersion(rawValue: version) ?? .three)
         case ("security", _), ("secure", _), ("selfSigned", _), ("sessionDelegate", _),
-             ("enableSOCKSProxy", _), ("compress", _), ("webSocketOptions", _),
+             ("enableSOCKSProxy", _), ("compress", _), ("webSocketOptions", _), ("parserOptions", _),
              ("useCustomEngine", _), ("customEngine", _):
             return .invalidConfiguration("invalid value for " + key + "; legacy security objects must migrate to SocketTLSConfiguration")
         case _:

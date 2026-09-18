@@ -74,7 +74,11 @@ internal class SocketSessionDelegateProxy: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         let once = SocketOnce<URLRequest?>(completionHandler)
-        let secureOrigin = ["https", "wss"].contains(task.originalRequest?.url?.scheme?.lowercased() ?? "")
+        // The redirect response is the current hop. Looking only at the
+        // original URL permits http -> https -> http downgrades.
+        let secureSchemes = ["https", "wss"]
+        let secureOrigin = secureSchemes.contains(response.url?.scheme?.lowercased() ?? "") ||
+            secureSchemes.contains(task.originalRequest?.url?.scheme?.lowercased() ?? "")
         let finish: (URLRequest?) -> Void = { candidate in
             guard let candidate = candidate else { once.call(nil); return }
             let secureDestination = ["https", "wss"].contains(candidate.url?.scheme?.lowercased() ?? "")

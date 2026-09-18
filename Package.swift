@@ -8,6 +8,6 @@ let package = Package(
     dependencies: [],
     targets: [
         .target(name: "SocketIO", dependencies: [], path: "Source/SocketIO"),
-        .testTarget(name: "TestSocketIO", dependencies: ["SocketIO"]),
+        .testTarget(name: "TestSocketIO", dependencies: ["SocketIO"], exclude: ["E2E/Fixtures"]),
     ]
 )

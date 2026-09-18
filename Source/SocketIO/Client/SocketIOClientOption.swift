@@ -160,6 +160,9 @@ public enum SocketIOClientOption : ClientOption {
     /// Native incoming-message and outgoing-queue limits.
     case webSocketOptions(SocketWebSocketOptions)
 
+    /// Complete incoming packet, attachment-count and nesting limits for all transports.
+    case parserOptions(SocketParserOptions)
+
     /// Carries a dictionary conversion failure to connection validation. No
     /// network request is started when this option is present.
     case invalidConfiguration(String)
@@ -176,6 +179,8 @@ public enum SocketIOClientOption : ClientOption {
         switch self {
         case .webSocketOptions:
             description = "webSocketOptions"
+        case .parserOptions:
+            description = "parserOptions"
         case .invalidConfiguration:
             description = "invalidConfiguration"
         case .ackTimeout:
@@ -246,6 +251,8 @@ public enum SocketIOClientOption : ClientOption {
 
         switch self {
         case let .webSocketOptions(options):
+            value = options
+        case let .parserOptions(options):
             value = options
         case let .invalidConfiguration(reason):
             value = reason

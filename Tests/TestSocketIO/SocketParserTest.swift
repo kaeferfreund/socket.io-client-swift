@@ -124,7 +124,7 @@ class SocketParserTest: XCTestCase {
         }
     }
 
-    let testManager = SocketManager(socketURL: URL(string: "http://localhost/")!)
+    let testManager = SocketManager(socketURL: URL(string: "http://localhost/")!, config: [.version(.two)])
 
     //Format key: message; namespace-data-binary-id
     static let packetTypes: [String: (String, [Any], [Data], Int)] = [

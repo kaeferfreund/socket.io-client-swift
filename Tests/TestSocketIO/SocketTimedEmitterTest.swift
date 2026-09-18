@@ -350,6 +350,54 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
         XCTAssertEqual(error as? SocketAckError, .disconnected)
     }
 
+    // MARK: socket.ts — "should emit an event and wait for the acknowledgement"
+
+    /// JS `const val = await socket.emitWithAck("echo", 123)`. The ack is
+    /// injected here the way the server would deliver it.
+    func testAsyncEmitWithAckResolvesWithTheServerAck() async {
+        let socket = self.socket!
+        let manager = self.manager!
+
+        let task = Task { try await socket.emitWithAck("echo", 123) }
+        // Let the await register the ack on handleQueue before answering it.
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        manager.handleQueue.async { socket.handleAck(socket.currentAck, data: [123]) }
+
+        let value = try? await task.value
+        XCTAssertEqual(value?.first as? Int, 123)
+    }
+
+    // MARK: socket.ts > timeout — "should not timeout when the server does acknowledge the event (promise)"
+
+    func testAsyncTimedEmitWithAckDoesNotTimeOutWhenTheServerAcks() async {
+        let socket = self.socket!
+        let manager = self.manager!
+
+        let task = Task { try await socket.timeout(after: 5).emitWithAck("echo", 42) }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        manager.handleQueue.async { socket.handleAck(socket.currentAck, data: [42]) }
+
+        do {
+            let value = try await task.value
+            XCTAssertEqual(value.first as? Int, 42)
+        } catch {
+            XCTFail("should not have thrown: \(error)")
+        }
+    }
+
+    /// The mirror image, JS "should timeout when the server does not
+    /// acknowledge the event (promise)", through the JS-named entry point.
+    func testAsyncTimedEmitWithAckTimesOutWhenNoAckArrives() async {
+        do {
+            _ = try await socket.timeout(after: 0.1).emitWithAck("unknown")
+            XCTFail("should have thrown")
+        } catch let error as SocketAckError {
+            XCTAssertEqual(error, .timeout)
+        } catch {
+            XCTFail("wrong error type: \(error)")
+        }
+    }
+
     func testAsyncCancelClearsTimedAck() async {
         let socket = self.socket!
         let task = Task { try? await socket.timeout(after: 60).emit("ping") }

@@ -1642,6 +1642,35 @@ extension SocketIOClient {
 // MARK: Phase 9 — timed-emit per-emit ack with typed SocketAckError
 
 public extension SocketIOClient {
+    /// Emits an event and awaits the server's acknowledgement, JS-aligned with
+    /// `socket.emitWithAck(ev, ...args)` in `socket.io-client/lib/socket.ts`.
+    ///
+    /// The wait is bounded by `SocketManager.ackTimeout` when one is configured
+    /// — exactly the `flags.timeout ?? _opts.ackTimeout` rule JS applies.
+    ///
+    /// **Deviation from JS:** without an `ackTimeout`, a disconnect throws
+    /// `SocketAckError.disconnected` instead of leaving the call pending
+    /// forever (JS resolves such a promise never). A Swift continuation has to
+    /// be resumed exactly once, so "never" is not an option.
+    ///
+    /// - parameter event: The event to send.
+    /// - parameter items: The items to send with this event. May be left out.
+    /// - returns: The acknowledgement arguments sent back by the server.
+    func emitWithAck(_ event: String, _ items: SocketData...) async throws -> [Any] {
+        return try await emitWithAck(event, with: items)
+    }
+
+    /// Array form of the async `emitWithAck`.
+    ///
+    /// - parameter event: The event to send.
+    /// - parameter items: The items to send with this event.
+    /// - returns: The acknowledgement arguments sent back by the server.
+    func emitWithAck(_ event: String, with items: [SocketData]) async throws -> [Any] {
+        let ackTimeout = (manager as? SocketManager)?.ackTimeout ?? .infinity
+
+        return try await timeout(after: ackTimeout).emitWithAck(event, with: items)
+    }
+
     /// Returns a chainable `SocketTimedEmitter` that emits with a typed-error
     /// per-emit ack. Mirrors `socket.timeout(ms).emit(ev, ..., (err, data) =>)`
     /// from the JS client.

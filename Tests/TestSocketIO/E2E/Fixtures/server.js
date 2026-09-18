@@ -309,6 +309,28 @@ io.on("connection", (socket) => {
     if (typeof cb === "function") { cb(args[0]); }
   });
 
+  // JS parity: `socket.on("getHandshake", (cb) => cb(socket.handshake))` from
+  // the JS support server. Used by the "query option" scenarios on the default
+  // namespace (the custom-namespace ones read `/abc`'s "handshake" event).
+  socket.on("getHandshake", (...args) => {
+    const cb = args[args.length - 1];
+    if (typeof cb === "function") { cb(socket.handshake); }
+  });
+
+  // JS parity: the Date fixtures from the JS support server. A Date crosses the
+  // wire as the string `JSON.stringify` produces for it, in an event, nested in
+  // an object, and through an acknowledgement.
+  socket.on("getDate", () => {
+    socket.emit("takeDate", new Date());
+  });
+  socket.on("getDateObj", () => {
+    socket.emit("takeDateObj", { date: new Date() });
+  });
+  socket.on("getAckDate", (...args) => {
+    const cb = args[args.length - 1];
+    if (typeof cb === "function") { cb(new Date()); }
+  });
+
   // JS parity: expect receiving buffers in order (connection.ts
   // "should send events with ArrayBuffers in the correct order"). The flag is
   // per-socket, like the JS support server where it lives in the connection

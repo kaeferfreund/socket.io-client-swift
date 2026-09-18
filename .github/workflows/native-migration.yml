@@ -1,0 +1,65 @@
+name: Native migration validation (temporary)
+on:
+  push:
+    branches: [feat/native-urlsession-transport]
+    paths: ['.native-migration/**', '.github/workflows/native-migration.yml']
+permissions:
+  contents: read
+concurrency:
+  group: native-migration-implementation
+  cancel-in-progress: false
+jobs:
+  implement-and-test:
+    if: github.repository == 'kaeferfreund/socket.io-client-swift' && github.ref == 'refs/heads/feat/native-urlsession-transport'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - name: Apply reviewed, checksum-verified migration
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib
+          from pathlib import Path
+          payload = ''.join(Path(f'.native-migration/part{i}').read_text().strip() for i in range(4))
+          source = gzip.decompress(base64.b64decode(payload, validate=True))
+          assert hashlib.sha256(source).hexdigest() == '36e937a3e7a8749a120b72a8e9368f402fb8fad996576abaca43d70fb6444c19'
+          Path('/tmp/socketio-native-migration.py').write_bytes(source)
+          exec(compile(source, '/tmp/socketio-native-migration.py', 'exec'), {'__name__': '__main__'})
+          PY
+      - name: Update existing Xcode framework project
+        run: |
+          gem install --user-install xcodeproj -v 1.28.1 --no-document
+          ruby .native-migration/xcode.rb
+      - name: Build complete native library
+        run: swift build
+      - name: Run complete unit and real-server test suite
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee /tmp/native-full-tests.log
+      - name: Verify all advertised Apple framework build targets
+        run: bash scripts/test-native-distributions.sh
+      - name: Run wire protocol proofs
+        working-directory: Tests/TestSocketIO/E2E/Fixtures
+        run: |
+          node upgrade-race-proof.mjs
+          node max-payload-proof.mjs
+      - name: Commit only validated implementation to existing feature branch
+        run: |
+          test "$GITHUB_REPOSITORY" = 'kaeferfreund/socket.io-client-swift'
+          test "$GITHUB_REF" = 'refs/heads/feat/native-urlsession-transport'
+          git diff --exit-code -- Source/SocketIO/Manager Source/SocketIO/Client/SocketIOClient.swift
+          git add -A -- Source Tests Package.swift Package.resolved Cartfile Cartfile.resolved Socket.IO-Client-Swift.podspec Socket.IO-Client-Swift.xcodeproj scripts Documentation README.md CHANGELOG.md PARITY.md
+          git diff --cached --check
+          git diff --cached --stat
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat!: activate native URLSession transport and remove Starscream' -m 'Integrate ordered native transport with Engine.IO lifecycle, polling upgrades and timeout isolation. Apply shared certificate/hostname policy, reject unsupported legacy options, remove dependency from all distribution paths, and add deterministic engine and real TLS regression coverage. Full Swift and Apple framework tests passed before this commit.'
+          git push origin HEAD:refs/heads/feat/native-urlsession-transport

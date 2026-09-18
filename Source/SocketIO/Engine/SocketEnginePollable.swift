@@ -182,6 +182,11 @@ extension SocketEnginePollable {
 
             return
         }
+        // A pending upgrade stops polling writes: `doRequest` refuses them, so the
+        // request below would never start while still marking the transport as
+        // writing — and the deferred upgrade would then wait forever. The queued
+        // packets leave over the WebSocket in `doFastUpgrade` instead.
+        guard !fastUpgrade else { return }
 
         let req = createRequestForPostWithPostWait()
 

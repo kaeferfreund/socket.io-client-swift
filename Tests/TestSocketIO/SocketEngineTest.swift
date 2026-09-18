@@ -228,6 +228,23 @@ class SocketEngineTest: XCTestCase {
         XCTAssertFalse(engine.canSendUpgradePacket, "An outstanding poll still blocks the upgrade")
     }
 
+    /// `upgradeTransport()` enables `fastUpgrade` and only then enqueues its noop.
+    /// That POST can never be sent, because `doRequest` refuses to write on a
+    /// transport that is upgrading. It must therefore not mark the transport as
+    /// writing, or the deferred upgrade would wait for a callback that never comes
+    /// and the engine would end up with no active transport at all.
+    func testPendingUpgradeDoesNotMarkTheTransportAsWriting() {
+        engine.setConnected(true)
+        engine.setFastUpgrade(true)
+        engine.waitingForPoll = false
+        engine.waitingForPost = false
+
+        engine.sendPollMessage("", withType: .noop, withData: [])
+
+        XCTAssertFalse(engine.waitingForPost, "A POST that cannot start must not block the upgrade")
+        XCTAssertTrue(engine.canSendUpgradePacket)
+    }
+
     func testNoUpgradePacketWithoutAPendingUpgrade() {
         engine.setConnected(true)
         engine.waitingForPoll = false

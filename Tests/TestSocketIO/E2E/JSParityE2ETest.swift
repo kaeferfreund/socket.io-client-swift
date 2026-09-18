@@ -215,6 +215,7 @@ final class JSParityE2ETest: XCTestCase {
         XCTAssertNotNil(socket.sid)
 
         let disconnected = expectation(description: "disconnect")
+        disconnected.assertForOverFulfill = false
         socket.on(clientEvent: .disconnect) { _, _ in disconnected.fulfill() }
         socket.disconnect()
         wait(for: [disconnected], timeout: 5)
@@ -445,5 +446,312 @@ final class JSParityE2ETest: XCTestCase {
         settle(3)
 
         XCTAssertTrue(errors.isEmpty, "A dropped transport must surface as a disconnect: \(errors)")
+    }
+
+    // MARK: connection.ts — "should reconnect manually"
+
+    func testReconnectManually() {
+        let manager = makeManager()
+        let socket = manager.socket(forNamespace: "/")
+        connect(socket)
+
+        let disconnected = expectation(description: "manual disconnect")
+        disconnected.assertForOverFulfill = false
+        socket.on(clientEvent: .disconnect) { _, _ in disconnected.fulfill() }
+        socket.disconnect()
+        wait(for: [disconnected], timeout: 5)
+
+        connect(socket)
+
+        XCTAssertEqual(socket.status, .connected)
+    }
+
+    // MARK: connection.ts — "should reconnect automatically after reconnecting manually"
+
+    func testReconnectAutomaticallyAfterReconnectingManually() throws {
+        let manager = makeManager(.reconnectWait(1))
+        let socket = manager.socket(forNamespace: "/")
+        connect(socket)
+
+        let disconnected = expectation(description: "manual disconnect")
+        disconnected.assertForOverFulfill = false
+        socket.on(clientEvent: .disconnect) { _, _ in disconnected.fulfill() }
+        socket.disconnect()
+        wait(for: [disconnected], timeout: 5)
+
+        connect(socket)
+
+        // Swift `.reconnect` marks the start of reconnection (`setReconnecting`), so a successful reconnect is observed as another `.connect` — unlike JS, where `reconnect` means success.
+        var connects = 0
+        var transportKilled = false
+        let cameBack = expectation(description: "reconnected after transport drop")
+        cameBack.assertForOverFulfill = false
+        socket.on(clientEvent: .connect) { _, _ in
+            connects += 1
+            if transportKilled {
+                cameBack.fulfill()
+            }
+        }
+        let connectsBeforeKill = connects
+        try killTransport(ofSocketWithId: XCTUnwrap(socket.sid))
+        transportKilled = true
+        wait(for: [cameBack], timeout: 15)
+
+        XCTAssertEqual(socket.status, .connected)
+        XCTAssertGreaterThan(connects, connectsBeforeKill)
+    }
+
+    // MARK: socket.ts — "should properly disconnect then reconnect"
+
+    func testDisconnectThenReconnect() {
+        let manager = makeManager(.forceWebsockets(true))
+        let socket = manager.socket(forNamespace: "/")
+
+        var connects = 0
+        var disconnects = 0
+        var bounced = false
+        let reconnected = expectation(description: "connected again after bounce")
+        reconnected.assertForOverFulfill = false
+        socket.on(clientEvent: .connect) { _, _ in
+            connects += 1
+            if !bounced {
+                bounced = true
+                socket.disconnect()
+                socket.connect()
+            } else {
+                reconnected.fulfill()
+            }
+        }
+        socket.on(clientEvent: .disconnect) { _, _ in disconnects += 1 }
+        socket.connect()
+        wait(for: [reconnected], timeout: 10)
+
+        settle(1)
+
+        XCTAssertEqual(connects, 2, "The bounce must be followed by exactly one reconnect")
+        XCTAssertEqual(disconnects, 1, "The bounce must surface exactly one disconnect")
+        XCTAssertEqual(socket.status, .connected)
+    }
+
+    // MARK: connection.ts — "should connect while disconnecting another socket"
+
+    func testConnectWhileDisconnectingAnotherSocket() {
+        let manager = makeManager()
+        let foo = connect(manager.socket(forNamespace: "/foo"))
+
+        let asd = manager.socket(forNamespace: "/asd")
+        let asdConnected = expectation(description: "/asd connected")
+        asdConnected.assertForOverFulfill = false
+        asd.on(clientEvent: .connect) { _, _ in asdConnected.fulfill() }
+        asd.connect()
+        foo.disconnect()
+        wait(for: [asdConnected], timeout: 5)
+
+        XCTAssertEqual(asd.status, .connected)
+    }
+
+    // MARK: connection.ts — "should stop reconnecting on a socket and keep to reconnect on another"
+
+    func testStopReconnectingOnOneSocketButNotTheOther() throws {
+        let manager = makeManager(.reconnectWait(1))
+        let socket1 = manager.socket(forNamespace: "/")
+        let socket2 = manager.socket(forNamespace: "/asd")
+
+        var connects1 = 0
+        var connects2 = 0
+        let bothConnected = expectation(description: "both namespaces connected")
+        bothConnected.expectedFulfillmentCount = 2
+        bothConnected.assertForOverFulfill = false
+        socket1.on(clientEvent: .connect) { _, _ in
+            connects1 += 1
+            bothConnected.fulfill()
+        }
+        socket2.on(clientEvent: .connect) { _, _ in
+            connects2 += 1
+            bothConnected.fulfill()
+        }
+        socket1.connect()
+        socket2.connect()
+        wait(for: [bothConnected], timeout: 5)
+
+        // Registered after the initial connects, so this only fires on the
+        // reconnect. The `connects2` count below proves the engine came back.
+        let socket2Back = expectation(description: "second socket reconnected")
+        socket2Back.assertForOverFulfill = false
+        socket2.on(clientEvent: .connect) { _, _ in socket2Back.fulfill() }
+
+        var stoppedFirst = false
+        socket1.on(clientEvent: .reconnectAttempt) { _, _ in
+            if !stoppedFirst {
+                stoppedFirst = true
+                socket1.disconnect()
+            }
+        }
+
+        try killTransport(ofSocketWithId: XCTUnwrap(socket1.sid))
+        wait(for: [socket2Back], timeout: 15)
+
+        settle(2)
+
+        XCTAssertGreaterThan(connects2, 1, "The engine has to actually reconnect, or this proves nothing")
+        XCTAssertEqual(connects1, 1, "The stopped socket must not connect again")
+    }
+
+    // MARK: connection.ts — "should not try to reconnect and should form a connection when connecting to correct port with default timeout"
+
+    func testNoReconnectAttemptWhenConnectingToCorrectPort() {
+        let manager = makeManager(.reconnects(true), .reconnectWait(1))
+        let socket = manager.socket(forNamespace: "/valid")
+
+        var attempts = 0
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in attempts += 1 }
+
+        connect(socket)
+        settle(2)
+
+        XCTAssertEqual(attempts, 0, "A healthy connection must not attempt to reconnect")
+        XCTAssertEqual(socket.status, .connected)
+    }
+
+    // MARK: socket.ts — "should properly encode the parameters"
+
+    func testQueryParametersAreProperlyEncoded() {
+        let manager = makeManager(.connectParams(["&a": "&=?a"]))
+        let socket = manager.socket(forNamespace: "/abc")
+
+        let gotHandshake = expectation(description: "handshake")
+        var queryValue: String?
+        socket.on("handshake") { data, _ in
+            let handshake = data.first as? [String: Any]
+            let query = handshake?["query"] as? [String: Any]
+            queryValue = query?["&a"] as? String
+            gotHandshake.fulfill()
+        }
+        socket.connect()
+        wait(for: [gotHandshake], timeout: 5)
+
+        XCTAssertEqual(queryValue, "&=?a")
+    }
+
+    // MARK: connection.ts — "should send events with ArrayBuffers in the correct order"
+
+    func testBinaryEventsArriveInOrder() {
+        let socket = connect(makeManager().socket(forNamespace: "/"))
+
+        let acked = expectation(description: "abuff2-ack")
+        socket.on("abuff2-ack") { _, _ in acked.fulfill() }
+        socket.emit("abuff1", Data("abuff1".utf8))
+        socket.emit("abuff2", "please arrive second")
+        wait(for: [acked], timeout: 5)
+    }
+
+    // MARK: connection.ts — "should stop trying to reconnect"
+
+    func testStopTryingToReconnect() {
+        manager = SocketManager(socketURL: URL(string: "http://127.0.0.1:9823")!,
+                                config: [.log(false), .reconnectWait(1)])
+        let socket = manager.socket(forNamespace: "/")
+
+        var attempts = 0
+        var stopped = false
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in
+            attempts += 1
+            if !stopped {
+                stopped = true
+                self.manager.reconnects = false
+            }
+        }
+        socket.connect()
+
+        settle(4)
+
+        XCTAssertEqual(attempts, 1, "Disabling reconnection must stop the loop after the first attempt")
+        XCTAssertNotEqual(socket.status, .connected)
+    }
+
+    // MARK: connection.ts — "should not try to reconnect with incorrect port when reconnection disabled"
+
+    func testNoReconnectWhenDisabledWithIncorrectPort() {
+        manager = SocketManager(socketURL: URL(string: "http://127.0.0.1:9823")!,
+                                config: [.log(false), .reconnects(false), .reconnectWait(1)])
+        let socket = manager.socket(forNamespace: "/")
+
+        var attempts = 0
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in attempts += 1 }
+
+        let terminal = expectation(description: "terminal error or disconnect")
+        terminal.assertForOverFulfill = false
+        var terminalReason: String?
+        socket.on(clientEvent: .error) { data, _ in
+            terminalReason = self.errorMessage(from: data)
+            terminal.fulfill()
+        }
+        socket.on(clientEvent: .disconnect) { data, _ in
+            terminalReason = self.errorMessage(from: data)
+            terminal.fulfill()
+        }
+        socket.connect()
+        wait(for: [terminal], timeout: 5)
+
+        settle(3)
+
+        XCTAssertEqual(attempts, 0, "Reconnect attempts must not fire when reconnection is disabled")
+        XCTAssertNotNil(terminalReason, "A terminal event must have arrived, or this proves nothing")
+    }
+
+    // MARK: connection.ts — "should try to reconnect twice and fail when requested two attempts with incorrect address and reconnect enabled"
+
+    func testReconnectTwiceThenFailWithIncorrectAddress() {
+        manager = SocketManager(socketURL: URL(string: "http://127.0.0.1:9823")!,
+                                config: [.log(false), .reconnects(true), .reconnectAttempts(2), .reconnectWait(1)])
+        let socket = manager.socket(forNamespace: "/")
+
+        var attempts = 0
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in attempts += 1 }
+
+        let failed = expectation(description: "reconnect failed")
+        failed.assertForOverFulfill = false
+        socket.on(clientEvent: .disconnect) { data, _ in
+            if data.first as? String == "Reconnect Failed" {
+                failed.fulfill()
+            }
+        }
+        socket.connect()
+        wait(for: [failed], timeout: 15)
+
+        XCTAssertEqual(attempts, 2)
+    }
+
+    // MARK: connection.ts — "should still try to reconnect twice after opening another socket asynchronously"
+
+    func testReconnectTwiceAfterOpeningAnotherSocketAsynchronously() {
+        manager = SocketManager(socketURL: URL(string: "http://127.0.0.1:9823")!,
+                                config: [.log(false), .reconnects(true), .reconnectAttempts(2), .reconnectWait(1)])
+        let socket = manager.socket(forNamespace: "/")
+
+        var attempts = 0
+        var openedSecond = false
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in
+            attempts += 1
+            if !openedSecond {
+                openedSecond = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    let other = self.manager.socket(forNamespace: "/asd")
+                    other.connect()
+                }
+            }
+        }
+
+        let failed = expectation(description: "reconnect failed")
+        failed.assertForOverFulfill = false
+        socket.on(clientEvent: .disconnect) { data, _ in
+            if data.first as? String == "Reconnect Failed" {
+                failed.fulfill()
+            }
+        }
+        socket.connect()
+        wait(for: [failed], timeout: 15)
+
+        XCTAssertEqual(attempts, 2, "Opening a second socket must not change the first socket's attempt budget")
     }
 }

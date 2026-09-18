@@ -286,6 +286,18 @@ io.on("connection", (socket) => {
     if (typeof cb === "function") { cb(args[0]); }
   });
 
+  // JS parity: expect receiving buffers in order (connection.ts
+  // "should send events with ArrayBuffers in the correct order"). The flag is
+  // per-socket, like the JS support server where it lives in the connection
+  // closure. `abuff2-ack` is only emitted if `abuff1` arrived first as binary.
+  let receivedAbuff1 = false;
+  socket.on("abuff1", (a) => {
+    if (Buffer.isBuffer(a)) receivedAbuff1 = true;
+  });
+  socket.on("abuff2", () => {
+    if (receivedAbuff1) socket.emit("abuff2-ack");
+  });
+
   // Phase 9 E2E: intentionally never acks — verifies client-side timeout.
   socket.on("never_ack", () => {
     // intentionally do nothing
@@ -316,6 +328,13 @@ io.of("/with-data").use((_socket, next) => {
 // Registered so a client can join them; they carry no behaviour of their own.
 io.of("/foo").on("connection", () => {});
 io.of("/asd").on("connection", () => {});
+io.of("/valid").on("connection", () => {});
+
+// JS parity: mirrors `server.of("/abc")` in the JS support server — emits the
+// handshake (query + auth) so the client can assert on its parameters.
+io.of("/abc").on("connection", (socket) => {
+  socket.emit("handshake", socket.handshake);
+});
 
 httpServer.listen(0, "127.0.0.1", () => {
   const port = httpServer.address().port;

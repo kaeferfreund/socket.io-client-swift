@@ -532,7 +532,9 @@ final class JSParityE2ETest: XCTestCase {
 
         connect(socket)
 
-        // Swift `.reconnect` marks the start of reconnection (`setReconnecting`), so a successful reconnect is observed as another `.connect` — unlike JS, where `reconnect` means success.
+        // JS-aligned since 17.0.0: the drop reports `.disconnect(reason)`, the
+        // successful retry reports `.reconnect(attempt)` and the re-joined
+        // namespace then reports `.connect`.
         var connects = 0
         var transportKilled = false
         let cameBack = expectation(description: "reconnected after transport drop")
@@ -766,11 +768,9 @@ final class JSParityE2ETest: XCTestCase {
 
         let failed = expectation(description: "reconnect failed")
         failed.assertForOverFulfill = false
-        socket.on(clientEvent: .disconnect) { data, _ in
-            if data.first as? String == "Reconnect Failed" {
-                failed.fulfill()
-            }
-        }
+        // JS `reconnect_failed`; the Swift-only `.disconnect("Reconnect Failed")`
+        // was removed in 17.0.0.
+        socket.on(clientEvent: .reconnectFailed) { _, _ in failed.fulfill() }
         socket.connect()
         wait(for: [failed], timeout: 15)
 
@@ -779,7 +779,9 @@ final class JSParityE2ETest: XCTestCase {
 
     // MARK: connection.ts — "should close the engine upon decoding exception"
 
-    /// Proves the engine is closed and re-opened on a decoding exception: after injecting bad data the socket connects again with a different sid. The socket-level `.disconnect("parse error")` that JS also emits on this path arrives with the reconnect-event semantics change (`.reconnect` currently marks the start of reconnection here).
+    /// Proves the engine is closed and re-opened on a decoding exception: after
+    /// injecting bad data the socket reports `.disconnect("parse error")` — the
+    /// reason JS emits on this path — and connects again with a different sid.
     func testParseErrorClosesEngineAndReconnectsWithFreshSession() {
         makeManager(.reconnectWait(1))
         let socket = manager.socket(forNamespace: "/")
@@ -799,6 +801,13 @@ final class JSParityE2ETest: XCTestCase {
             signal.fulfill()
         }
 
+        // JS `Manager.ondata` → `onclose("parse error")` → `Socket.onclose`.
+        let parseErrorReported = expectation(description: "disconnect with parse error")
+        parseErrorReported.assertForOverFulfill = false
+        socket.on(clientEvent: .disconnect) { data, _ in
+            if data.first as? String == "parse error" { parseErrorReported.fulfill() }
+        }
+
         let reconnected = expectation(description: "reconnect")
         reconnected.assertForOverFulfill = false
         var newSid: String?
@@ -813,7 +822,7 @@ final class JSParityE2ETest: XCTestCase {
         // injection point as the JS test's `engine.emit("data", "bad")`.
         manager.parseEngineMessage("bad")
 
-        wait(for: [signal, reconnected], timeout: 15)
+        wait(for: [parseErrorReported, signal, reconnected], timeout: 15)
         XCTAssertTrue(sawSignalBeforeReconnect, "A .reconnect or .reconnectAttempt must be observed before the second .connect")
         XCTAssertNotNil(newSid)
         // A fresh engine.io session: this client reuses the engine object, so
@@ -873,11 +882,9 @@ final class JSParityE2ETest: XCTestCase {
 
         let failed = expectation(description: "reconnect failed")
         failed.assertForOverFulfill = false
-        socket.on(clientEvent: .disconnect) { data, _ in
-            if data.first as? String == "Reconnect Failed" {
-                failed.fulfill()
-            }
-        }
+        // JS `reconnect_failed`; the Swift-only `.disconnect("Reconnect Failed")`
+        // was removed in 17.0.0.
+        socket.on(clientEvent: .reconnectFailed) { _, _ in failed.fulfill() }
         socket.connect()
         wait(for: [failed], timeout: 15)
 
@@ -886,7 +893,7 @@ final class JSParityE2ETest: XCTestCase {
 
     // MARK: connection.ts — "should attempt reconnects after a failed reconnect"
 
-    /// Written exactly to the JS contract: after the first "Reconnect Failed"
+    /// Written exactly to the JS contract: after the first `reconnect_failed`
     /// a new `connect()` must get another full budget of 2 attempts. JS resets
     /// its attempt counter on `reconnect_failed`; if this client does not,
     /// this test fails — that is a FINDING, do not weaken the test.
@@ -902,14 +909,12 @@ final class JSParityE2ETest: XCTestCase {
         firstFailed.assertForOverFulfill = false
         let secondFailed = expectation(description: "second reconnect failed")
         secondFailed.assertForOverFulfill = false
-        socket.on(clientEvent: .disconnect) { data, _ in
-            if data.first as? String == "Reconnect Failed" {
-                failures += 1
-                if failures == 1 {
-                    firstFailed.fulfill()
-                } else if failures == 2 {
-                    secondFailed.fulfill()
-                }
+        socket.on(clientEvent: .reconnectFailed) { _, _ in
+            failures += 1
+            if failures == 1 {
+                firstFailed.fulfill()
+            } else if failures == 2 {
+                secondFailed.fulfill()
             }
         }
         socket.connect()
@@ -1016,11 +1021,9 @@ final class JSParityE2ETest: XCTestCase {
 
         let failed = expectation(description: "reconnect failed")
         failed.assertForOverFulfill = false
-        socket.on(clientEvent: .disconnect) { data, _ in
-            if data.first as? String == "Reconnect Failed" {
-                failed.fulfill()
-            }
-        }
+        // JS `reconnect_failed`; the Swift-only `.disconnect("Reconnect Failed")`
+        // was removed in 17.0.0.
+        socket.on(clientEvent: .reconnectFailed) { _, _ in failed.fulfill() }
         socket.connect()
         wait(for: [failed], timeout: 15)
 

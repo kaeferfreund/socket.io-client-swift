@@ -485,6 +485,13 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         } else if !reconnecting {
             reconnecting = true
             tryReconnect(reason: reason)
+        } else {
+            // A close that arrives while the loop is running is a failed
+            // reconnect attempt. JS `Manager.reconnect()` passes it to the
+            // `open(fn)` callback, which schedules the next attempt and then
+            // emits `reconnect_error`; here the next attempt is already on the
+            // handle queue, so only the event is left to fire.
+            emitAll(clientEvent: .reconnectError, data: [reason])
         }
     }
 
@@ -535,7 +542,19 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
         DefaultSocketLogger.Logger.log("Engine opened \(reason)", type: SocketManager.logType)
 
+        // JS `Manager.onreconnect()`: the attempt count is read before the
+        // backoff is reset. Setting `status` to `.connected` below resets
+        // `currentReconnectAttempt`, so the number is captured first.
+        let succeededAttempt = reconnecting ? currentReconnectAttempt : nil
+
         status = .connected
+
+        // JS emits `reconnect` with the 1-based attempt that succeeded, before
+        // the namespaces are re-joined and therefore always before the sockets'
+        // `connect`.
+        if let attempt = succeededAttempt {
+            emitAll(clientEvent: .reconnect, data: [attempt])
+        }
 
         if version.rawValue < 3 {
             // v2 short-circuits the root namespace via `didConnect` and never
@@ -714,8 +733,10 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
     /// Tries to reconnect to the server.
     ///
-    /// This will cause a `SocketClientEvent.reconnect` event to be emitted, as well as
-    /// `SocketClientEvent.reconnectAttempt` events.
+    /// This closes the transport, so the sockets see `SocketClientEvent.disconnect`
+    /// with the close reason, then a `SocketClientEvent.reconnectAttempt` per
+    /// attempt and finally either `SocketClientEvent.reconnect` (success, with
+    /// the attempt number) or `SocketClientEvent.reconnectFailed`.
     open func reconnect() {
         guard !reconnecting else { return }
 
@@ -744,7 +765,10 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
         DefaultSocketLogger.Logger.log("Starting reconnect", type: SocketManager.logType)
 
-        // Set status to connecting and emit reconnect for all sockets
+        // JS `Manager.onclose(reason)` tells every subscribed socket that the
+        // connection dropped (`Socket.onclose` → `disconnect` with the real
+        // reason) before `reconnect()` runs. Swift additionally parks the socket
+        // in `.connecting`, which is what makes `_engineDidOpen` re-join it.
         forAll {socket in
             guard socket.status == .connected else { return }
 
@@ -757,20 +781,37 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     private func _tryReconnect() {
         guard reconnects && reconnecting && status != .disconnected else { return }
 
-        if reconnectAttempts != -1 && currentReconnectAttempt + 1 > reconnectAttempts {
-            // JS `Manager.reconnect()` in socket.io-client/lib/manager.ts: `backoff.reset(); _reconnecting = false`.
+        if reconnectAttempts != -1 && currentReconnectAttempt >= reconnectAttempts {
+            // JS `Manager.reconnect()` in socket.io-client/lib/manager.ts:
+            // `backoff.reset(); emitReserved("reconnect_failed"); _reconnecting = false`.
+            // The sockets already got their `disconnect` with the real reason
+            // when the connection dropped, so there is no second one here.
             reconnecting = false
             currentReconnectAttempt = 0
-            return didDisconnect(reason: "Reconnect Failed")
+
+            // Nothing will re-join these namespaces now; drop them out of the
+            // `.connecting` parking state first, so a `.reconnectFailed`
+            // handler that calls `connect()` is not undone by this loop. JS
+            // keeps the socket subscribed (`active`) too, so an explicit
+            // connect starts a fresh cycle.
+            forAll {socket in
+                guard socket.status == .connecting else { return }
+
+                socket.abortPendingConnect()
+            }
+
+            emitAll(clientEvent: .reconnectFailed, data: [])
+
+            return
         }
 
         DefaultSocketLogger.Logger.log("Trying to reconnect", type: SocketManager.logType)
 
-        forAll {socket in
-            guard socket.status == .connecting else { return }
-
-            socket.handleClientEvent(.reconnectAttempt, data: [(reconnectAttempts - currentReconnectAttempt)])
-        }
+        // JS emits `reconnect_attempt` with `backoff.attempts`, which the
+        // preceding `backoff.duration()` has incremented — i.e. the 1-based number
+        // of the attempt that is about to be made. It is a manager-level event,
+        // so every socket of this manager hears it regardless of its state.
+        emitAll(clientEvent: .reconnectAttempt, data: [currentReconnectAttempt + 1])
 
         currentReconnectAttempt += 1
         connect()

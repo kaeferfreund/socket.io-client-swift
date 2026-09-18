@@ -1396,14 +1396,28 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         handlers.removeAll(keepingCapacity: false)
     }
 
-    /// Puts the socket back into the connecting state.
-    /// Called when the manager detects a broken connection, or when a manual reconnect is triggered.
+    /// Puts the socket back into the connecting state and reports the drop.
+    /// Called when the manager detects a broken connection, or when a manual
+    /// reconnect is triggered.
+    ///
+    /// JS-aligned with `Socket.onclose` in `socket.io-client/lib/socket.ts`
+    /// (`connected = false; delete this.id; emitReserved("disconnect", reason)`).
+    /// The socket keeps `active`, and Swift parks it in `.connecting` rather
+    /// than `.disconnected` because that is what makes `SocketManager`
+    /// re-join the namespace once the transport is back.
+    ///
+    /// **Changed in 17.0.0**: this used to emit `.reconnect` with the reason.
+    /// `.reconnect` now means a *successful* reconnection and carries the
+    /// attempt number, exactly as in JS.
     ///
     /// - parameter reason: The reason this socket is reconnecting.
     open func setReconnecting(reason: String) {
         status = .connecting
+        // Same cleared-id convention as `didDisconnect`, which is what
+        // `testSocketIdIsClearedOnDisconnect` pins.
+        sid = ""
 
-        handleClientEvent(.reconnect, data: [reason])
+        handleClientEvent(.disconnect, data: [reason])
     }
 
     // Test properties

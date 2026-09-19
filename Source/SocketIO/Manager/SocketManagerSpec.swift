@@ -86,6 +86,9 @@ public protocol SocketManagerSpec : SocketEngineClient {
     /// The version of socket.io in use.
     var version: SocketIOVersion { get }
 
+    /// Bounds decoded packets and binary reassembly, independently of transport frame limits.
+    var parserOptions: SocketParserOptions { get }
+
     // MARK: Methods
 
     /// Connects the underlying transport.
@@ -145,4 +148,9 @@ public protocol SocketManagerSpec : SocketEngineClient {
     /// - parameter nsp: The namespace for the socket.
     /// - returns: A `SocketIOClient` for the given namespace.
     func socket(forNamespace nsp: String) -> SocketIOClient
+}
+
+public extension SocketManagerSpec {
+    /// Custom managers inherit the same safe parser defaults without another stored property.
+    var parserOptions: SocketParserOptions { SocketParserOptions() }
 }

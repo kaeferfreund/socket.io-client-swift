@@ -69,6 +69,19 @@ final class JSParityE2ETest: XCTestCase {
         return json?["count"] as? Int ?? -1
     }
 
+    /// Reads the receiving namespace's own server-side ID, not an echoed client ID.
+    private func serverSocketId(for socket: SocketIOClient) throws -> String {
+        let replied = expectation(description: "server ID for \(socket.nsp)")
+        var serverID: String?
+        socket.emitWithAck("server-socket-id").timingOut(after: 5) { data in
+            serverID = data.first as? String
+            XCTAssertNotEqual(serverID, SocketAckStatus.noAck.rawValue)
+            replied.fulfill()
+        }
+        wait(for: [replied], timeout: 6)
+        return try XCTUnwrap(serverID)
+    }
+
     /// Drops the engine from the server side, the way `StateRecoveryE2ETest`
     /// does. The JS tests call `socket.io.engine.close()`, but a client-initiated
     /// close is a *clean* shutdown here and does not reliably trigger a
@@ -146,11 +159,12 @@ final class JSParityE2ETest: XCTestCase {
         // transport to kill and something to prove it came back.
         let root = manager.socket(forNamespace: "/")
         let rootConnected = expectation(description: "root connected")
-        rootConnected.assertForOverFulfill = false
+        let rootReconnected = expectation(description: "root reconnected")
         var rootConnects = 0
         root.on(clientEvent: .connect) { _, _ in
             rootConnects += 1
-            rootConnected.fulfill()
+            if rootConnects == 1 { rootConnected.fulfill() }
+            if rootConnects == 2 { rootReconnected.fulfill() }
         }
         root.connect()
         wait(for: [rootConnected], timeout: 5)
@@ -169,12 +183,13 @@ final class JSParityE2ETest: XCTestCase {
         let sid = try XCTUnwrap(root.sid)
         try killTransport(ofSocketWithId: sid)
 
-        let reconnected = expectation(description: "engine came back")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { reconnected.fulfill() }
-        wait(for: [reconnected], timeout: 10)
-
-        XCTAssertGreaterThan(rootConnects, 1, "The engine has to actually reconnect, or this proves nothing")
+        wait(for: [rootReconnected], timeout: 10)
+        // A server round trip after reconnect is a processing barrier, not a
+        // guessed sleep: a mistakenly re-sent /no CONNECT precedes this event.
+        XCTAssertEqual(try serverSocketId(for: root), root.sid)
+        XCTAssertEqual(rootConnects, 2, "The engine has to actually reconnect, or this proves nothing")
         XCTAssertEqual(errorCount, 1, "The namespace must not be rejoined after the server refused it")
+        XCTAssertEqual(try connectFrameCount(), 3, "Only initial root, refused namespace and reconnected root CONNECTs are allowed")
     }
 
     // MARK: socket.ts — "should not discard an unsent ack (callback)"
@@ -203,16 +218,46 @@ final class JSParityE2ETest: XCTestCase {
         wait(for: [acked], timeout: 10)
     }
 
+    // MARK: socket.ts — "should not ack upon disconnection (callback)"
+
+    /// The mirror image of the test above: an ack registered with no timeout on
+    /// a socket that is then disconnected is dropped silently. It must never
+    /// fire — not with data, not with an error — and it must not stay in the
+    /// registry (JS `_clearAcks` empties `socket.acks`).
+    func testANoTimeoutAckIsNotCalledAfterDisconnecting() {
+        let socket = makeManager().socket(forNamespace: "/")
+        connect(socket)
+
+        let neverAcked = expectation(description: "the ack must not fire after disconnecting")
+        neverAcked.isInverted = true
+        socket.emit("echo", "a", ack: { _, _ in neverAcked.fulfill() })
+        // JS registers the ack synchronously inside `emit()` and disconnects on
+        // the very next line. Here registration is dispatched to the manager's
+        // handleQueue, so the disconnect goes through that same serial queue: it
+        // lands after the registration and before any ack the server sends back,
+        // which a wall-clock wait could not guarantee. (`handleQueue.sync` is not
+        // an option — this manager's handleQueue is the queue we are on.)
+        manager.handleQueue.async { socket.disconnect() }
+        settle(0.2)
+        // Read on handleQueue: it is the main queue, which is this thread.
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+
+        // The server may well answer the echo; none of it may reach the callback.
+        settle(1)
+        wait(for: [neverAcked], timeout: 0.1)
+    }
+
     // MARK: socket.ts — "clears socket.id upon disconnection"
 
-    func testSocketIdIsClearedOnDisconnect() {
+    /// Root IDs match the server's ID and are cleared by explicit disconnection.
+    func testSocketIdIsClearedOnDisconnect() throws {
         let socket = makeManager().socket(forNamespace: "/")
 
         let connected = expectation(description: "connect")
         socket.on(clientEvent: .connect) { _, _ in connected.fulfill() }
         socket.connect()
         wait(for: [connected], timeout: 5)
-        XCTAssertNotNil(socket.sid)
+        XCTAssertEqual(try serverSocketId(for: socket), try XCTUnwrap(socket.sid))
 
         let disconnected = expectation(description: "disconnect")
         disconnected.assertForOverFulfill = false
@@ -374,19 +419,21 @@ final class JSParityE2ETest: XCTestCase {
 
     // MARK: connection.ts — "should not reopen a cached but active socket"
 
-    /// Asking the manager for the same namespace twice must hand back the same
-    /// socket and put exactly one CONNECT on the wire. A second frame is a
-    /// duplicate session the server has to clean up.
+    /// Looking up a connected, active socket must not send another CONNECT.
+    /// A post-lookup server round trip precedes the raw-frame count assertion.
     func testFetchingTheSameNamespaceTwiceSendsOneConnectFrame() throws {
-        let manager = makeManager()
-
-        let socket = manager.socket(forNamespace: "/")
+        let manager = makeManager(.autoConnect(true))
+        let socket = manager.defaultSocket
+        // autoConnect starts I/O asynchronously; install the handler before
+        // yielding the main handle queue instead of calling connect twice.
+        let connected = expectation(description: "auto-connected cached socket")
+        socket.once(clientEvent: .connect) { _, _ in connected.fulfill() }
+        wait(for: [connected], timeout: 5)
+        XCTAssertEqual(socket.status, .connected)
+        XCTAssertTrue(socket.active)
         let again = manager.socket(forNamespace: "/")
         XCTAssertTrue(socket === again, "The manager has to hand back the cached socket")
-
-        connect(socket)
-        settle(1)
-
+        XCTAssertEqual(try serverSocketId(for: again), socket.sid)
         XCTAssertEqual(try connectFrameCount(), 1)
     }
 
@@ -404,12 +451,14 @@ final class JSParityE2ETest: XCTestCase {
 
     // MARK: socket.ts — "should have an accessible socket id equal to the server-side socket id (custom namespace)"
 
-    func testSocketIdOnACustomNamespace() {
+    /// Both namespace IDs must equal IDs independently supplied by their servers.
+    func testSocketIdOnACustomNamespace() throws {
         let manager = makeManager()
         let root = connect(manager.socket(forNamespace: "/"))
         let foo = connect(manager.socket(forNamespace: "/foo"))
 
-        XCTAssertFalse(foo.sid?.isEmpty ?? true)
+        XCTAssertEqual(try serverSocketId(for: root), try XCTUnwrap(root.sid))
+        XCTAssertEqual(try serverSocketId(for: foo), try XCTUnwrap(foo.sid))
         XCTAssertNotEqual(foo.sid, root.sid, "Each namespace gets its own server-side id")
     }
 
@@ -433,21 +482,47 @@ final class JSParityE2ETest: XCTestCase {
 
     // MARK: socket.ts — "doesn't fire a connect_error event when the connection is already established"
 
-    /// A transport that drops under an established connection is a disconnect,
-    /// not a connection error. Reporting it as an error is what makes an app
-    /// tell the user the server is unreachable when it is merely reconnecting.
+    /// The JS assertion concerns connect_error, not Swift's runtime .error
+    /// diagnostic. URLSession may report a native receive failure when the
+    /// server drops the transport; that detail must not be suppressed just to
+    /// satisfy this test. The drop must still disconnect and reconnect once.
     func testNoErrorEventWhenAnEstablishedConnectionDrops() throws {
         let manager = makeManager(.reconnectWait(1))
         let socket = connect(manager.socket(forNamespace: "/"))
+        defer { socket.removeAllHandlers() }
 
-        var errors = [[Any]]()
-        socket.on(clientEvent: .error) { data, _ in errors.append(data) }
-        socket.on(clientEvent: .connectError) { data, _ in errors.append(data) }
+        var connectErrors = [[Any]]()
+        var lifecycle = [String]()
+        var disconnectCount = 0
+        var connectCount = 0
+        let disconnected = expectation(description: "transport disconnected")
+        let reconnected = expectation(description: "namespace reconnected")
+        socket.on(clientEvent: .connectError) { data, _ in connectErrors.append(data) }
+        socket.on(clientEvent: .disconnect) { data, _ in
+            lifecycle.append("disconnect")
+            disconnectCount += 1
+            XCTAssertTrue(["transport close", "transport error"].contains(data.first as? String ?? ""))
+            if disconnectCount == 1 { disconnected.fulfill() }
+        }
+        socket.on(clientEvent: .reconnect) { _, _ in lifecycle.append("reconnect") }
+        socket.on(clientEvent: .connect) { _, _ in
+            lifecycle.append("connect")
+            connectCount += 1
+            if connectCount == 1 { reconnected.fulfill() }
+        }
 
         try killTransport(ofSocketWithId: XCTUnwrap(socket.sid))
-        settle(3)
+        wait(for: [disconnected, reconnected], timeout: 15, enforceOrder: true)
+        // A real round trip proves that the replacement connection is usable
+        // and provides a processing barrier instead of the old fixed sleep.
+        XCTAssertEqual(try serverSocketId(for: socket), socket.sid)
 
-        XCTAssertTrue(errors.isEmpty, "A dropped transport must surface as a disconnect: \(errors)")
+        XCTAssertTrue(connectErrors.isEmpty, "An established transport drop is not a connect_error: \(connectErrors)")
+        XCTAssertEqual(lifecycle, ["disconnect", "reconnect", "connect"])
+        XCTAssertEqual(disconnectCount, 1)
+        XCTAssertEqual(connectCount, 1)
+        XCTAssertEqual(socket.status, .connected)
+        XCTAssertTrue(socket.active)
     }
 
     // MARK: connection.ts — "should reconnect manually"
@@ -483,7 +558,9 @@ final class JSParityE2ETest: XCTestCase {
 
         connect(socket)
 
-        // Swift `.reconnect` marks the start of reconnection (`setReconnecting`), so a successful reconnect is observed as another `.connect` — unlike JS, where `reconnect` means success.
+        // JS-aligned since 17.0.0: the drop reports `.disconnect(reason)`, the
+        // successful retry reports `.reconnect(attempt)` and the re-joined
+        // namespace then reports `.connect`.
         var connects = 0
         var transportKilled = false
         let cameBack = expectation(description: "reconnected after transport drop")
@@ -717,11 +794,9 @@ final class JSParityE2ETest: XCTestCase {
 
         let failed = expectation(description: "reconnect failed")
         failed.assertForOverFulfill = false
-        socket.on(clientEvent: .disconnect) { data, _ in
-            if data.first as? String == "Reconnect Failed" {
-                failed.fulfill()
-            }
-        }
+        // JS `reconnect_failed`; the Swift-only `.disconnect("Reconnect Failed")`
+        // was removed in 17.0.0.
+        socket.on(clientEvent: .reconnectFailed) { _, _ in failed.fulfill() }
         socket.connect()
         wait(for: [failed], timeout: 15)
 
@@ -730,7 +805,9 @@ final class JSParityE2ETest: XCTestCase {
 
     // MARK: connection.ts — "should close the engine upon decoding exception"
 
-    /// Proves the engine is closed and re-opened on a decoding exception: after injecting bad data the socket connects again with a different sid. The socket-level `.disconnect("parse error")` that JS also emits on this path arrives with the reconnect-event semantics change (`.reconnect` currently marks the start of reconnection here).
+    /// Proves the engine is closed and re-opened on a decoding exception: after
+    /// injecting bad data the socket reports `.disconnect("parse error")` — the
+    /// reason JS emits on this path — and connects again with a different sid.
     func testParseErrorClosesEngineAndReconnectsWithFreshSession() {
         makeManager(.reconnectWait(1))
         let socket = manager.socket(forNamespace: "/")
@@ -750,6 +827,13 @@ final class JSParityE2ETest: XCTestCase {
             signal.fulfill()
         }
 
+        // JS `Manager.ondata` → `onclose("parse error")` → `Socket.onclose`.
+        let parseErrorReported = expectation(description: "disconnect with parse error")
+        parseErrorReported.assertForOverFulfill = false
+        socket.on(clientEvent: .disconnect) { data, _ in
+            if data.first as? String == "parse error" { parseErrorReported.fulfill() }
+        }
+
         let reconnected = expectation(description: "reconnect")
         reconnected.assertForOverFulfill = false
         var newSid: String?
@@ -764,7 +848,7 @@ final class JSParityE2ETest: XCTestCase {
         // injection point as the JS test's `engine.emit("data", "bad")`.
         manager.parseEngineMessage("bad")
 
-        wait(for: [signal, reconnected], timeout: 15)
+        wait(for: [parseErrorReported, signal, reconnected], timeout: 15)
         XCTAssertTrue(sawSignalBeforeReconnect, "A .reconnect or .reconnectAttempt must be observed before the second .connect")
         XCTAssertNotNil(newSid)
         // A fresh engine.io session: this client reuses the engine object, so
@@ -824,11 +908,9 @@ final class JSParityE2ETest: XCTestCase {
 
         let failed = expectation(description: "reconnect failed")
         failed.assertForOverFulfill = false
-        socket.on(clientEvent: .disconnect) { data, _ in
-            if data.first as? String == "Reconnect Failed" {
-                failed.fulfill()
-            }
-        }
+        // JS `reconnect_failed`; the Swift-only `.disconnect("Reconnect Failed")`
+        // was removed in 17.0.0.
+        socket.on(clientEvent: .reconnectFailed) { _, _ in failed.fulfill() }
         socket.connect()
         wait(for: [failed], timeout: 15)
 
@@ -837,7 +919,7 @@ final class JSParityE2ETest: XCTestCase {
 
     // MARK: connection.ts — "should attempt reconnects after a failed reconnect"
 
-    /// Written exactly to the JS contract: after the first "Reconnect Failed"
+    /// Written exactly to the JS contract: after the first `reconnect_failed`
     /// a new `connect()` must get another full budget of 2 attempts. JS resets
     /// its attempt counter on `reconnect_failed`; if this client does not,
     /// this test fails — that is a FINDING, do not weaken the test.
@@ -853,14 +935,12 @@ final class JSParityE2ETest: XCTestCase {
         firstFailed.assertForOverFulfill = false
         let secondFailed = expectation(description: "second reconnect failed")
         secondFailed.assertForOverFulfill = false
-        socket.on(clientEvent: .disconnect) { data, _ in
-            if data.first as? String == "Reconnect Failed" {
-                failures += 1
-                if failures == 1 {
-                    firstFailed.fulfill()
-                } else if failures == 2 {
-                    secondFailed.fulfill()
-                }
+        socket.on(clientEvent: .reconnectFailed) { _, _ in
+            failures += 1
+            if failures == 1 {
+                firstFailed.fulfill()
+            } else if failures == 2 {
+                secondFailed.fulfill()
             }
         }
         socket.connect()
@@ -967,11 +1047,9 @@ final class JSParityE2ETest: XCTestCase {
 
         let failed = expectation(description: "reconnect failed")
         failed.assertForOverFulfill = false
-        socket.on(clientEvent: .disconnect) { data, _ in
-            if data.first as? String == "Reconnect Failed" {
-                failed.fulfill()
-            }
-        }
+        // JS `reconnect_failed`; the Swift-only `.disconnect("Reconnect Failed")`
+        // was removed in 17.0.0.
+        socket.on(clientEvent: .reconnectFailed) { _, _ in failed.fulfill() }
         socket.connect()
         wait(for: [failed], timeout: 15)
 
@@ -1073,5 +1151,173 @@ final class JSParityE2ETest: XCTestCase {
         wait(for: [acked], timeout: 5)
     }
 
+    // MARK: socket.ts > query option — "should accept an object (default namespace)"
 
+    func testQueryOptionAcceptsAnObjectOnTheDefaultNamespace() throws {
+        let socket = makeManager(.connectParams(["e": "f"])).socket(forNamespace: "/")
+        connect(socket)
+
+        XCTAssertEqual(try handshakeQuery(for: socket)["e"] as? String, "f")
+    }
+
+    // MARK: socket.ts > query option — "should accept a query string (default namespace)"
+
+    /// JS reads the parameters out of the server URL
+    /// (`opts.query = parsed.queryKey` in `lib/index.ts`).
+    func testQueryOptionAcceptsAQueryStringOnTheDefaultNamespace() throws {
+        manager = SocketManager(socketURL: URL(string: "http://127.0.0.1:\(server.port)/?c=d")!,
+                                config: [.log(false)])
+        let socket = manager.socket(forNamespace: "/")
+        connect(socket)
+
+        XCTAssertEqual(try handshakeQuery(for: socket)["c"] as? String, "d")
+    }
+
+    // MARK: socket.ts > query option — "should accept an object"
+
+    /// The JS test puts the namespace in the URL (`io(BASE_URL + "/abc")`);
+    /// here the namespace comes from `socket(forNamespace:)`, which is the only
+    /// way this client selects one.
+    func testQueryOptionAcceptsAnObjectOnACustomNamespace() {
+        let socket = makeManager(.connectParams(["a": "b"])).socket(forNamespace: "/abc")
+
+        XCTAssertEqual(handshakeEventQuery(for: socket)["a"] as? String, "b")
+    }
+
+    // MARK: socket.ts > query option — "should accept a query string"
+
+    func testQueryOptionAcceptsAQueryStringOnACustomNamespace() {
+        manager = SocketManager(socketURL: URL(string: "http://127.0.0.1:\(server.port)/?b=c&d=e")!,
+                                config: [.log(false)])
+        let socket = manager.socket(forNamespace: "/abc")
+
+        let query = handshakeEventQuery(for: socket)
+        XCTAssertEqual(query["b"] as? String, "c")
+        XCTAssertEqual(query["d"] as? String, "e")
+    }
+
+    /// The default namespace answers `getHandshake` with its own handshake.
+    private func handshakeQuery(for socket: SocketIOClient) throws -> [String: Any] {
+        let replied = expectation(description: "handshake for \(socket.nsp)")
+        var handshake: [String: Any]?
+        socket.emitWithAck("getHandshake").timingOut(after: 5) { data in
+            handshake = data.first as? [String: Any]
+            replied.fulfill()
+        }
+        wait(for: [replied], timeout: 5)
+
+        return try XCTUnwrap(handshake?["query"] as? [String: Any])
+    }
+
+    /// `/abc` pushes its handshake on connect, like `server.of("/abc")` in the
+    /// JS support server.
+    private func handshakeEventQuery(for socket: SocketIOClient) -> [String: Any] {
+        let got = expectation(description: "handshake event for \(socket.nsp)")
+        got.assertForOverFulfill = false
+        var handshake: [String: Any]?
+        socket.on("handshake") { data, _ in
+            handshake = data.first as? [String: Any]
+            got.fulfill()
+        }
+        socket.connect()
+        wait(for: [got], timeout: 5)
+
+        return (handshake?["query"] as? [String: Any]) ?? [:]
+    }
+
+    // MARK: connection.ts — "should emit date as string"
+
+    func testEmitDateAsString() {
+        let socket = makeManager().socket(forNamespace: "/")
+        connect(socket)
+
+        let took = expectation(description: "takeDate")
+        took.assertForOverFulfill = false
+        var received: Any?
+        socket.on("takeDate") { data, _ in
+            received = data.first
+            took.fulfill()
+        }
+        socket.emit("getDate")
+        wait(for: [took], timeout: 5)
+
+        XCTAssertTrue(received is String, "A Date crosses the wire as a string, got \(String(describing: received))")
+    }
+
+    // MARK: connection.ts — "should emit date in object"
+
+    func testEmitDateInObject() {
+        let socket = makeManager().socket(forNamespace: "/")
+        connect(socket)
+
+        let took = expectation(description: "takeDateObj")
+        took.assertForOverFulfill = false
+        var received: [String: Any]?
+        socket.on("takeDateObj") { data, _ in
+            received = data.first as? [String: Any]
+            took.fulfill()
+        }
+        socket.emit("getDateObj")
+        wait(for: [took], timeout: 5)
+
+        XCTAssertNotNil(received)
+        XCTAssertTrue(received?["date"] is String)
+    }
+
+    // MARK: connection.ts — "should receive date with ack"
+
+    func testReceiveDateWithAck() {
+        let socket = makeManager().socket(forNamespace: "/")
+        connect(socket)
+
+        let acked = expectation(description: "getAckDate")
+        var received: Any?
+        socket.emitWithAck("getAckDate", ["test": true]).timingOut(after: 5) { data in
+            received = data.first
+            acked.fulfill()
+        }
+        wait(for: [acked], timeout: 5)
+
+        XCTAssertTrue(received is String)
+    }
+
+    /// The outgoing direction of the same rule: a `Date` this client emits
+    /// arrives as the ISO-8601 string `JSON.stringify` produces.
+    func testEmittedDateArrivesAsAnISO8601String() {
+        let socket = makeManager().socket(forNamespace: "/")
+        connect(socket)
+
+        let date = Date(timeIntervalSince1970: 1_704_164_645.678)
+        let acked = expectation(description: "echo")
+        var received: Any?
+        socket.emitWithAck("echo", date).timingOut(after: 5) { data in
+            received = data.first
+            acked.fulfill()
+        }
+        wait(for: [acked], timeout: 5)
+
+        XCTAssertEqual(received as? String, "2024-01-02T03:04:05.678Z")
+    }
+
+    // MARK: socket.ts — "should emit an event and wait for the acknowledgement"
+
+    func testEmitWithAckAwaitsTheAcknowledgement() async throws {
+        let socket = makeManager().socket(forNamespace: "/")
+        connect(socket)
+
+        let value = try await socket.emitWithAck("echo", 123)
+
+        XCTAssertEqual(value.first as? Int, 123)
+    }
+
+    // MARK: socket.ts > timeout — "should not timeout when the server does acknowledge the event (promise)"
+
+    func testTimedEmitWithAckDoesNotTimeOutWhenTheServerAcknowledges() async throws {
+        let socket = makeManager().socket(forNamespace: "/")
+        connect(socket)
+
+        let value = try await socket.timeout(after: 5).emitWithAck("echo", 42)
+
+        XCTAssertEqual(value.first as? Int, 42)
+    }
 }

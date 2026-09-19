@@ -63,12 +63,53 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 26
+      - name: Check inventory evidence and fail-fast shell behavior
+        run: python3 scripts/test-review-regressions.py
       - name: Install fixture server
         run: npm install --no-audit --no-fund
         working-directory: Tests/TestSocketIO/E2E/Fixtures
+      - name: Verify polling observation never overlaps timed-out GETs
+        working-directory: Tests/TestSocketIO/E2E/Fixtures
+        run: node --test polling-proof-observer.test.mjs server-socket-id.test.mjs
       - name: Prove the upgrade must wait for a pending POST
         run: node upgrade-race-proof.mjs
         working-directory: Tests/TestSocketIO/E2E/Fixtures
       - name: Prove a polling batch must stay under maxPayload
         run: node max-payload-proof.mjs
         working-directory: Tests/TestSocketIO/E2E/Fixtures
+
+  parser-parity:
+    name: Decoder differential and malformed-input regressions
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - name: Check malformed-input regressions using actual Swift parser
+        run: |
+          set -o pipefail
+          bash scripts/test-parser-safety.sh 2>&1 | tee "$RUNNER_TEMP/parser-safety.log"
+      - name: Compare with hash-verified pinned official JavaScript decoder
+        run: |
+          npm install --prefix "$RUNNER_TEMP/parity-tools" --ignore-scripts --no-audit --no-fund typescript@5.8.3
+          git init "$RUNNER_TEMP/pinned-upstream"
+          git -C "$RUNNER_TEMP/pinned-upstream" remote add origin https://github.com/socketio/socket.io.git
+          git -C "$RUNNER_TEMP/pinned-upstream" fetch --depth=1 origin aaf2af36ec8ad05910f357a788e0e358bad32738
+          git -C "$RUNNER_TEMP/pinned-upstream" checkout --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/pinned-upstream" rev-parse HEAD)" = aaf2af36ec8ad05910f357a788e0e358bad32738
+          export NODE_PATH="$RUNNER_TEMP/parity-tools/node_modules"
+          set -o pipefail
+          bash scripts/test-parser-parity.sh "$RUNNER_TEMP/pinned-upstream" "$RUNNER_TEMP/decoder-results.json" 2>&1 | tee "$RUNNER_TEMP/decoder-parity.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parser-parity-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/parser-safety.log
+            ${{ runner.temp }}/decoder-parity.log
+            ${{ runner.temp }}/decoder-results.json

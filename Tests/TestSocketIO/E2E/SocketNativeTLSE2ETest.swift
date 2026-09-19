@@ -28,6 +28,51 @@ final class SocketNativeTLSE2ETest: XCTestCase {
     }
 
     func testNativeWebSocketTLSBinaryRoundTripWithPrivateCA() throws { try roundTrip(forcePolling: false) }
+
+    /// The default transport path over TLS: HTTP long-polling handshake, then
+    /// the WebSocket upgrade over `wss`. A device log showed every upgrade
+    /// against a TLS server dying right after "Switching to WebSockets"; the
+    /// plain-HTTP fixtures could not exercise that path.
+    func testPollingToWebSocketUpgradeOverTLSStaysConnected() throws {
+        let server = try TestServerProcess.start(serverScript: "native-tls-server.mjs",
+            extraEnvironment: ["NATIVE_TLS_DIR": try NativeTLSFixtures.directory().path])
+        defer { server.stop() }
+        let manager = SocketManager(socketURL: URL(string: "https://localhost:\(server.port)")!, config: [
+            .reconnects(false), .connectTimeout(5), .security(try NativeTLSFixtures.policy())
+        ])
+        defer { manager.disconnect() }
+        let socket = manager.defaultSocket
+
+        let connected = expectation(description: "connect over TLS")
+        connected.assertForOverFulfill = false
+        socket.on(clientEvent: .connect) { _, _ in connected.fulfill() }
+        let upgraded = expectation(description: "wss upgrade")
+        upgraded.assertForOverFulfill = false
+        socket.on(clientEvent: .websocketUpgrade) { _, _ in upgraded.fulfill() }
+        var disconnects = [String]()
+        socket.on(clientEvent: .disconnect) { data, _ in disconnects.append(String(describing: data.first ?? "")) }
+        var errors = [String]()
+        socket.on(clientEvent: .error) { data, _ in errors.append(String(describing: data)) }
+
+        socket.connect()
+        wait(for: [connected, upgraded], timeout: 10)
+
+        let settled = expectation(description: "upgrade packet sent, polling retired")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { settled.fulfill() }
+        wait(for: [settled], timeout: 5)
+        XCTAssertEqual(manager.engine?.polling, false, "the engine must be on the WebSocket now")
+        XCTAssertEqual(manager.engine?.connected, true)
+
+        let echoed = expectation(description: "binary acknowledgement over the upgraded wss transport")
+        socket.emitWithAck("echoTwo", Data([1, 2, 3]), Data([4, 5, 6])).timingOut(after: 5) { values in
+            XCTAssertEqual(values.first as? Data, Data([1, 2, 3]))
+            XCTAssertEqual(values.last as? Data, Data([4, 5, 6]))
+            echoed.fulfill()
+        }
+        wait(for: [echoed], timeout: 10)
+        XCTAssertEqual(disconnects, [])
+        XCTAssertEqual(errors, [])
+    }
     func testPollingUsesTheSameTLSPolicyAndBinaryRoundTrip() throws { try roundTrip(forcePolling: true) }
 
     private func reject(host: String = "localhost", forcePolling: Bool = false, expired: Bool = false,

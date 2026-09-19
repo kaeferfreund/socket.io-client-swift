@@ -43,6 +43,21 @@ internal enum NativeTLSFixtures {
 }
 
 final class SocketNativeTLSConfigurationTest: XCTestCase {
+    func testRedirectCannotDowngradeAfterAnInitiallyInsecureHop() {
+        let proxy = SocketSessionDelegateProxy(tlsConfiguration: .systemDefault, forwardingDelegate: nil)
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: URL(string: "http://example.test/start")!)
+        let response = HTTPURLResponse(url: URL(string: "https://example.test/secure")!, statusCode: 302,
+                                       httpVersion: nil, headerFields: nil)!
+        var calls = 0
+        proxy.urlSession(session, task: task, willPerformHTTPRedirection: response,
+            newRequest: URLRequest(url: URL(string: "http://example.test/downgrade")!)) { request in
+            XCTAssertNil(request); calls += 1
+        }
+        XCTAssertEqual(calls, 1)
+    }
+
     func testExplicitAnchorAndMatchingLeafAcceptValidLocalhost() throws {
         XCTAssertTrue(SocketServerTrustEvaluator.evaluate(try NativeTLSFixtures.trust(), host: "localhost",
                                                          configuration: try NativeTLSFixtures.policy()))

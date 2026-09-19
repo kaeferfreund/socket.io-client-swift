@@ -297,8 +297,13 @@ public protocol SocketIOClientSpec : AnyObject {
     /// Can be used after disconnecting to break any potential remaining retain cycles.
     func removeAllHandlers()
 
-    /// Puts the socket back into the connecting state.
-    /// Called when the manager detects a broken connection, or when a manual reconnect is triggered.
+    /// Puts the socket back into the connecting state and tells it why the
+    /// connection dropped. Called when the manager detects a broken connection,
+    /// or when a manual reconnect is triggered.
+    ///
+    /// JS-aligned with `Socket.onclose` in `socket.io-client/lib/socket.ts`: the
+    /// socket stops being connected and emits `disconnect` with the real reason,
+    /// while staying subscribed to its manager so the namespace is re-joined.
     ///
     /// parameter reason: The reason this socket is going reconnecting.
     func setReconnecting(reason: String)
@@ -356,7 +361,8 @@ public enum SocketClientEvent : String {
     /// ```
     case connect
 
-    /// Emitted when the socket has disconnected and will not attempt to try to reconnect.
+    /// Emitted for each socket close, including closes the manager will retry.
+    /// `reconnectFailed` reports that the reconnection attempt budget is exhausted.
     ///
     /// Usage:
     ///
@@ -418,27 +424,83 @@ public enum SocketClientEvent : String {
     /// ```
     case pong
 
-    /// Emitted when the client begins the reconnection process.
+    /// Emitted when a reconnection **succeeded**, JS-aligned with `reconnect` in
+    /// `socket.io-client/lib/manager.ts` (`onreconnect`).
+    ///
+    /// The first data item is the 1-based number of the attempt that succeeded
+    /// (`Int`). Fires once the transport is open again, before the namespaces
+    /// are re-joined, so it always precedes the `.connect` that follows the
+    /// server's CONNECT ack.
+    ///
+    /// **Changed in 17.0.0**: this used to fire when reconnection *started* and
+    /// carried the disconnect reason. The reason now arrives with `.disconnect`,
+    /// exactly as it does in JS.
     ///
     /// Usage:
     ///
     /// ```swift
     /// socket.on(clientEvent: .reconnect) {data, ack in
-    ///     // Some reconnect event logic
+    ///     let attempt = data.first as? Int
+    ///     // Some reconnect-success logic
     /// }
     /// ```
     case reconnect
 
-    /// Emitted each time the client tries to reconnect to the server.
+    /// Emitted each time the client tries to reconnect to the server, JS-aligned
+    /// with `reconnect_attempt` in `socket.io-client/lib/manager.ts`.
+    ///
+    /// The first data item is the 1-based attempt number (`Int`): `1` for the
+    /// first attempt of a reconnection loop, `2` for the second, and so on.
+    ///
+    /// **Changed in 17.0.0**: the payload used to be the number of attempts
+    /// *remaining*.
     ///
     /// Usage:
     ///
     /// ```swift
     /// socket.on(clientEvent: .reconnectAttempt) {data, ack in
+    ///     let attempt = data.first as? Int
     ///     // Some reconnect attempt logging
     /// }
     /// ```
     case reconnectAttempt
+
+    /// Emitted when a single reconnection attempt failed, JS-aligned with
+    /// `reconnect_error` in `socket.io-client/lib/manager.ts`.
+    ///
+    /// The first data item is the reason the attempt failed (`String`), e.g.
+    /// `"timeout"` for a connection that did not finish its handshake in time.
+    /// The next attempt — if the budget allows one — is already scheduled when
+    /// this fires.
+    ///
+    /// **New in 17.0.0.**
+    ///
+    /// Usage:
+    ///
+    /// ```swift
+    /// socket.on(clientEvent: .reconnectError) {data, ack in
+    ///     // Some per-attempt failure logging
+    /// }
+    /// ```
+    case reconnectError = "reconnect_error"
+
+    /// Emitted when the reconnection budget (`.reconnectAttempts`) is exhausted,
+    /// JS-aligned with `reconnect_failed` in `socket.io-client/lib/manager.ts`.
+    /// Carries no data.
+    ///
+    /// The sockets already received their `.disconnect` with the real reason
+    /// when the connection dropped, so no further `.disconnect` is emitted here.
+    ///
+    /// **New in 17.0.0**: replaces the Swift-only `.disconnect("Reconnect Failed")`.
+    ///
+    /// Usage:
+    ///
+    /// ```swift
+    /// socket.on(clientEvent: .reconnectFailed) {_, _ in
+    ///     // Give up, or start a new cycle with socket.connect()
+    /// }
+    /// ```
+    case reconnectFailed = "reconnect_failed"
 
     /// Emitted every time there is a change in the client's status.
     ///

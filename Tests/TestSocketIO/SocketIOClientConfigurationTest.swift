@@ -83,6 +83,30 @@ class TestSocketIOClientConfiguration : XCTestCase {
         }
     }
 
+    /// A bad `parserOptions` value must not blame the legacy TLS migration.
+    func testInvalidParserOptionsReportsItsOwnReason() {
+        let config: SocketIOClientConfiguration = ["parserOptions": "not options"].toSocketConfiguration()
+        XCTAssertEqual(config.count, 1)
+        switch config[0] {
+        case let .invalidConfiguration(reason):
+            XCTAssertEqual(reason, "invalid value for parserOptions; expected SocketParserOptions")
+        default:
+            XCTFail("expected .invalidConfiguration from dict, got \(config[0])")
+        }
+    }
+
+    func testValidParserOptionsSurviveTheDictionaryBridge() {
+        let options = SocketParserOptions(maximumAttachments: 3)
+        let config: SocketIOClientConfiguration = ["parserOptions": options].toSocketConfiguration()
+        XCTAssertEqual(config.count, 1)
+        switch config[0] {
+        case let .parserOptions(value):
+            XCTAssertEqual(value.maximumAttachments, 3)
+        default:
+            XCTFail("expected .parserOptions from dict, got \(config[0])")
+        }
+    }
+
     var config = [] as SocketIOClientConfiguration
 
     override func setUp() {

@@ -110,7 +110,20 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     /// called on.
     ///
     /// **This should be a serial queue! Concurrent queues are not supported and might cause crashes and races**.
-    public var handleQueue = DispatchQueue.main
+    private let handleQueueKey = DispatchSpecificKey<UInt8>()
+    public var handleQueue = DispatchQueue.main {
+        didSet {
+            oldValue.setSpecific(key: handleQueueKey, value: nil)
+            handleQueue.setSpecific(key: handleQueueKey, value: 1)
+        }
+    }
+
+    /// Registration is synchronous when the caller obeys the handleQueue contract.
+    /// This preserves emit(); disconnect() ordering without synchronous cross-queue hops.
+    internal var isOnHandleQueue: Bool {
+        DispatchQueue.getSpecific(key: handleQueueKey) != nil
+            || (Thread.isMainThread && handleQueue === DispatchQueue.main)
+    }
 
     /// The sockets in this manager indexed by namespace.
     public var nsps = [String: SocketIOClient]()
@@ -118,11 +131,13 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     /// If `true`, this client will try and reconnect on any disconnects.
     public var reconnects = true
 
-    /// The minimum number of seconds to wait before attempting to reconnect.
-    public var reconnectWait = 10
+    /// The base delay in seconds before the first reconnect attempt; each further
+    /// attempt doubles it. JS `reconnectionDelay` (1000 ms).
+    public var reconnectWait = 1
 
-    /// The maximum number of seconds to wait before attempting to reconnect.
-    public var reconnectWaitMax = 30
+    /// The maximum delay in seconds between reconnect attempts. JS
+    /// `reconnectionDelayMax` (5000 ms).
+    public var reconnectWaitMax = 5
 
     /// Seconds the engine.io handshake may take before the attempt is failed with `.connectError("timeout")`
     /// and the engine is closed; `.infinity` disables; `0` fails on the next queue turn (JS `timeout: 0`).
@@ -136,6 +151,8 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         didSet {
             switch status {
             case .connected:
+                // JS `Manager.onreconnect()`: `backoff.reset(); _reconnecting = false`.
+                cancelScheduledReconnect()
                 reconnecting = false
                 currentReconnectAttempt = 0
             default:
@@ -145,6 +162,10 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     }
 
     public private(set) var version = SocketIOVersion.three
+
+    /// Shared incoming packet and reconstruction limits. Set via `.parserOptions` before connecting.
+    public private(set) var parserOptions = SocketParserOptions()
+    private var parserFailed = false
 
     /// A list of packets that are waiting for binary data.
     ///
@@ -160,6 +181,9 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     internal var currentReconnectAttempt = 0
     private var pendingConnectPayloads = [String: [String: Any]]()
     private var reconnecting = false
+    /// The pending backoff timer of the reconnect loop (JS `Manager.reconnect()`'s
+    /// `setTimeoutFn`). Cancelled by `disconnect()` and by a successful open.
+    private var reconnectTimer: DispatchWorkItem?
     private var connectTimeoutTimer: DispatchWorkItem?
     private var connectAttemptTimedOut = false
 
@@ -176,6 +200,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         super.init()
 
         setConfigs(_config)
+        handleQueue.setSpecific(key: handleQueueKey, value: 1)
 
         if autoConnect {
             defaultSocket.connect()  // sets defaultSocket.status = .connecting (so _engineDidOpen will CONNECT it)
@@ -195,6 +220,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
     /// :nodoc:
     deinit {
+        handleQueue.setSpecific(key: handleQueueKey, value: nil)
         DefaultSocketLogger.Logger.log("Manager is being released", type: SocketManager.logType)
 
         engine?.disconnect(reason: "io client disconnect")
@@ -229,7 +255,13 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         }
 
         status = .connecting
-
+        parserFailed = false
+        waitingPackets.removeAll()
+        guard parserOptions.isValid else {
+            status = .disconnected
+            emitAll(clientEvent: .connectError, data: ["Invalid parser limits"])
+            return
+        }
         engine?.connect()
 
         cancelConnectTimeout()
@@ -316,7 +348,11 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             }
 
             do {
-                let payloadData = try JSONSerialization.data(withJSONObject: effective, options: .fragmentsAllowed)
+                // Sorted for the same reason `SocketPacket` sorts: a Swift
+                // Dictionary has no insertion order, so a reproducible CONNECT
+                // frame is the only alternative to an arbitrary one.
+                let payloadData = try JSONSerialization.data(withJSONObject: effective,
+                                                             options: [.fragmentsAllowed, .sortedKeys])
                 if let jsonString = String(data: payloadData, encoding: .utf8) {
                     payloadStr = jsonString
                 }
@@ -366,6 +402,11 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     /// - parameter reason: The reason for the disconnection.
     open func didDisconnect(reason: String) {
         forAll {socket in
+            // JS `Manager.onclose` only reaches sockets that subscribed to the
+            // manager, i.e. that called `connect()`. A socket that never did has
+            // nothing to be disconnected from.
+            guard socket.status != .notConnected else { return }
+
             socket.didDisconnect(reason: reason)
         }
     }
@@ -375,6 +416,10 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         DefaultSocketLogger.Logger.log("Manager closing", type: SocketManager.logType)
 
         cancelConnectTimeout()
+        // JS `Manager._close()`: `skipReconnect = true; _reconnecting = false`.
+        cancelScheduledReconnect()
+        reconnecting = false
+        currentReconnectAttempt = 0
 
         status = .disconnected
 
@@ -388,10 +433,29 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     ///
     /// - parameter socket: The socket to disconnect.
     open func disconnectSocket(_ socket: SocketIOClient) {
+        disconnectSocket(socket, removeFromManager: true)
+    }
+
+    /// Client namespace cleanup preserves the JS-compatible cache. The active flag
+    /// distinguishes explicit client disconnect from a reconnectable namespace timeout.
+    internal func disconnectSocket(_ socket: SocketIOClient, removeFromManager: Bool) {
+        if removeFromManager, nsps[socket.nsp] === socket {
+            nsps.removeValue(forKey: socket.nsp)
+        }
         pendingConnectPayloads.removeValue(forKey: socket.nsp)
         engine?.send("1\(socket.nsp),", withData: [])
 
         socket.didDisconnect(reason: "io client disconnect")
+
+        // JS `Manager._destroy(socket)`: once no socket of this manager is
+        // `active` any more, the manager closes (`_close()`), which also stops a
+        // running reconnect loop. Without this, a loop kept running after the
+        // last socket left (connection.ts "should stop reconnecting when force
+        // closed").
+        guard !nsps.values.contains(where: { $0.active }) else { return }
+
+        DefaultSocketLogger.Logger.log("No active socket left; closing the manager", type: SocketManager.logType)
+        disconnect()
     }
 
     /// Disconnects the socket associated with `forNamespace`.
@@ -416,6 +480,18 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     /// - parameter clientEvent: The event to emit.
     open func emitAll(clientEvent event: SocketClientEvent, data: [Any]) {
         forAll {socket in
+            socket.handleClientEvent(event, data: data)
+        }
+    }
+
+    /// Delivers a manager-level JS event (`reconnect_attempt`, `reconnect_error`,
+    /// `reconnect_failed`, `reconnect`) to the sockets subscribed to this manager.
+    /// Swift has no manager event bus; JS sockets subscribe in `connect()` and
+    /// unsubscribe in `disconnect()`, which is what `active` tracks.
+    private func emitManagerEvent(_ event: SocketClientEvent, data: [Any]) {
+        forAll {socket in
+            guard socket.active else { return }
+
             socket.handleClientEvent(event, data: data)
         }
     }
@@ -460,6 +536,18 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         } else if !reconnecting {
             reconnecting = true
             tryReconnect(reason: reason)
+        } else if reconnectTimer != nil {
+            // JS `reconnect()` returns early while `_reconnecting`: a close that
+            // arrives during the backoff wait is not an attempt failure and
+            // neither reschedules nor reports `reconnect_error`.
+            DefaultSocketLogger.Logger.log("Ignoring close while a reconnect attempt is pending", type: SocketManager.logType)
+        } else {
+            // A close that arrives while an attempt is in flight is that
+            // attempt failing. JS `Manager.reconnect()` passes it to the
+            // `open(fn)` callback, which schedules the next attempt (with a
+            // longer backoff) and then emits `reconnect_error`.
+            scheduleReconnectAttempt()
+            emitManagerEvent(.reconnectError, data: [reason])
         }
     }
 
@@ -479,8 +567,13 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
         // JS `socket.ts onerror`: an engine error while not connected is a
         // `connect_error`; an established connection reports `.error` instead
-        // (a transport drop under a live connection is a runtime error).
+        // (a transport drop under a live connection is a runtime error). Only
+        // sockets subscribed to the manager hear it — JS `Socket.subEvents()`
+        // runs in `connect()` and a refused or disconnected socket has
+        // destroyed its subscriptions, so it must not be told about the engine.
         forAll { socket in
+            guard socket.active else { return }
+
             if socket.status == .connected {
                 socket.handleClientEvent(.error, data: [reason])
             } else {
@@ -510,7 +603,19 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
         DefaultSocketLogger.Logger.log("Engine opened \(reason)", type: SocketManager.logType)
 
+        // JS `Manager.onreconnect()`: the attempt count is read before the
+        // backoff is reset. Setting `status` to `.connected` below resets
+        // `currentReconnectAttempt`, so the number is captured first.
+        let succeededAttempt = reconnecting ? currentReconnectAttempt : nil
+
         status = .connected
+
+        // JS emits `reconnect` with the 1-based attempt that succeeded, before
+        // the namespaces are re-joined and therefore always before the sockets'
+        // `connect`.
+        if let attempt = succeededAttempt {
+            emitManagerEvent(.reconnect, data: [attempt])
+        }
 
         if version.rawValue < 3 {
             // v2 short-circuits the root namespace via `didConnect` and never
@@ -625,13 +730,15 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     }
 
     private func _parseEngineMessage(_ msg: String) {
+        guard !parserFailed, status != .disconnected else { return }
+        guard waitingPackets.isEmpty else {
+            engineDidReceiveUndecodableData("Text received before binary reconstruction completed")
+            return
+        }
         guard let packet = parseSocketMessage(msg) else {
-            // `parseSocketMessage` returns nil for an empty message (nothing to
-            // decode, legitimately ignorable) and for genuinely malformed
-            // packets. Only the latter is fatal here.
-            if !msg.isEmpty {
-                engineDidReceiveUndecodableData("Undecodable socket.io packet: \(msg)")
-            }
+            // Engine.IO MESSAGE must carry a Socket.IO packet. Empty or invalid
+            // data loses framing just like any other parser error.
+            engineDidReceiveUndecodableData("Undecodable socket.io packet (\(msg.utf8.count) bytes)")
 
             return
         }
@@ -654,6 +761,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     }
 
     private func _parseEngineBinaryData(_ data: Data) {
+        guard !parserFailed, status != .disconnected else { return }
         guard let packet = parseBinaryData(data) else {
             // `parseBinaryData` returns nil both while a multi-attachment packet
             // is still incomplete (benign: more chunks are on the way) and when
@@ -677,16 +785,19 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     /// → `_engineDidClose` tells the sockets and starts the reconnect loop
     /// when `reconnects` is on.
     private func engineDidReceiveUndecodableData(_ description: String) {
-        guard status != .disconnected else { return }
-
+        guard status != .disconnected, !parserFailed else { return }
+        parserFailed = true
+        waitingPackets.removeAll()
         DefaultSocketLogger.Logger.error(description, type: SocketManager.logType)
         engine?.disconnect(reason: "parse error")
     }
 
     /// Tries to reconnect to the server.
     ///
-    /// This will cause a `SocketClientEvent.reconnect` event to be emitted, as well as
-    /// `SocketClientEvent.reconnectAttempt` events.
+    /// This closes the transport, so the sockets see `SocketClientEvent.disconnect`
+    /// with the close reason, then a `SocketClientEvent.reconnectAttempt` per
+    /// attempt and finally either `SocketClientEvent.reconnect` (success, with
+    /// the attempt number) or `SocketClientEvent.reconnectFailed`.
     open func reconnect() {
         guard !reconnecting else { return }
 
@@ -715,52 +826,110 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
         DefaultSocketLogger.Logger.log("Starting reconnect", type: SocketManager.logType)
 
-        // Set status to connecting and emit reconnect for all sockets
+        // JS `Manager.onclose(reason)` tells every subscribed socket that the
+        // connection dropped (`Socket.onclose` → `disconnect` with the real
+        // reason) before `reconnect()` runs. Swift additionally parks the socket
+        // in `.connecting`, which is what makes `_engineDidOpen` re-join it.
         forAll {socket in
             guard socket.status == .connected else { return }
 
             socket.setReconnecting(reason: reason)
         }
 
-        _tryReconnect()
+        scheduleReconnectAttempt()
     }
 
-    private func _tryReconnect() {
+    /// JS `Manager.reconnect()`: either the budget is exhausted (`reconnect_failed`)
+    /// or the next attempt is scheduled after `backoff.duration()`. The attempt
+    /// itself — `reconnect_attempt`, then `open()` — only runs when that timer
+    /// fires, so a drop never triggers an immediate retry.
+    private func scheduleReconnectAttempt() {
         guard reconnects && reconnecting && status != .disconnected else { return }
 
-        if reconnectAttempts != -1 && currentReconnectAttempt + 1 > reconnectAttempts {
-            // JS `Manager.reconnect()` in socket.io-client/lib/manager.ts: `backoff.reset(); _reconnecting = false`.
+        if reconnectAttempts != -1 && currentReconnectAttempt >= reconnectAttempts {
+            // JS `Manager.reconnect()` in socket.io-client/lib/manager.ts:
+            // `backoff.reset(); emitReserved("reconnect_failed"); _reconnecting = false`.
+            // The sockets already got their `disconnect` with the real reason
+            // when the connection dropped, so there is no second one here.
+            cancelScheduledReconnect()
             reconnecting = false
             currentReconnectAttempt = 0
-            return didDisconnect(reason: "Reconnect Failed")
+
+            // Nothing will re-join these namespaces now; drop them out of the
+            // `.connecting` parking state first, so a `.reconnectFailed`
+            // handler that calls `connect()` is not undone by this loop. JS
+            // keeps the socket subscribed (`active`) too, so an explicit
+            // connect starts a fresh cycle.
+            forAll {socket in
+                guard socket.status == .connecting else { return }
+
+                socket.abortPendingConnect()
+            }
+
+            emitManagerEvent(.reconnectFailed, data: [])
+
+            return
         }
 
-        DefaultSocketLogger.Logger.log("Trying to reconnect", type: SocketManager.logType)
-
-        forAll {socket in
-            guard socket.status == .connecting else { return }
-
-            socket.handleClientEvent(.reconnectAttempt, data: [(reconnectAttempts - currentReconnectAttempt)])
-        }
-
-        currentReconnectAttempt += 1
-        connect()
-
+        // JS `backoff.duration()` computes the delay from the attempts made so
+        // far and then increments `attempts`, which is the 1-based number the
+        // upcoming `reconnect_attempt` carries.
         let interval = reconnectInterval(attempts: currentReconnectAttempt)
-        DefaultSocketLogger.Logger.log("Scheduling reconnect in \(interval)s", type: SocketManager.logType)
-        handleQueue.asyncAfter(deadline: .now() + interval, execute: _tryReconnect)
+        currentReconnectAttempt += 1
+        let attempt = currentReconnectAttempt
+
+        DefaultSocketLogger.Logger.log("Scheduling reconnect attempt \(attempt) in \(interval)s",
+                                       type: SocketManager.logType)
+
+        cancelScheduledReconnect()
+        let timer = DispatchWorkItem { [weak self] in
+            self?.runReconnectAttempt(attempt)
+        }
+        reconnectTimer = timer
+        handleQueue.asyncAfter(deadline: .now() + interval, execute: timer)
     }
 
+    /// The body of JS `Manager.reconnect()`'s timer: `reconnect_attempt`, then
+    /// `open()`, each guarded by `skipReconnect` (here: a manager `disconnect()`).
+    private func runReconnectAttempt(_ attempt: Int) {
+        reconnectTimer = nil
+        guard reconnects && reconnecting && status != .disconnected else { return }
+
+        DefaultSocketLogger.Logger.log("Trying to reconnect (attempt \(attempt))", type: SocketManager.logType)
+
+        // A manager-level event: every subscribed socket of this manager hears
+        // it, whatever its connection state.
+        emitManagerEvent(.reconnectAttempt, data: [attempt])
+
+        // JS: "check again for the case socket closed in above events".
+        guard reconnects && reconnecting && status != .disconnected else { return }
+        // JS `open()` is a no-op while an open is already in flight.
+        guard status != .connecting else { return }
+
+        connect()
+    }
+
+    private func cancelScheduledReconnect() {
+        reconnectTimer?.cancel()
+        reconnectTimer = nil
+    }
+
+    /// JS `backo2` `Backoff.duration()` as socket.io-client configures it:
+    /// `min * factor^attempts`, jittered by up to `randomizationFactor` in either
+    /// direction, capped at `max`. The factor is 2, like JS. Seconds instead of
+    /// milliseconds; the jitter is not truncated so it stays meaningful at 1 s.
     func reconnectInterval(attempts: Int) -> Double {
-        // apply exponential factor
-        let backoffFactor = pow(1.5, attempts)
-        let interval = Double(reconnectWait) * Double(truncating: backoffFactor as NSNumber)
-        // add in a random factor smooth thundering herds
-        let rand = Double.random(in: 0 ..< 1)
-        let randomFactor = rand * randomizationFactor * Double(truncating: interval as NSNumber)
-        // add in random factor, and clamp to min and max values
-        let combined = interval + randomFactor
-        return Double(fmax(Double(reconnectWait), fmin(combined, Double(reconnectWaitMax))))
+        let base = Double(reconnectWait)
+        let maximum = Double(reconnectWaitMax)
+        let exponent = Double(min(max(attempts, 0), 60))
+        var interval = base * pow(2, exponent)
+        guard interval.isFinite else { return maximum }
+        if randomizationFactor > 0 {
+            let rand = Double.random(in: 0 ..< 1)
+            let deviation = rand * randomizationFactor * interval
+            interval = (Int(rand * 10) & 1) == 0 ? interval - deviation : interval + deviation
+        }
+        return min(interval, maximum)
     }
 
     /// Sets manager specific configs.
@@ -769,6 +938,8 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     open func setConfigs(_ config: SocketIOClientConfiguration) {
         for option in config {
             switch option {
+            case let .parserOptions(options):
+                parserOptions = options
             case let .ackTimeout(value):
                 ackTimeout = max(0, value)
             case let .retries(count):

@@ -229,7 +229,6 @@ final class SocketTimedEmitterCallbackTest: XCTestCase {
 // through SocketAckManager.cancelTimedAck(_:fireWith:) so the continuation
 // resumes throwing CancellationError exactly once.
 
-@available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
 final class SocketTimedEmitterAsyncTest: XCTestCase {
     private var manager: SocketManager!
     private var socket: SocketIOClient!
@@ -265,6 +264,7 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
     func testAsyncCancelThrowsCancellationError() async {
         // Capture the socket locally so the spawned Task does not retain self.
         let socket = self.socket!
+        let expectedID = manager.handleQueue.sync { socket.currentAck + 1 }
         let task = Task {
             do {
                 _ = try await socket.timeout(after: 60).emit("ping")
@@ -278,7 +278,10 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
             }
         }
         // Let the await register the timed ack on handleQueue before cancel.
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        guard await waitForTimedAckRegistration(expectedID) else {
+            task.cancel()
+            return
+        }
         task.cancel()
         _ = await task.value
     }
@@ -309,6 +312,128 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
         }
         task.cancel()  // Cancel before the body has a chance to register.
         _ = await task.value  // Must NOT deadlock.
+    }
+
+    /// Observe the actual registration on its owning queue, with a bounded wait.
+    private func waitForTimedAckRegistration(_ id: Int) async -> Bool {
+        let socket = self.socket!
+        let queue = manager.handleQueue
+        let deadline = DispatchTime.now() + .seconds(5)
+        while DispatchTime.now() < deadline {
+            let registered: Bool = await withCheckedContinuation { continuation in
+                queue.async {
+                    continuation.resume(returning: socket.ackHandlers.pendingTimedAckIDs.contains(id))
+                }
+            }
+            if registered { return true }
+            await Task.yield()
+        }
+        XCTFail("Acknowledgement \(id) was not registered")
+        return false
+    }
+
+    /// socket.io-client/test/socket.ts — "should ack with an error upon
+    /// disconnection (promise)": the awaiting Task is rejected instead of being
+    /// left waiting. `.infinity` means only the disconnect can resume it, so a
+    /// regression hangs rather than passing on a stray timer.
+    func testAsyncEmitThrowsDisconnectedOnDisconnect() async {
+        let socket = self.socket!
+        let expectedID = manager.handleQueue.sync { socket.currentAck + 1 }
+        let task = Task { () -> Error? in
+            do {
+                _ = try await socket.timeout(after: .infinity).emit("echo", "a")
+                return nil
+            } catch {
+                return error
+            }
+        }
+        // Let the await register the timed ack on handleQueue before disconnecting.
+        guard await waitForTimedAckRegistration(expectedID) else {
+            task.cancel()
+            return
+        }
+        manager.handleQueue.async { socket.didDisconnect(reason: "test") }
+        let error = await task.value
+        XCTAssertEqual(error as? SocketAckError, .disconnected)
+        manager.handleQueue.sync { XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty) }
+    }
+
+    /// socket.io-client/test/socket.ts — "should ack with an error upon
+    /// disconnection (promise & timeout)": the disconnect wins over the timer.
+    func testAsyncEmitWithTimeoutThrowsDisconnectedOnDisconnect() async {
+        let socket = self.socket!
+        let expectedID = manager.handleQueue.sync { socket.currentAck + 1 }
+        let task = Task { () -> Error? in
+            do {
+                _ = try await socket.timeout(after: 30).emit("echo", "a")
+                return nil
+            } catch {
+                return error
+            }
+        }
+        guard await waitForTimedAckRegistration(expectedID) else {
+            task.cancel()
+            return
+        }
+        manager.handleQueue.async { socket.didDisconnect(reason: "test") }
+        let error = await task.value
+        XCTAssertEqual(error as? SocketAckError, .disconnected)
+    }
+
+    // MARK: socket.ts — "should emit an event and wait for the acknowledgement"
+
+    /// JS `const val = await socket.emitWithAck("echo", 123)`. The ack is
+    /// injected here the way the server would deliver it.
+    func testAsyncEmitWithAckResolvesWithTheServerAck() async {
+        let socket = self.socket!
+        let manager = self.manager!
+
+        let expectedID = manager.handleQueue.sync { socket.currentAck + 1 }
+        let task = Task { try await socket.emitWithAck("echo", 123) }
+        // Let the await register the ack on handleQueue before answering it.
+        guard await waitForTimedAckRegistration(expectedID) else {
+            task.cancel()
+            return
+        }
+        manager.handleQueue.async { socket.handleAck(expectedID, data: [123]) }
+
+        let value = try? await task.value
+        XCTAssertEqual(value?.first as? Int, 123)
+    }
+
+    // MARK: socket.ts > timeout — "should not timeout when the server does acknowledge the event (promise)"
+
+    func testAsyncTimedEmitWithAckDoesNotTimeOutWhenTheServerAcks() async {
+        let socket = self.socket!
+        let manager = self.manager!
+
+        let expectedID = manager.handleQueue.sync { socket.currentAck + 1 }
+        let task = Task { try await socket.timeout(after: 5).emitWithAck("echo", 42) }
+        guard await waitForTimedAckRegistration(expectedID) else {
+            task.cancel()
+            return
+        }
+        manager.handleQueue.async { socket.handleAck(expectedID, data: [42]) }
+
+        do {
+            let value = try await task.value
+            XCTAssertEqual(value.first as? Int, 42)
+        } catch {
+            XCTFail("should not have thrown: \(error)")
+        }
+    }
+
+    /// The mirror image, JS "should timeout when the server does not
+    /// acknowledge the event (promise)", through the JS-named entry point.
+    func testAsyncTimedEmitWithAckTimesOutWhenNoAckArrives() async {
+        do {
+            _ = try await socket.timeout(after: 0.1).emitWithAck("unknown")
+            XCTFail("should have thrown")
+        } catch let error as SocketAckError {
+            XCTAssertEqual(error, .timeout)
+        } catch {
+            XCTFail("wrong error type: \(error)")
+        }
     }
 
     func testAsyncCancelClearsTimedAck() async {

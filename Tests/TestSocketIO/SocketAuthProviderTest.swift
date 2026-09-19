@@ -216,7 +216,6 @@ final class SocketAuthProviderTest: XCTestCase {
 
     // MARK: U-A8 — async provider stale result discarded after clearAuth + new provider install
 
-    @available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
     func testAsyncProviderStaleResultDiscardedAfterClearAuth() {
         // Provider 1 sleeps 200ms then returns ["old": true]. We immediately
         // clearAuth + install a fresh sync provider returning ["new": true].
@@ -287,7 +286,6 @@ final class SocketAuthProviderTest: XCTestCase {
 
     // MARK: U-A9 — async provider throw fires .error and does NOT call completion
 
-    @available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
     func testAsyncProviderThrowFiresErrorClientEvent() {
         struct ProviderError: LocalizedError {
             let errorDescription: String? = "fetch failed"

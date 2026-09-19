@@ -98,14 +98,14 @@ class SocketParserTest: XCTestCase {
     func testGenericParser() {
         var parser = SocketStringReader(message: "61-/swift,")
         XCTAssertEqual(parser.read(count: 1), "6")
-        XCTAssertEqual(parser.currentCharacter, "1")
         XCTAssertEqual(parser.readUntilOccurence(of: "-"), "1")
-        XCTAssertEqual(parser.currentCharacter, "/")
+        XCTAssertEqual(parser.readUntilEnd(), "/swift,")
+        XCTAssertFalse(parser.hasNext)
     }
 
     func validateParseResult(_ message: String) {
         let validValues = SocketParserTest.packetTypes[message]!
-        let packet = try! testManager.parseString(message)
+        let packet = try! manager(for: message).parseString(message)
         let type = String(message.prefix(1))
 
         XCTAssertEqual(packet.type, SocketPacket.PacketType(rawValue: Int(type) ?? -1)!)
@@ -119,12 +119,26 @@ class SocketParserTest: XCTestCase {
         let keys = Array(SocketParserTest.packetTypes.keys)
         measure {
             for item in keys.enumerated() {
-                _ = try! self.testManager.parseString(item.element)
+                _ = try! self.manager(for: item.element).parseString(item.element)
             }
         }
     }
 
-    let testManager = SocketManager(socketURL: URL(string: "http://localhost/")!)
+    /// The fixture table is modern-protocol data; only the ERROR rows below are
+    /// Socket.IO 2 grammar.
+    let testManager = SocketManager(socketURL: URL(string: "http://localhost/")!, config: [])
+
+    /// Socket.IO 2 allowed a primitive or array ERROR payload, and a CONNECT_ERROR
+    /// with no payload at all. The modern protocol only accepts a string or an
+    /// object there — JS decodes the payload-less form but then throws in
+    /// `onpacket`, which its manager reports as the same "parse error".
+    let legacyErrorManager = SocketManager(socketURL: URL(string: "http://localhost/")!, config: [.version(.two)])
+
+    private static let legacyErrorMessages: Set<String> = ["41", "4[1, \"hello\"]", "4/swift,"]
+
+    private func manager(for message: String) -> SocketManager {
+        SocketParserTest.legacyErrorMessages.contains(message) ? legacyErrorManager : testManager
+    }
 
     //Format key: message; namespace-data-binary-id
     static let packetTypes: [String: (String, [Any], [Data], Int)] = [

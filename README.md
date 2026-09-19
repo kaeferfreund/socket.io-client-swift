@@ -1,193 +1,397 @@
-> **Native transport prerelease:** This fork now uses Apple's `URLSessionWebSocketTask` directly. There is no Starscream dependency or runtime fallback. Requires iOS 13 / macOS 10.15 / tvOS 13 / watchOS 6. See [migration and compatibility notes](Documentation/NativeWebSocketTransport.md) before adopting this major prerelease.
-
-[![Swift validation](https://github.com/kaeferfreund/socket.io-client-swift/actions/workflows/swift.yml/badge.svg?branch=feat/native-urlsession-transport)](https://github.com/kaeferfreund/socket.io-client-swift/actions/workflows/swift.yml)
-
 # Socket.IO-Client-Swift
-Socket.IO-client for iOS/OS X.
 
-## Example
-```swift
-import SocketIO
+[![Swift validation](https://github.com/kaeferfreund/socket.io-client-swift/actions/workflows/swift.yml/badge.svg?branch=master)](https://github.com/kaeferfreund/socket.io-client-swift/actions/workflows/swift.yml)
 
-let manager = SocketManager(socketURL: URL(string: "http://localhost:8080")!, config: [.log(true)])
-let socket = manager.defaultSocket
+A Swift Socket.IO client for iOS, macOS, tvOS and watchOS. This fork uses Apple's
+`URLSessionWebSocketTask` directly for WebSockets and a separate `URLSession` for
+HTTP long-polling. **Starscream is no longer a dependency.**
 
-socket.on(clientEvent: .connect) {data, ack in
-    print("socket connected")
-}
-
-socket.on("currentAmount") {data, ack in
-    guard let cur = data[0] as? Double else { return }
-    
-    socket.emitWithAck("canUpdate", cur).timingOut(after: 0) {data in
-        if data.first as? String ?? "passed" == SocketAckStatus.noAck {
-            // Handle ack timeout 
-        }
-
-        socket.emit("update", ["amount": cur + 2.50])
-    }
-
-    ack.with("Got your currentAmount", "dude")
-}
-
-socket.connect()
-```
+The usual `SocketManager` / `SocketIOClient` API remains the entry point. No flag
+or additional transport library is needed to use the native backend. The native
+migration changes some 16.x APIs; see [migration notes](Documentation/NativeWebSocketTransport.md).
 
 ## Features
-- Supports Socket.IO server 2.0+/3.0+/4.0+ (see the [compatibility table](https://nuclearace.github.io/Socket.IO-Client-Swift/Compatibility.html))
-- Supports Binary
-- Supports Polling and WebSockets
-- Supports TLS/SSL
 
-### Auto-connect on `init`
+- HTTP long-polling, polling-to-WebSocket upgrades and WebSocket-only connections.
+- Text and binary events, namespaces, acknowledgements, timeouts and optional retries.
+- Automatic reconnection, authentication payloads/providers and Connection State Recovery when supported by the server.
+- System TLS validation, certificate pinning, custom trust anchors and configurable incoming-packet limits.
 
-```swift
-let manager = SocketManager(socketURL: url, config: [.autoConnect(true)])
-manager.defaultSocket.on(clientEvent: .connect) { _, _ in
-    print("default socket connected")
-}
-```
+## Requirements and server compatibility
 
-Pass `.autoConnect(true)` to make `SocketManager.init` call `defaultSocket.connect()` and open the engine before returning. Defaults to `false` (Swift back-compat — JS reference defaults to `true`). Only the default namespace is auto-joined; namespaces created later via `manager.socket(forNamespace:)` still require explicit `socket.connect()`. Engine I/O begins synchronously inside `init`, matching JS.
+| Requirement | Minimum |
+| --- | --- |
+| Swift tools | 5.5, using the package's Swift 5 language mode |
+| iOS / tvOS | 15 |
+| macOS | 12 |
+| watchOS | 8 |
 
-### Connection State Recovery
-When using a `.version(.three)` manager (the client/protocol mode for Socket.IO 3.x/4.x servers) against a Socket.IO 4.x server with `connectionStateRecovery` enabled, an abrupt transport drop followed by a reconnect can resume the prior session. If the server reports the session as recovered, missed server-to-client events replay on existing handlers and your event listeners fire as if the transport had never dropped.
+The public API is intended for Swift. Strict Swift 6 concurrency compatibility
+and an Objective-C integration are not claimed.
 
-Recovery is only attempted by v3 managers. v2 managers ignore the feature entirely.
+| Socket.IO server | Client configuration | Engine.IO protocol |
+| --- | --- | --- |
+| 3.x / 4.x | `.version(.three)`, the default | 4 |
+| 2.x | `.version(.two)` | 3 |
 
-#### Detecting recovery
-The `connect` client event payload includes `recovered: Bool`. The same flag is also exposed as `socket.recovered` after the CONNECT ack.
-
-```swift
-socket.on(clientEvent: .connect) { data, _ in
-    guard let payload = data.dropFirst().first as? [String: Any] else { return }
-
-    if payload["recovered"] as? Bool == true {
-        // Previous session resumed; missed events have replayed on existing handlers
-    } else {
-        // Fresh session; re-issue any subscription state the server needs
-    }
-}
-```
-
-#### How it works
-- On every successful CONNECT ack the client stores the server-assigned private session id (`pid`) and, for each subsequent event, captures the server's trailing `String` offset argument (bounded to 256 UTF-8 bytes via `SocketIOClient.socketStateRecoveryMaxOffsetBytes`; oversized offsets are dropped with a log line).
-- When the client reconnects it merges `{pid, offset}` into the CONNECT payload. Keys in your own `connectPayload` win on collision with the reserved `pid` / `offset` keys (a log line is emitted if this happens), matching `socket.io-client` JS.
-- Event packets that arrive on the wire *before* the reconnect CONNECT ack are buffered and flushed in order once the ack arrives, so no replayed event is lost to the connect race.
-
-#### Identity changes
-In-memory recovery state is tied to the socket, not to the authenticated user. When the logged-in identity changes, call `clearRecoveryState()` before reconnecting so the next CONNECT does not resume the previous user's stream:
-
-```swift
-socket.clearRecoveryState()
-socket.disconnect()
-socket.connect(withPayload: ["token": newToken])
-```
-
-`clearRecoveryState()` resets `_pid`, `_lastOffset`, `recovered`, and any buffered replay packets. It is an *in-memory* clear only — it does not fence packets already dispatched to handlers, nor packets the server will deliver on the still-live transport before the next CONNECT ack. For a hard identity boundary, also `disconnect()` and reconnect (or create a fresh socket).
-
-As a Swift-only side effect (no JS counterpart), `clearRecoveryState()` fails any outstanding `socket.timeout(after:).emit(...)` callbacks with `SocketAckError.disconnected`, since a successor session would never deliver an ack for an id issued by the prior session.
-
-If you override `disconnect()` in a subclass and want auto-clear, call `clearRecoveryState()` **before** `super.disconnect()` — the `.disconnect` client event fires synchronously from super, and any observer that reconnects from that callback would otherwise send stale `pid`/`offset`.
-
-## FAQS
-Checkout the [FAQs](https://nuclearace.github.io/Socket.IO-Client-Swift/faq.html) for commonly asked questions.
-
-
-Checkout the [12to13](https://nuclearace.github.io/Socket.IO-Client-Swift/12to13.html) guide for migrating to v13+ from v12 below.
-
-Checkout the [15to16](https://nuclearace.github.io/Socket.IO-Client-Swift/15to16.html) guide for migrating to v16+ from v15.
+`.three` also selects the mode for Socket.IO 4.x servers; there is no `.four`
+option. This is a **Socket.IO client**, not a client for an arbitrary WebSocket
+endpoint. Compatibility details and known differences from the JavaScript client
+are recorded in [PARITY.md](PARITY.md).
 
 ## Installation
 
-This native prerelease requires iOS 13, macOS 10.15, tvOS 13 or watchOS 6,
-and a Swift 5-compatible toolchain supporting the package's Swift tools 5.4
-manifest. The checked-in framework project builds against all four Apple SDKs.
-Device/runtime support, particularly watchOS, must still be exercised by adopters.
-
-Use **this fork**, not an upstream 16.x dependency. No native release tag has
-been published yet. The examples below select the development branch; pin the
-reviewed commit in application lockfiles or dependency declarations before use.
+Use **this fork**, rather than an upstream 16.x dependency. `master` is the
+repository's default development branch. To evaluate changes from an unmerged
+pull request, select that PR's head branch or commit instead of `master`.
+Pin a reviewed commit for reproducible application builds.
 
 ### Swift Package Manager
 
-Add this dependency to your package:
+In Xcode, add this package repository and select `master` or a specific commit:
+
+```text
+https://github.com/kaeferfreund/socket.io-client-swift.git
+```
+
+For a `Package.swift` manifest, add:
 
 ```swift
 .package(
     url: "https://github.com/kaeferfreund/socket.io-client-swift.git",
-    .branch("feat/native-urlsession-transport")
+    branch: "master"
 )
 ```
 
-Add `.product(name: "SocketIO", package: "socket.io-client-swift")` to your
-target dependencies, and ensure your package declares the appropriate deployment
-minimum. In Xcode, add the same repository URL and select this branch or a
-reviewed commit. Import the module using `import SocketIO`.
-
-### Carthage
-
-Use this fork in the application's `Cartfile`:
-
-```text
-github "kaeferfreund/socket.io-client-swift" "feat/native-urlsession-transport"
-```
-
-Build with your supported Carthage/Xcode toolchain. Add **only SocketIO** to the
-application. Remove any former Starscream linkage, copy-frameworks entry or
-embedded framework that no other dependency needs. The repository's `Cartfile`
-has no transitive framework dependencies.
+Add `.product(name: "SocketIO", package: "socket.io-client-swift")` to the
+application target's dependencies and declare the applicable deployment minimum.
+To pin a commit in the manifest, replace `branch:` with `revision:` and its full
+commit SHA. Import the library with `import SocketIO`.
 
 ### CocoaPods
 
-Select the fork explicitly instead of the upstream published pod:
+Select the Git source explicitly in your `Podfile`:
 
 ```ruby
 use_frameworks!
 
 target 'YourApp' do
-    pod 'Socket.IO-Client-Swift',
-        :git => 'https://github.com/kaeferfreund/socket.io-client-swift.git',
-        :branch => 'feat/native-urlsession-transport'
+  pod 'Socket.IO-Client-Swift',
+      :git => 'https://github.com/kaeferfreund/socket.io-client-swift.git',
+      :branch => 'master'
 end
 ```
 
-Run `pod install` and import `SocketIO` from Swift. The prerelease podspec and
-SPM manifest use the same deployment minimums. The fork has not been published
-to the CocoaPods registry. The API is Swift-only; Objective-C integration is
-not supported.
+Run `pod install`. For a pinned checkout, use `:commit` instead of `:branch`.
 
-## Native transport configuration and documentation
+### Carthage
 
-Read [NativeWebSocketTransport.md](Documentation/NativeWebSocketTransport.md)
-for the actual runtime architecture, TLS migration, resource limits and breaking
-changes. No configuration flag is needed to activate the native backend.
-Remove `.compress` and `.useCustomEngine(...)` from normal configurations. Migrate
-custom `.security(...)` values to `SocketTLSConfiguration`; unsupported legacy
-SOCKS and trust-all requests are explicitly rejected rather than ignored.
+Add this fork to your application's `Cartfile`:
 
-The checked-in generated `docs/` HTML and the
-[upstream API reference](https://nuclearace.github.io/Socket.IO-Client-Swift/index.html)
-are **historical 16.x documentation**, not an API contract for this prerelease.
-In particular, their concrete `ws`, pinning and compression examples do not
-apply. Use this fork's Swift source documentation and migration guide for the
-changed APIs; generated HTML will need regeneration for a tagged release.
+```text
+github "kaeferfreund/socket.io-client-swift" "master"
+```
 
-## Validation
+Link/embed **SocketIO only**. Remove previous Starscream linkage or copy-frameworks
+entries only when no other application dependency needs them.
 
-`swift test` executes the complete unit and real-server suite. Node is required
-for Socket.IO fixture servers, and OpenSSL generates temporary TLS certificates.
-No roots are installed in the system trust store. `scripts/test-native-transport.sh`
-provides an isolated transport regression suite. On macOS,
-`scripts/test-native-distributions.sh` verifies dependency removal and builds the
-framework with the macOS, iOS Simulator, tvOS Simulator and watchOS Simulator SDKs.
-The CI runs these checks without writing source files or requiring a migration
-step before building.
+## Quick start
 
-## Detailed Example
-A more detailed example can be found [here](https://github.com/nuclearace/socket.io-client-swift-example)
+Run this setup and subsequent client calls on **`DispatchQueue.main`**, the
+default `manager.handleQueue`. Keep the manager as a property of your app or
+another long-lived owner; a socket holds only a weak reference to its manager.
+Replace the example URL and event names with those used by your Socket.IO server.
 
-An example using the Swift Package Manager can be found [here](https://github.com/nuclearace/socket.io-client-swift-spm-example)
+```swift
+import Foundation
+import SocketIO
 
-## License
-MIT
+let manager = SocketManager(
+    socketURL: URL(string: "https://example.com")!,
+    config: [.log(false)]
+)
+let socket = manager.defaultSocket
+
+socket.on(clientEvent: .connect) { _, _ in
+    print("Socket connected")
+}
+
+socket.on(clientEvent: .connectError) { data, _ in
+    print("Connection failed:", data)
+}
+
+socket.on(clientEvent: .error) { data, _ in
+    print("Socket error:", data)
+}
+
+socket.on("message") { data, _ in
+    guard let message = data.first as? String else { return }
+    print("Received:", message)
+}
+
+// Register handlers before opening the connection.
+socket.connect()
+```
+
+To send an event, call `socket.emit("message", "Hello from Swift")` on the same
+queue. Use `socket.disconnect()` when intentionally leaving the namespace.
+Register handlers once, not inside a reconnect handler, to avoid duplicate delivery
+to application callbacks.
+
+For a custom `.handleQueue(...)`, use a **serial** queue and perform setup,
+listener registration and client calls on it. Event handlers run on that queue;
+move UI updates to the main queue as needed. The client is not generally
+thread-safe, even though some individual APIs dispatch internally.
+
+### Connection options
+
+The default connection starts with polling and can upgrade to WebSocket. Use
+`.forceWebsockets(true)` or `.forcePolling(true)` to select only one transport;
+do not enable both. `.path("/socket.io/")` configures the HTTP endpoint, while
+`manager.socket(forNamespace: "/orders")` selects a Socket.IO namespace.
+
+`.autoConnect` defaults to `false`, so the explicit `connect()` above is enough.
+`.autoConnect(true)` starts connection work during manager initialization for the
+default namespace. Other namespaces still require their own `connect()`.
+
+Automatic reconnection is enabled by default for recoverable connection loss.
+The event stream matches the JavaScript client: the drop reports `.disconnect`
+with the real reason, each retry reports `.reconnectAttempt` with its 1-based
+attempt number, a failed retry reports `.reconnectError`, and the cycle ends
+either with `.reconnect` (carrying the attempt number that succeeded, followed
+by `.connect` once the namespace is re-joined) or with `.reconnectFailed`.
+An intentional `disconnect()` requires an explicit `connect()` to rejoin.
+
+```swift
+socket.on(clientEvent: .disconnect)       { data, _ in print("dropped:", data.first ?? "") }
+socket.on(clientEvent: .reconnectAttempt) { data, _ in print("attempt", data.first ?? "") }
+socket.on(clientEvent: .reconnect)        { data, _ in print("back after attempt", data.first ?? "") }
+socket.on(clientEvent: .reconnectFailed)  { _, _ in print("gave up") }
+```
+
+## Acknowledgements and retries
+
+Use a finite timeout when waiting for a server acknowledgement. Timeout values
+in this Swift API are in **seconds**, not JavaScript-style milliseconds.
+
+```swift
+socket.timeout(after: 5).emit("canUpdate", 12.5) { error, data in
+    if let error = error {
+        print("Acknowledgement failed:", error)
+        return
+    }
+
+    print("Server acknowledged:", data)
+}
+```
+
+The server must acknowledge the event for this callback to succeed. A local
+`emit` completion is **not** a server acknowledgement. A timeout also does not
+prove that the server failed to process an event.
+
+`.ackTimeout(5)` sets a default acknowledgement timeout for the error-first
+`emit(..., ack:)` API. `.retries(2)` enables an ordered retry queue with up to two
+retries after the initial attempt. Pair retries with a finite acknowledgement
+timeout, otherwise a missing acknowledgement can block the queue indefinitely.
+Retries can deliver the same event more than once; use application-level IDs and
+server-side deduplication for operations that must not be repeated.
+
+The legacy `emitWithAck(...).timingOut(after:)` API remains available, but its
+callback and timeout contract differs from the error-first and async APIs. See
+[SocketTimedEmitter.swift](Source/SocketIO/Ack/SocketTimedEmitter.swift) and
+[the parity notes](PARITY.md) before mixing those styles.
+
+## Authentication and recovery
+
+For Socket.IO 3.x/4.x servers that accept an authentication payload:
+
+```swift
+socket.connect(withPayload: ["token": "your-access-token"])
+```
+
+The server's namespace middleware must validate that payload. Use `.extraHeaders`
+for HTTP headers or `.connectParams` for URL query parameters instead when required
+by your server. Avoid putting credentials in URLs or enabling debug logging in
+production. Auth providers are available through `setAuth(_:)`; see
+[SocketIOClient.swift](Source/SocketIO/Client/SocketIOClient.swift).
+
+### Connection State Recovery
+
+With a `.version(.three)` manager and a Socket.IO server configured for
+`connectionStateRecovery`, a reconnect after an abrupt transport loss can resume
+a prior session and replay missed server-to-client events. Recovery depends on
+the server accepting the saved session and offset; it is not guaranteed.
+`.version(.two)` does not use recovery.
+
+```swift
+socket.on(clientEvent: .connect) { [weak socket] _, _ in
+    guard let socket = socket else { return }
+    if socket.recovered {
+        print("Previous session recovered")
+    } else {
+        // Re-establish any application subscriptions/state needed for a fresh session.
+        print("Fresh session")
+    }
+}
+```
+
+Register this handler before connecting. `socket.recovered` and the `recovered`
+field in the `.connect` payload describe the latest successful connection.
+Replay events received before that connection completes are buffered and delivered
+through the existing event handlers.
+
+Recovery, disconnected-send and retry state are in memory, not durable storage.
+For an identity change, stop producing events for the old user, replace or clear
+any installed auth provider, and clear the old socket's state before reconnecting:
+
+```swift
+socket.clearRecoveryState()
+socket.disconnect()
+socket.connect(withPayload: ["token": "new-access-token"])
+```
+
+`clearRecoveryState()` drops recovery state, buffered replay, queued sends and
+retries, and fails affected timed acknowledgements with `SocketAckError.disconnected`.
+It does not retract events already delivered to application handlers or by itself
+close the live connection. Ensure disconnect/ack handlers do not reconnect using
+the old credentials or enqueue new old-user work during the switch.
+
+## Breaking changes in 17.0.0
+
+This major prerelease moves behaviour that used to be Swift-specific onto the
+JavaScript client's contract. Everything below changes an observable API; see
+[the changelog](CHANGELOG.md) for the reasoning and
+[the parity review](Documentation/ProtocolParityReview.md) for the ported tests.
+
+| Change | Before | Now |
+| --- | --- | --- |
+| `.reconnect` | Fired when reconnection **started**, payload was the disconnect reason. | Fires when a reconnection **succeeded**, payload is the 1-based attempt number (JS `reconnect`). |
+| `.reconnectAttempt` | Payload was the number of attempts **remaining**. | Payload is the 1-based number of the attempt being made (JS `reconnect_attempt`). |
+| `.disconnect` on a retried drop | Not emitted; the reason arrived with `.reconnect`. | Emitted with the real reason (`transport close`, `ping timeout`, `parse error`, …), as JS `Socket.onclose` does. |
+| Reconnect exhaustion | `.disconnect("Reconnect Failed")`. | New `.reconnectFailed` (no payload). The sockets already got their real `.disconnect`. |
+| Per-attempt failure | Nothing. | New `.reconnectError` with the reason. |
+| Reconnect timing | The first attempt ran **immediately** after a drop; `reconnectWait` (default 10 s, max 30 s, factor 1.5) only spaced the *following* attempts. A drop right after each successful handshake therefore produced a tight reconnect loop. | Every attempt waits for its backoff delay first, like JS `Manager.reconnect()`: `reconnectWait` defaults to 1 s (JS `reconnectionDelay`), `reconnectWaitMax` to 5 s (JS `reconnectionDelayMax`), the factor is 2 and the jitter goes both ways. A manager `disconnect()` cancels a pending attempt. |
+| Last socket disconnects | The manager kept its engine and a running reconnect loop alive. | The manager closes when no socket of it is `active` any more (JS `Manager._destroy` → `_close()`), which also stops the reconnect loop. |
+| WebSocket failure under an established connection | Only `.disconnect("transport error")`; the native error, close code and reason were dropped. | The `.error` client event carries `domain/code: description`, the underlying error, the close code and the close reason (JS engine.io-client `_onError` → `error`, then `_onClose`). |
+| Unencodable emit payload | Silently sent a different packet with an empty payload (`2[]`). | Throws `SocketPacketError`: the `.error` client event carries it, any acknowledgement settles once with it, and no packet is written, buffered or queued. |
+| `Date` in an emit | Not a `SocketData`, and unencodable if forced through. | Encodes as the ISO-8601 string `JSON.stringify` produces (`2024-01-02T03:04:05.678Z`), nested at any depth. |
+| Non-finite `Double` in an emit | Made the whole payload unencodable. | Encodes as `null`, like `JSON.stringify(NaN)`. |
+| `Data` through `rawEmitView` | Silently sent an empty payload. | Throws `SocketPacketError.unsupportedValue`; that view deliberately does not shred binary into attachments. |
+| Server-URL query string | Discarded when the engine built its transport URLs. | Used as the connection query, unless `.connectParams` is set (JS `if (parsed.query && !opts.query)`). |
+| JSON object key order | Arbitrary, varied between runs. | Sorted, so the wire output is reproducible. A Swift `Dictionary` has no insertion order to preserve, and JSON object order carries no meaning. |
+
+Additions that are not breaking: `async` `socket.emitWithAck(_:_:)` and
+`socket.timeout(after:).emitWithAck(_:_:)`, `SocketPacket.encodedPacketString()`
+(the throwing encoder) and `SocketPacketError`.
+
+## TLS and migration from Starscream
+
+An `https://` URL uses normal system certificate validation for both polling and
+WebSocket. No custom TLS configuration is needed for a normally trusted server.
+For pinning or a private CA, configure `.security(...)` with
+`SocketTLSConfiguration`. Its certificate data is DER-encoded; custom trust anchors
+and pins do not disable hostname, validity-period or chain checks.
+See [TLS configuration examples](Documentation/NativeWebSocketTransport.md#tls).
+
+| Previous API/option | Native behavior |
+| --- | --- |
+| `.security(CertificatePinning)` | Migrate to `SocketTLSConfiguration`. |
+| `SocketEngine.ws` / `SocketEngineSpec.ws` | Removed; the transport is internal. |
+| `.useCustomEngine(...)` | Deprecated, has no effect; remove it. |
+| `.compress` | Unsupported, produces a connection configuration error. |
+| `.selfSigned(true)` | Unsupported; configure explicit custom trust anchors instead. |
+| `.enableSOCKSProxy(true)` | Unsupported, produces a configuration error instead of silently connecting directly. |
+
+External `.sessionDelegate` callbacks cannot override the configured server-trust
+policy. Native compression controls, SOCKS routing and WebTransport are not
+provided by this fork.
+
+## Optional parser limits
+
+No custom parser configuration is required for normal use. The current defaults
+are defined in [SocketParserOptions](Source/SocketIO/Parse/SocketParsable.swift):
+
+| Setting | Default |
+| --- | --- |
+| Binary attachments per packet | 10 |
+| Socket.IO text packet bytes | `Int.max`, no configured byte cap |
+| Combined binary reconstruction bytes | `Int.max`, no configured byte cap |
+| JSON nesting depth | 512; configurable from 1 to 1024 |
+
+The nesting check protects Foundation's JSON decoder from excessively deep input.
+It is a deliberate acceptance limit, not a claim of identical JavaScript behavior.
+All configured byte/count limits must be positive. Invalid settings are rejected
+before connecting.
+
+To opt into smaller packet budgets, pass `.parserOptions` when creating the manager:
+
+```swift
+let parserOptions = SocketParserOptions(
+    maximumBinaryPacketBytes: 1 << 20,
+    maximumTextPacketBytes: 1 << 20
+)
+let manager = SocketManager(
+    socketURL: URL(string: "https://example.com")!,
+    config: [.parserOptions(parserOptions)]
+)
+```
+
+These optional 1 MiB limits apply to incoming Socket.IO packets on both transports.
+They are **separate** from `.webSocketOptions`: by default the native WebSocket
+transport limits each incoming message to 16 MiB and pending outgoing payload to
+16 MiB, 1024 batches and 4096 messages. See
+[SocketWebSocketOptions](Source/SocketIO/Engine/Transport/SocketWebSocketOptions.swift).
+The server's Engine.IO `maxPayload` separately governs outgoing polling batches.
+
+None of these settings is a total application-memory limit. In particular,
+disconnected-send and retry queues can grow while offline; avoid producing an
+unbounded stream of reliable events during long outages. Use `socket.volatile`
+only for updates that may safely be dropped.
+
+## Testing and JavaScript parity
+
+From a macOS checkout with a Swift toolchain, Node/npm and OpenSSL available:
+
+```sh
+swift build
+swift test
+```
+
+The suite includes unit tests and real Socket.IO / HTTPS / WSS fixture servers.
+TLS tests generate temporary certificates without installing system trust roots.
+Additional checks are available through:
+
+```sh
+bash scripts/test-native-transport.sh
+bash scripts/test-native-distributions.sh
+bash scripts/test-parser-safety.sh
+```
+
+The [Swift workflow](.github/workflows/swift.yml) also runs polling wire proofs
+and a differential against a pinned official JavaScript implementation, in both
+directions: the real upstream decoder reads seeded vectors alongside this
+client's decoder, and the packets this client encodes are read back by that same
+upstream decoder.
+Check the CI run for the exact commit you use, not a historical test count.
+SDK builds cover macOS and the iOS/tvOS/watchOS simulators; they do not replace
+runtime testing in your application on physical devices and across network changes.
+
+The complete upstream JavaScript test suite has **not** been ported, and full
+behavioral equivalence has not been established. The finite decoder comparison
+is not a guarantee for
+all connection, acknowledgement or recovery scenarios. See [PARITY.md](PARITY.md),
+[the test inventory](Documentation/JavaScriptTestInventory.csv) and
+[the protocol review](Documentation/ProtocolParityReview.md) for the evidence,
+known differences and outstanding work.
+
+## Documentation and license
+
+[Native migration guide](Documentation/NativeWebSocketTransport.md) ·
+[Changelog](CHANGELOG.md) · [CodeRabbit audit](Documentation/CodeRabbitAudit.md)
+
+The generated `docs/` HTML and older upstream examples describe the historical
+16.x API. Use this checkout's Swift source and migration notes for current
+transport and security APIs.
+
+Based on [socketio/socket.io-client-swift](https://github.com/socketio/socket.io-client-swift).
+Licensed under [MIT](LICENSE).

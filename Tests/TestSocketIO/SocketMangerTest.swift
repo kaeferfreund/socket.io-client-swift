@@ -14,8 +14,8 @@ class SocketMangerTest : XCTestCase {
         XCTAssertFalse(manager.forceNew)
         XCTAssertEqual(manager.handleQueue, DispatchQueue.main)
         XCTAssertTrue(manager.reconnects)
-        XCTAssertEqual(manager.reconnectWait, 10)
-        XCTAssertEqual(manager.reconnectWaitMax, 30)
+        XCTAssertEqual(manager.reconnectWait, 1, "JS reconnectionDelay: 1000 ms")
+        XCTAssertEqual(manager.reconnectWaitMax, 5, "JS reconnectionDelayMax: 5000 ms")
         XCTAssertEqual(manager.randomizationFactor, 0.5)
         XCTAssertEqual(manager.status, .notConnected)
     }
@@ -31,18 +31,20 @@ class SocketMangerTest : XCTestCase {
     }
 
     func testBackoffIntervalCalulation() {
-        XCTAssertLessThanOrEqual(manager.reconnectInterval(attempts: -1), Double(manager.reconnectWaitMax))
-        XCTAssertLessThanOrEqual(manager.reconnectInterval(attempts: 0), 15)
-        XCTAssertLessThanOrEqual(manager.reconnectInterval(attempts: 1), 22.5)
-        XCTAssertLessThanOrEqual(manager.reconnectInterval(attempts: 2), 33.75)
-        XCTAssertLessThanOrEqual(manager.reconnectInterval(attempts: 50), Double(manager.reconnectWaitMax))
-        XCTAssertLessThanOrEqual(manager.reconnectInterval(attempts: 10000), Double(manager.reconnectWaitMax))
-
-        XCTAssertGreaterThanOrEqual(manager.reconnectInterval(attempts: -1), Double(manager.reconnectWait))
-        XCTAssertGreaterThanOrEqual(manager.reconnectInterval(attempts: 0), Double(manager.reconnectWait))
-        XCTAssertGreaterThanOrEqual(manager.reconnectInterval(attempts: 1), 15)
-        XCTAssertGreaterThanOrEqual(manager.reconnectInterval(attempts: 2), 22.5)
-        XCTAssertGreaterThanOrEqual(manager.reconnectInterval(attempts: 10000), Double(manager.reconnectWait))
+        // JS backo2: min * 2^attempts, jittered by up to randomizationFactor in
+        // either direction, capped at max (1 s base, 5 s cap, factor 0.5).
+        for _ in 0..<50 {
+            XCTAssertLessThanOrEqual(manager.reconnectInterval(attempts: -1), 1.5)
+            XCTAssertGreaterThanOrEqual(manager.reconnectInterval(attempts: -1), 0.5)
+            XCTAssertLessThanOrEqual(manager.reconnectInterval(attempts: 0), 1.5)
+            XCTAssertGreaterThanOrEqual(manager.reconnectInterval(attempts: 0), 0.5)
+            XCTAssertLessThanOrEqual(manager.reconnectInterval(attempts: 1), 3)
+            XCTAssertGreaterThanOrEqual(manager.reconnectInterval(attempts: 1), 1)
+            XCTAssertLessThanOrEqual(manager.reconnectInterval(attempts: 2), Double(manager.reconnectWaitMax))
+            XCTAssertGreaterThanOrEqual(manager.reconnectInterval(attempts: 2), 2)
+            XCTAssertEqual(manager.reconnectInterval(attempts: 50), Double(manager.reconnectWaitMax))
+            XCTAssertEqual(manager.reconnectInterval(attempts: 10000), Double(manager.reconnectWaitMax))
+        }
     }
 
     func testManagerCallsConnect() {

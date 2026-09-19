@@ -153,8 +153,10 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         /// Per-attempt ack timeout. `nil` means wait indefinitely for the ack
         /// (the attempt can still be interrupted by a disconnect).
         let attemptTimeout: Double?
+        let writeCompletion: (() -> Void)?
         var tryCount = 0
         var pending = false
+        var ackID: Int?
     }
 
     /// Emits made while `retries` is active, in the order they were made.
@@ -194,11 +196,9 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// (where the bypass guard normally fires).
     internal var hasAuthProvider: Bool { authProvider != nil }
 
-    /// Type-erased cancel handle for the in-flight async auth `Task`. Storing the
-    /// raw `Task<...>` would require iOS 13 / macOS 10.15 availability on the
-    /// property declaration; capturing `task.cancel` here keeps the property
-    /// availability-neutral and confines the `Task` reference to the async
-    /// overload of `setAuth(_:)`.
+    /// Type-erased cancel handle for the in-flight async auth `Task`. Capturing
+    /// `task.cancel` here confines the `Task` reference to the async overload of
+    /// `setAuth(_:)`.
     private var pendingAuthTask: (() -> Void)?
 
     /// Monotonic generation token bumped on `connect`, `setAuth`, and `clearAuth`.
@@ -354,6 +354,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // this is the identity-swap path, and delivering the previous user's
         // queued events into the successor session would leak them across
         // identities. Their acks are therefore failed like any other.
+        let retiringAckIDs = ackHandlers.pendingTimedAckIDs
         clearSendBuffer()
         // The retry queue follows the same rule: the previous identity's
         // unacknowledged emits must not be delivered (or retried) under the
@@ -363,7 +364,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         clearRetriableQueue()
 
         manager?.handleQueue.async { [weak self] in
-            self?.ackHandlers.clearTimedAcks(reason: .disconnected)
+            self?.ackHandlers.clearTimedAcks(reason: .disconnected, only: retiringAckIDs)
         }
     }
 
@@ -391,7 +392,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     }
 
     private func dispatchEvent(_ event: String, data: [Any], withAck ack: Int) {
-        DefaultSocketLogger.Logger.log("Handling event: \(event) with data: \(data)", type: logType)
+        DefaultSocketLogger.Logger.log("Handling event: \(event) with \(data.count) data item(s)", type: logType)
 
         anyHandler?(SocketAnyEvent(event: event, items: data))
 
@@ -488,6 +489,10 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         status = .disconnected
         sid = ""
 
+        // Snapshot before invoking reentrant listeners. A delayed teardown must
+        // never sweep a new acknowledgement registered by a replacement connect.
+        let retiringAckIDs = ackHandlers.pendingTimedAckIDs
+        let stillBuffered = bufferedAckIds
         handleClientEvent(.disconnect, data: [reason])
 
         // Phase 9: fail any in-flight timed acks with .disconnected. Dispatched
@@ -500,10 +505,8 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // JS `_clearAcks` skips acks whose packet is still in the send buffer:
         // that packet has not been sent yet, so its ack is still owed once the
         // socket reconnects and the buffer is flushed.
-        let stillBuffered = bufferedAckIds
-
         manager?.handleQueue.async { [weak self] in
-            self?.ackHandlers.clearTimedAcks(reason: .disconnected, keeping: stillBuffered)
+            self?.ackHandlers.clearTimedAcks(reason: .disconnected, keeping: stillBuffered, only: retiringAckIDs)
         }
     }
 
@@ -517,8 +520,9 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
 
     /// Disconnects the socket.
     ///
-    /// This will cause the socket to leave the namespace it is associated to, as well as remove itself from the
-    /// `manager`.
+    /// Leaves this namespace and deactivates automatic reconnection. The manager keeps
+    /// the cached socket so a later connect() can reuse this instance. Use the manager
+    /// disconnectSocket(_:) API when the namespace must also be removed from its cache.
     open func disconnect() {
         self.active = false
         DefaultSocketLogger.Logger.log("Closing socket", type: logType)
@@ -549,15 +553,20 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     open func emit(_ event: String, with items: [SocketData], completion: (() -> ())?) {
 
         do {
-            let mapped = [event] + (try items.map({ try $0.socketRepresentation() }))
+            // JS-aligned: `JSON.stringify` runs on the payload and throws for
+            // anything it cannot represent, so the failure happens here —
+            // before the retry queue or the send buffer take ownership.
+            let mapped = try SocketPacket.jsonSafeEmitData(
+                [event] + (try items.map({ try $0.socketRepresentation() })), allowBinary: true
+            )
 
             // JS `emit()`: with `retries` set, EVERY emit goes through the
             // queue (`_addToQueue`), ack or not.
-            if enqueueRetriableIfActive(mapped, userAck: nil) { return }
+            if enqueueRetriableIfActive(mapped, userAck: nil, completion: completion) { return }
 
             emit(mapped, completion: completion)
         } catch {
-            DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event), \(items)",
+            DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event): \(error)",
                                              type: logType)
 
             handleClientEvent(.error, data: [event, items, error])
@@ -595,31 +604,53 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// - parameter ack: The err-first ack callback.
     open func emit(_ event: String, with items: [SocketData], ack: @escaping (Error?, [Any]) -> Void) {
         do {
-            let mapped = [event] + (try items.map({ try $0.socketRepresentation() }))
+            let mapped = try SocketPacket.jsonSafeEmitData(
+                [event] + (try items.map({ try $0.socketRepresentation() })), allowBinary: true
+            )
 
             // JS `emit()`: with `retries` set, the queue takes over and the
-            // per-attempt timeout is `flags.timeout ?? ackTimeout`. The
+            // per-attempt timeout is `flags.timeout ?? ackTimeout` — which is
+            // exactly what `enqueueRetriableIfActive` defaults to. The
             // `flags.timeout` variant arrives through `emitTimed` below.
-            if let defaultTimeout = (manager as? SocketManager)?.ackTimeout {
-                if enqueueRetriableIfActive(mapped, userAck: ack, attemptTimeout: defaultTimeout) { return }
-            } else {
-                if enqueueRetriableIfActive(mapped, userAck: ack) { return }
-            }
+            if enqueueRetriableIfActive(mapped, userAck: ack) { return }
 
             if let defaultTimeout = (manager as? SocketManager)?.ackTimeout {
-                timeout(after: defaultTimeout).emit(event, with: items, ack: ack)
+                emitTimed(event: event, items: [], timeout: defaultTimeout, mappedItems: mapped, ack: ack)
 
                 return
             }
 
-            createOnAck(mapped).timingOut(after: 0) { data in
-                ack(nil, data)
+            // Modern no-timeout acks are removed silently on disconnect, unlike
+            // the deliberately retained legacy OnAckCallback API. A missing
+            // manager or a released socket can never deliver the ack, so report
+            // it as `emitTimed` does instead of dropping the callback.
+            guard let queue = manager?.handleQueue else {
+                ack(SocketAckError.disconnected, [])
+                return
+            }
+            performAckRegistration { [weak self] in
+                guard let self = self else {
+                    ack(SocketAckError.disconnected, [])
+                    return
+                }
+                guard !self.failIfReserved(mapped) else {
+                    ack(NSError(domain: "SocketIO.Emit", code: 1,
+                                userInfo: [NSLocalizedDescriptionKey: "Reserved event name: " + event]), [])
+                    return
+                }
+                let id = self.allocateAckId()
+                self.ackHandlers.addTimedAck(id, on: queue, callback: ack,
+                                            timeout: .infinity, notifyOnDisconnect: false)
+                self.emit(mapped, ack: id)
             }
         } catch {
-            DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event), \(items)",
+            DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event): \(error)",
                                              type: logType)
 
             handleClientEvent(.error, data: [event, items, error])
+            // The caller asked for an acknowledgement; a packet that never
+            // leaves has to settle it exactly once, with the encoding error.
+            ack(error, [])
         }
     }
 
@@ -668,9 +699,11 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     open func emitWithAck(_ event: String, with items: [SocketData]) -> OnAckCallback {
 
         do {
-            return createOnAck([event] + (try items.map({ try $0.socketRepresentation() })))
+            return createOnAck(try SocketPacket.jsonSafeEmitData(
+                [event] + (try items.map({ try $0.socketRepresentation() })), allowBinary: true
+            ))
         } catch {
-            DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event), \(items)",
+            DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event): \(error)",
                                              type: logType)
 
             handleClientEvent(.error, data: [event, items, error])
@@ -732,7 +765,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         emit(data, ack: nil, binary: true, isAck: false, volatile: true, completion: completion)
     }
 
-    func emit(_ data: [Any],
+    func emit(_ unsafeData: [Any],
               ack: Int? = nil,
               binary: Bool = true,
               isAck: Bool = false,
@@ -751,7 +784,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // where `emit()` throws regardless of connection state. isAck=true frames
         // (ack response packets) bypass the guard because their first item is the
         // ack id, not an event name.
-        if !isAck, failIfReserved(data) {
+        if !isAck, failIfReserved(unsafeData) {
             wrappedCompletion?()
             return
         }
@@ -759,12 +792,33 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // Phase 7: volatile gate — JS-aligned per `socket.io-client/lib/socket.ts`
         // `emit()` body which sets `discardPacket = volatile && !transport.writable`.
         // Drop is silent: no .error, no outgoing listener fire, no buffering.
+        // It runs before the encoder for the same reason it does in JS: a
+        // discarded packet is never encoded, so it cannot report an encoding
+        // error either.
         if volatile, !(manager?.engine?.writable ?? false) {
             DefaultSocketLogger.Logger.log(
                 "volatile packet dropped (transport not writable)",
                 type: logType
             )
             wrappedCompletion?()
+            return
+        }
+
+        // Last-resort encoder gate. The public entry points already validated
+        // (and normalized) their payload so their acks can carry the error;
+        // this covers the paths that build `[Any]` directly — `rawEmitView`,
+        // the Objective-C ack views — and guarantees nothing unencodable is
+        // ever buffered or written. Re-validating an already-normalized array
+        // is a no-op.
+        let data: [Any]
+        do {
+            data = try SocketPacket.jsonSafeEmitData(unsafeData, allowBinary: binary)
+        } catch {
+            DefaultSocketLogger.Logger.error("Error encoding emit: \(error)", type: logType)
+
+            wrappedCompletion?()
+            handleClientEvent(.error, data: [error])
+
             return
         }
 
@@ -776,7 +830,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // this fork deliberately reports them as an error rather than dropping
         // them silently. Replaying an ack for an event the server handled in a
         // session that no longer exists would be meaningless anyway.
-        guard status == .connected else {
+        guard status == .connected, manager?.engine?.hasPingExpired != true else {
             guard !isAck else {
                 wrappedCompletion?()
                 handleClientEvent(.error, data: ["Tried emitting when not connected"])
@@ -806,7 +860,20 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
                             completion: (() -> ())?
     ) {
         let packet = SocketPacket.packetFromEmit(data, id: ack ?? -1, nsp: nsp, ack: isAck, checkForBinary: binary)
-        let str = packet.packetString
+        let str: String
+        do {
+            str = try packet.encodedPacketString()
+        } catch {
+            // Unreachable from the emit entry points, which validate the
+            // payload before anything is buffered, queued or written. Kept so a
+            // future caller cannot reintroduce the silent empty-payload packet.
+            DefaultSocketLogger.Logger.error("Refusing to send an unencodable packet: \(error)", type: logType)
+
+            completion?()
+            handleClientEvent(.error, data: [error])
+
+            return
+        }
 
         DefaultSocketLogger.Logger.log("Emitting: \(str), Ack: \(isAck)", type: logType)
 
@@ -888,16 +955,44 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// each retry attempt re-registers a fresh ack — the caller's ack is stored
     /// on the queue entry and fired once on final success or discard.
     func enqueueRetriableIfActive(_ data: [Any], userAck: ((Error?, [Any]) -> Void)?,
-                                  attemptTimeout: Double? = nil) -> Bool {
+                                  attemptTimeout: Double? = nil,
+                                  completion: (() -> Void)? = nil) -> Bool {
         guard activeRetries > 0, !data.isEmpty else { return false }
-
+        if failIfReserved(data) {
+            if let completion = completion { manager?.handleQueue.async(execute: completion) }
+            userAck?(NSError(domain: "SocketIO.Emit", code: 1,
+                             userInfo: [NSLocalizedDescriptionKey: "Reserved event name"]), [])
+            return true
+        }
+        let timeout = attemptTimeout ?? (manager as? SocketManager)?.ackTimeout
+        // Implicit acknowledgements need a finite deadline: without a server ack,
+        // an unlimited wait would block every subsequent retry-queue entry.
+        // Explicit acknowledgement APIs retain their existing no-timeout contract.
+        if userAck == nil {
+            guard let timeout = timeout, timeout.isFinite, timeout >= 0 else {
+                let error = NSError(domain: "SocketIO.Emit", code: 2, userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Retried emits without an acknowledgement callback require a finite, non-negative ackTimeout"
+                ])
+                DefaultSocketLogger.Logger.error(error.localizedDescription, type: logType)
+                if let completion = completion { manager?.handleQueue.async(execute: completion) }
+                handleClientEvent(.error, data: [data[0], Array(data.dropFirst()), error])
+                // Consume the rejected emit so the caller cannot buffer or send it.
+                return true
+            }
+        }
+        let writeCompletion: (() -> Void)? = completion.map { callback in
+            let queue = manager?.handleQueue
+            let once = SocketOnce<Void> { _ in queue?.async(execute: callback) }
+            return { once.call(()) }
+        }
         DefaultSocketLogger.Logger.log("Queueing retriable emit: \(data)", type: logType)
 
         retryQueueLock.lock()
         retryQueueSeq += 1
         let queueId = retryQueueSeq
         retryQueue.append(RetriableEmit(queueId: queueId, data: data, userAck: userAck,
-                                        attemptTimeout: attemptTimeout))
+                                        attemptTimeout: timeout, writeCompletion: writeCompletion))
         retryQueueLock.unlock()
 
         // JS `_addToQueue` ends with `_drainQueue()`; the drain itself gates on
@@ -930,18 +1025,20 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             return
         }
 
+        let supersededAckID = head.ackID
+        let id = allocateAckId()
         head.pending = true
         head.tryCount += 1
+        head.ackID = id
         retryQueue[0] = head
         retryQueueLock.unlock()
+        if let oldID = supersededAckID { ackHandlers.cancelTimedAck(oldID) }
 
         // Each attempt is a fresh packet with a fresh ack id, exactly like the
         // JS re-emit through `emit()` with the `fromQueue` flag: the id is
         // allocated per attempt, the ack callback fires once (timeout / server
         // ack / disconnect), and a late ack for a superseded attempt is a
         // no-op because its entry is gone.
-        let id = allocateAckId()
-
         DefaultSocketLogger.Logger.log(
             "Sending retriable emit [\(head.queueId)] (try #\(head.tryCount))", type: logType
         )
@@ -952,20 +1049,20 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         }
         if let manager = manager {
             // An absent timeout (`nil`) registers an ack timer that never
-            // fires: JS registers a plain ack then, which also never times out
-            // — but a disconnect still interrupts it (JS `_clearAcks`), which
-            // the timed-ack clearing provides.
+            // fires. A disconnect removes that plain registration silently;
+            // reconnect force-drains the retained queue head with a new ID.
             ackHandlers.addTimedAck(id, on: manager.handleQueue, callback: internalAck,
-                                    timeout: head.attemptTimeout ?? .infinity)
+                                    timeout: head.attemptTimeout ?? .infinity,
+                                    notifyOnDisconnect: head.attemptTimeout != nil)
         }
-        sendPacket(head.data, ack: id, binary: true, isAck: false, completion: nil)
+        sendPacket(head.data, ack: id, binary: true, isAck: false, completion: head.writeCompletion)
     }
 
     /// The queue's internal ack — JS `_addToQueue`'s appended callback.
     /// Only the head packet is in flight, so an ack for anything else is stale.
     private func handleQueueAck(queueId: Int, ackId: Int, error: Error?, data: [Any]) {
         retryQueueLock.lock()
-        guard let head = retryQueue.first, head.queueId == queueId else {
+        guard let head = retryQueue.first, head.queueId == queueId, head.ackID == ackId else {
             retryQueueLock.unlock()
             DefaultSocketLogger.Logger.log("Retriable emit [\(queueId)] already acknowledged", type: logType)
             return
@@ -977,6 +1074,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             guard head.tryCount > activeRetries else {
                 var retried = head
                 retried.pending = false
+                retried.ackID = nil
                 retryQueue[0] = retried
                 retryQueueLock.unlock()
                 drainRetriableQueue(force: false)
@@ -1008,9 +1106,10 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// behind the drain instead of racing it (JS retry.ts "should not emit a
     /// packet twice in the 'connect' handler").
     private func drainRetriableQueueOnConnect() {
-        manager?.handleQueue.async { [weak self] in
-            self?.drainRetriableQueue(force: true)
-        }
+        // The drain must stay synchronous: deferring it would resend a packet
+        // emitted from the new connect handler (JS `onconnect` drains before
+        // `connect`). didConnect is already confined to handleQueue.
+        drainRetriableQueue(force: true)
     }
 
     /// Drops every queued retriable emit, failing its user ack with
@@ -1022,7 +1121,17 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         retryQueue.removeAll(keepingCapacity: false)
         retryQueueLock.unlock()
 
+        // `cancelTimedAck` must run on the owning handleQueue; the public
+        // `clearRecoveryState()` reaches here without that precondition. Order
+        // it before the `clearTimedAcks` dispatch that follows in the callers.
+        let cancelIDs = dropped.compactMap { $0.ackID }
+        if !cancelIDs.isEmpty {
+            manager?.handleQueue.async { [weak self] in
+                for id in cancelIDs { self?.ackHandlers.cancelTimedAck(id) }
+            }
+        }
         for entry in dropped {
+            entry.writeCompletion?()
             entry.userAck?(SocketAckError.disconnected, [])
         }
     }
@@ -1139,7 +1248,14 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
 
     /// Call when you wish to leave a namespace and disconnect this socket.
     open func leaveNamespace() {
-        manager?.disconnectSocket(self)
+        if let manager = manager as? SocketManager {
+            // JS keeps its namespace cache across a client disconnect so connect()
+            // can reuse the same instance. Explicit manager removal is a separate API.
+            // The active flag still determines whether the engine must stay alive.
+            manager.disconnectSocket(self, removeFromManager: false)
+        } else {
+            manager?.disconnectSocket(self)
+        }
     }
 
     /// Joins `nsp`. You shouldn't need to call this directly, instead call `connect`.
@@ -1356,14 +1472,28 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         handlers.removeAll(keepingCapacity: false)
     }
 
-    /// Puts the socket back into the connecting state.
-    /// Called when the manager detects a broken connection, or when a manual reconnect is triggered.
+    /// Puts the socket back into the connecting state and reports the drop.
+    /// Called when the manager detects a broken connection, or when a manual
+    /// reconnect is triggered.
+    ///
+    /// JS-aligned with `Socket.onclose` in `socket.io-client/lib/socket.ts`
+    /// (`connected = false; delete this.id; emitReserved("disconnect", reason)`).
+    /// The socket keeps `active`, and Swift parks it in `.connecting` rather
+    /// than `.disconnected` because that is what makes `SocketManager`
+    /// re-join the namespace once the transport is back.
+    ///
+    /// **Changed in 17.0.0**: this used to emit `.reconnect` with the reason.
+    /// `.reconnect` now means a *successful* reconnection and carries the
+    /// attempt number, exactly as in JS.
     ///
     /// - parameter reason: The reason this socket is reconnecting.
     open func setReconnecting(reason: String) {
         status = .connecting
+        // Same cleared-id convention as `didDisconnect`, which is what
+        // `testSocketIdIsClearedOnDisconnect` pins.
+        sid = ""
 
-        handleClientEvent(.reconnect, data: [reason])
+        handleClientEvent(.disconnect, data: [reason])
     }
 
     // Test properties
@@ -1445,12 +1575,10 @@ public extension SocketIOClient {
 /// `SocketIOClient` reference through the `@Sendable` `Task { }` boundary
 /// in `setAuth(_:)`'s async overload. Safe because the boxed reference is
 /// only dereferenced on `handleQueue` after an `async` hop.
-@available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
 private struct WeakClientBox: @unchecked Sendable {
     weak var ref: SocketIOClient?
 }
 
-@available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
 public extension SocketIOClient {
     /// Async/throws variant of `setAuth(_:)`. The async closure is invoked on
     /// every CONNECT (initial + reconnect) and its return value is used as the
@@ -1547,6 +1675,35 @@ extension SocketIOClient {
 // MARK: Phase 9 — timed-emit per-emit ack with typed SocketAckError
 
 public extension SocketIOClient {
+    /// Emits an event and awaits the server's acknowledgement, JS-aligned with
+    /// `socket.emitWithAck(ev, ...args)` in `socket.io-client/lib/socket.ts`.
+    ///
+    /// The wait is bounded by `SocketManager.ackTimeout` when one is configured
+    /// — exactly the `flags.timeout ?? _opts.ackTimeout` rule JS applies.
+    ///
+    /// **Deviation from JS:** without an `ackTimeout`, a disconnect throws
+    /// `SocketAckError.disconnected` instead of leaving the call pending
+    /// forever (JS resolves such a promise never). A Swift continuation has to
+    /// be resumed exactly once, so "never" is not an option.
+    ///
+    /// - parameter event: The event to send.
+    /// - parameter items: The items to send with this event. May be left out.
+    /// - returns: The acknowledgement arguments sent back by the server.
+    func emitWithAck(_ event: String, _ items: SocketData...) async throws -> [Any] {
+        return try await emitWithAck(event, with: items)
+    }
+
+    /// Array form of the async `emitWithAck`.
+    ///
+    /// - parameter event: The event to send.
+    /// - parameter items: The items to send with this event.
+    /// - returns: The acknowledgement arguments sent back by the server.
+    func emitWithAck(_ event: String, with items: [SocketData]) async throws -> [Any] {
+        let ackTimeout = (manager as? SocketManager)?.ackTimeout ?? .infinity
+
+        return try await timeout(after: ackTimeout).emitWithAck(event, with: items)
+    }
+
     /// Returns a chainable `SocketTimedEmitter` that emits with a typed-error
     /// per-emit ack. Mirrors `socket.timeout(ms).emit(ev, ..., (err, data) =>)`
     /// from the JS client.
@@ -1563,70 +1720,64 @@ public extension SocketIOClient {
 }
 
 extension SocketIOClient {
-    /// Internal — called from `SocketTimedEmitter`. Allocates an ack id (when
-    /// not pre-allocated by the async overload), registers the timed ack BEFORE
-    /// running the emit funnel, then routes through the funnel.
+    /// Internal — called from `SocketTimedEmitter`. Allocates an ack id,
+    /// registers the timed ack BEFORE running the emit funnel, then routes
+    /// through the funnel.
     ///
     /// Registration-before-funnel ordering is critical: if the funnel's
     /// connected guard fires `.error` and early-returns, the timer is already
     /// scheduled and will fire `cb(.timeout, [])` after `timeout` seconds —
     /// matching JS `_registerAckCallback` semantics.
+    private func performAckRegistration(_ work: @escaping () -> Void) {
+        guard let manager = manager else { return }
+        if (manager as? SocketManager)?.isOnHandleQueue == true { work() }
+        else { manager.handleQueue.async(execute: work) }
+    }
+
     func emitTimed(event: String,
                    items: [SocketData],
                    timeout: Double,
-                   ackId: Int? = nil,
+                   cancellation: SocketAsyncAckState? = nil,
+                   mappedItems: [Any]? = nil,
                    ack: @escaping (Error?, [Any]) -> Void) {
-        guard let manager = self.manager else {
-            // No manager → no handleQueue, no transport. Fire .disconnected
-            // synchronously so the caller gets a deterministic outcome instead
-            // of a silently-dropped emit.
-            ack(SocketAckError.disconnected, [])
-            return
-        }
+        guard let manager = self.manager else { ack(SocketAckError.disconnected, []); return }
         let queue = manager.handleQueue
-        queue.async { [weak self] in
+        performAckRegistration { [weak self] in
             guard let self = self else { return }
-            let id = ackId ?? self.allocateAckId()
-            // Any error outcome ends this emit for good, so it must not linger in
-            // the send buffer and go out on a later reconnect. `.disconnected`
-            // cannot reach a buffered packet — `didDisconnect` keeps those acks.
-            let ackDroppingBuffered: (Error?, [Any]) -> Void = { [weak self] err, data in
-                if err != nil { self?.dropBufferedEmit(ack: id) }
-                ack(err, data)
-            }
-
-            // JS `emit()`: with `retries` set, the timed chain queues too; the
-            // captured `timeout` is the per-attempt timeout for every try. The
-            // async overload (`ackId != nil`) does NOT queue — its eager ack id
-            // and continuation contract have no queue equivalent, and a queued
-            // path would leave that continuation hanging forever.
+            if cancellation?.isCancelled == true { ack(CancellationError(), []); return }
             do {
-                let mapped = [event] + (try items.map { try $0.socketRepresentation() })
-                if ackId == nil, self.enqueueRetriableIfActive(mapped, userAck: ack, attemptTimeout: timeout) {
+                // A custom SocketData representation is evaluated exactly once.
+                // `mappedItems` has already been normalized by the caller;
+                // re-running the JS-stringify normalization on it is a no-op.
+                let mapped = try SocketPacket.jsonSafeEmitData(
+                    mappedItems ?? ([event] + items.map { try $0.socketRepresentation() }), allowBinary: true
+                )
+                guard !self.failIfReserved(mapped) else {
+                    ack(NSError(domain: "SocketIO.Emit", code: 1,
+                                userInfo: [NSLocalizedDescriptionKey: "Reserved event name: " + event]), [])
                     return
                 }
-            } catch {
-                ack(error, [])
-                return
-            }
-
-            self.ackHandlers.addTimedAck(id, on: queue, callback: ackDroppingBuffered, timeout: timeout)
-            do {
-                let mapped = [event] + (try items.map { try $0.socketRepresentation() })
+                if cancellation == nil,
+                   self.enqueueRetriableIfActive(mapped, userAck: ack, attemptTimeout: timeout) { return }
+                // Retry queue entries allocate their IDs per attempt, never here.
+                let id = self.allocateAckId()
+                cancellation?.register(id)
+                let ackDroppingBuffered: (Error?, [Any]) -> Void = { [weak self] err, data in
+                    if err != nil { self?.dropBufferedEmit(ack: id) }
+                    ack(err, data)
+                }
+                self.ackHandlers.addTimedAck(id, on: queue, callback: ackDroppingBuffered, timeout: timeout)
                 self.emit(mapped, ack: id, binary: true, isAck: false)
             } catch {
-                // Representation failure → cancel the timer and fire the error
-                // through the same one-shot path so the user gets exactly one
-                // callback and we surface the underlying error.
-                self.ackHandlers.cancelTimedAck(id, fireWith: error)
+                // Exactly one settlement for the user's ack, and the same
+                // `.error` client event every other emit path reports.
+                self.handleClientEvent(.error, data: [event, items, error])
+                ack(error, [])
             }
         }
     }
 
-    /// Internal — allocate the next ack id (matches existing `currentAck += 1`
-    /// pattern from `createOnAck`). Called from the async emit overload before
-    /// entering the cancellation handler so the cancel path can reference the
-    /// same id.
+    /// Allocate IDs on handleQueue together with acknowledgement registration.
     func allocateAckId() -> Int {
         currentAck += 1
         return currentAck

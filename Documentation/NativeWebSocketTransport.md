@@ -24,7 +24,7 @@ WebSocket closes the engine and lets the existing manager decide about reconnect
 ## Compatibility changes (major prerelease)
 
 Normal SocketManager/SocketIOClient use does not require a backend selection.
-Minimum deployment versions: iOS 13, macOS 10.15, tvOS 13, watchOS 6. These are
+Minimum deployment versions: iOS 15, macOS 12, tvOS 15, watchOS 8. These are
 compile baselines, not a claim that every runtime/device has been exercised.
 
 * `SocketEngine.ws`, `SocketEngineSpec.ws` and the Starscream event delegate
@@ -76,6 +76,13 @@ message size and outgoing queue bounds. Defaults are 16 MiB per incoming message
 Zero-length messages still count. Every limit must be positive. Limits are
 independent of Engine.IO's polling `maxPayload`. Queue overflow is surfaced as a
 transport failure rather than silently dropping a nonvolatile application packet.
+
+`.parserOptions(SocketParserOptions(...))` is a separate, Socket.IO-level policy
+and is **not** part of these transport limits. `maximumAttachments` defaults to
+10, matching JS `maxAttachments`; the byte limits are opt-in. The nesting-depth
+limit remains enabled by default at 512 and may reject packets accepted by the
+JavaScript parser. See the
+"Deliberate deviations" section of `PARITY.md`.
 
 ## Distribution and release
 

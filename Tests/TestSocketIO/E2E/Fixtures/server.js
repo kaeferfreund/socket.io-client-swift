@@ -228,8 +228,14 @@ const httpServer = http.createServer(async (req, res) => {
   }
 });
 
+// PER_MESSAGE_DEFLATE=1 negotiates permessage-deflate on the WebSocket, as a
+// production server with `perMessageDeflate` enabled does; threshold 0 compresses
+// every frame, including the upgrade probe.
+const perMessageDeflate = process.env.PER_MESSAGE_DEFLATE === "1" ? { threshold: 0 } : false;
+
 const io = new Server(httpServer, {
   maxHttpBufferSize,
+  perMessageDeflate,
   allowRequest: (_req, callback) => {
     callback(null, !blockNewConnectionsPending && Date.now() >= blockNewConnectionsUntil);
   },
@@ -262,6 +268,11 @@ io.engine.on("connection", (rawSocket) => {
 });
 
 io.on("connection", (socket) => {
+  // Read the receiving namespace's identity, never echo a caller-provided ID.
+  socket.on("server-socket-id", (...args) => {
+    const ack = args[args.length - 1];
+    if (typeof ack === "function") { ack(socket.id); }
+  });
   totalConnections += 1;
   lastAuthBySid.set(socket.id, socket.handshake.auth);
   reservedCountBySid.set(socket.id, 0);
@@ -305,6 +316,28 @@ io.on("connection", (socket) => {
   socket.on("echo", (...args) => {
     const cb = args[args.length - 1];
     if (typeof cb === "function") { cb(args[0]); }
+  });
+
+  // JS parity: `socket.on("getHandshake", (cb) => cb(socket.handshake))` from
+  // the JS support server. Used by the "query option" scenarios on the default
+  // namespace (the custom-namespace ones read `/abc`'s "handshake" event).
+  socket.on("getHandshake", (...args) => {
+    const cb = args[args.length - 1];
+    if (typeof cb === "function") { cb(socket.handshake); }
+  });
+
+  // JS parity: the Date fixtures from the JS support server. A Date crosses the
+  // wire as the string `JSON.stringify` produces for it, in an event, nested in
+  // an object, and through an acknowledgement.
+  socket.on("getDate", () => {
+    socket.emit("takeDate", new Date());
+  });
+  socket.on("getDateObj", () => {
+    socket.emit("takeDateObj", { date: new Date() });
+  });
+  socket.on("getAckDate", (...args) => {
+    const cb = args[args.length - 1];
+    if (typeof cb === "function") { cb(new Date()); }
   });
 
   // JS parity: expect receiving buffers in order (connection.ts
@@ -354,7 +387,12 @@ io.of("/with-data").use((_socket, next) => {
 });
 
 // Registered so a client can join them; they carry no behaviour of their own.
-io.of("/foo").on("connection", () => {});
+io.of("/foo").on("connection", (socket) => {
+  socket.on("server-socket-id", (...args) => {
+    const ack = args[args.length - 1];
+    if (typeof ack === "function") { ack(socket.id); }
+  });
+});
 io.of("/asd").on("connection", () => {});
 io.of("/valid").on("connection", () => {});
 

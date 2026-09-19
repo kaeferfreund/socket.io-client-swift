@@ -4,7 +4,6 @@ import Foundation
 import FoundationNetworking
 #endif
 
-@available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
 extension URLSessionWebSocketTransport {
     /// Owns a session independent of the polling session. The supplied request
     /// carries headers/cookies prepared by the engine; this adapter never rewrites
@@ -34,7 +33,6 @@ extension URLSessionWebSocketTransport {
 /// Owns one concrete session/task pair. All mutable state is engine-queue confined.
 /// Foundation completion closures do not mutate it; delegate callbacks hop onto
 /// that queue through a weak proxy before validating session AND task identity.
-@available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
 internal final class URLSessionWebSocketConnection: EngineWebSocketConnection {
     internal var onEvent: ((EngineWebSocketEvent) -> Void)?
     fileprivate let queue: DispatchQueue
@@ -174,7 +172,6 @@ internal final class URLSessionWebSocketConnection: EngineWebSocketConnection {
 
 /// URLSession retains its delegate; the proxy must not retain the connection.
 /// The shared superclass enforces the same trust policy as HTTP polling.
-@available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
 internal final class WebSocketSessionDelegateProxy: SocketSessionDelegateProxy, URLSessionWebSocketDelegate {
     private weak var owner: URLSessionWebSocketConnection?
 
@@ -222,6 +219,5 @@ internal final class WebSocketSessionDelegateProxy: SocketSessionDelegateProxy, 
 #if compiler(>=5.5)
 // owner is assigned only during initialization and held weakly. Delegate methods
 // only enqueue work; connection state is accessed exclusively on its serial queue.
-@available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
 extension WebSocketSessionDelegateProxy: @unchecked Sendable {}
 #endif

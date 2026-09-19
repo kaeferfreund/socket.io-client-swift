@@ -38,6 +38,7 @@ final class MockEngine: NSObject, SocketEngineSpec {
     /// Test-controlled writable signal. Defaults to `true` (most tests want
     /// non-volatile-drop behavior); flip to `false` to exercise the volatile gate.
     var writable: Bool = true
+    var hasPingExpired: Bool = false
 
     /// Captured packets sent via `write(_:withType:withData:completion:)`.
     /// `SocketIOClient.emit` calls `engine.send(...)` which is an extension

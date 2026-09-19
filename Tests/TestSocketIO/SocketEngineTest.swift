@@ -54,27 +54,58 @@ class SocketEngineTest: XCTestCase {
     }
 
     func testEngineDoesErrorOnUnknownTransport() {
+        // setTestable() changes status only. Engine events require the
+        // subscription that a real connect() establishes through active.
+        socket.setTestActive(true)
+        manager.reconnects = false
         let finalExpectation = expectation(description: "Unknown Transport")
 
         socket.on("error") {data, ack in
-            if let error = data[0] as? String, error == "Unknown transport" {
+            if let error = data.first as? String, error == "Unknown transport" {
                 finalExpectation.fulfill()
             }
         }
 
-        engine.parseEngineMessage("{\"code\": 0, \"message\": \"Unknown transport\"}")
+        engine.engineQueue.sync {
+            engine.parseEngineMessage("{\"code\": 0, \"message\": \"Unknown transport\"}")
+        }
         waitForExpectations(timeout: 3, handler: nil)
     }
 
+    /// engine.io-parser/test/index.ts — "should fail to decode a malformed
+    /// payload": an undecodable packet becomes `{type: "error", data: "parser
+    /// error"}`, which `_onPacket` routes through `_onError` → `_onClose
+    /// ("transport error")`. Reporting the error without closing is not enough.
     func testEngineDoesErrorOnUnknownMessage() {
+        socket.setTestActive(true)
+        manager.reconnects = false
         let finalExpectation = expectation(description: "Engine Errors")
 
         socket.on("error") {data, ack in
             finalExpectation.fulfill()
         }
 
-        engine.parseEngineMessage("afafafda")
+        engine.engineQueue.sync {
+            engine.parseEngineMessage("afafafda")
+        }
         waitForExpectations(timeout: 3, handler: nil)
+        engine.engineQueue.sync {
+            XCTAssertTrue(engine.closed)
+            XCTAssertFalse(engine.connected)
+        }
+    }
+
+    /// The other malformed payloads from the same JS test. `{}` decodes as JSON
+    /// but names no error, and must still close rather than be ignored.
+    func testEngineClosesOnEveryMalformedEnginePayload() {
+        for message in ["{", "{}", "[\"a123\", \"a456\"]"] {
+            let manager = SocketManager(socketURL: URL(string: "http://localhost")!,
+                                        config: [.log(false), .reconnects(false)])
+            let engine = SocketEngine(client: manager, url: URL(string: "http://localhost")!, options: nil)
+            manager.engine = engine
+            engine.parseEngineMessage(message)
+            engine.engineQueue.sync { XCTAssertTrue(engine.closed, message) }
+        }
     }
 
     func testEngineDecodesUTF8Properly() {
@@ -228,11 +259,12 @@ class SocketEngineTest: XCTestCase {
         XCTAssertFalse(engine.canSendUpgradePacket, "An outstanding poll still blocks the upgrade")
     }
 
-    /// `upgradeTransport()` enables `fastUpgrade` and only then enqueues its noop.
-    /// That POST can never be sent, because `doRequest` refuses to write on a
-    /// transport that is upgrading. It must therefore not mark the transport as
-    /// writing, or the deferred upgrade would wait for a callback that never comes
-    /// and the engine would end up with no active transport at all.
+    /// A polling write attempted while `fastUpgrade` is set can never be POSTed,
+    /// because `doRequest` refuses to write on a transport that is upgrading. It
+    /// must therefore not mark the transport as writing, or the deferred upgrade
+    /// would wait for a callback that never comes and the engine would end up
+    /// with no active transport at all. (`upgradeTransport()` itself no longer
+    /// enqueues anything; the packet here stands for an application write.)
     func testPendingUpgradeDoesNotMarkTheTransportAsWriting() {
         engine.setConnected(true)
         engine.setFastUpgrade(true)

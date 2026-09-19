@@ -84,6 +84,8 @@ class SocketAckManager {
 
     private struct TimedAckEntry {
         let callback: (Error?, [Any]) -> Void
+        let identity: UUID
+        let notifyOnDisconnect: Bool
         var timer: DispatchWorkItem?
     }
 
@@ -115,18 +117,26 @@ class SocketAckManager {
     func addTimedAck(_ id: Int,
                      on queue: DispatchQueue,
                      callback: @escaping (Error?, [Any]) -> Void,
-                     timeout: Double) {
+                     timeout: Double,
+                     notifyOnDisconnect: Bool = true) {
+        let identity = UUID()
+        timedAcks[id]?.timer?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             // Already on `queue`. Removal is the one-shot signal; if another
             // path already removed the entry, removeValue returns nil and we
             // short-circuit.
-            guard let entry = self.timedAcks.removeValue(forKey: id) else { return }
+            guard self.timedAcks[id]?.identity == identity,
+                  let entry = self.timedAcks.removeValue(forKey: id) else { return }
             entry.callback(SocketAckError.timeout, [])
         }
-        timedAcks[id] = TimedAckEntry(callback: callback, timer: workItem)
-        let deadline: DispatchTime = timeout.isFinite ? .now() + timeout : .distantFuture
-        queue.asyncAfter(deadline: deadline, execute: workItem)
+        timedAcks[id] = TimedAckEntry(callback: callback, identity: identity,
+                                      notifyOnDisconnect: notifyOnDisconnect,
+                                      timer: timeout == .infinity ? nil : workItem)
+        // No queued timer or captured work item is needed for an infinite wait.
+        guard timeout != .infinity else { return }
+        let bounded = timeout.isFinite ? min(max(0, timeout), 2_147_483.647) : 0
+        queue.asyncAfter(deadline: .now() + bounded, execute: workItem)
     }
 
     /// Execute the timed ack with server-supplied data. Caller MUST be on the
@@ -154,10 +164,11 @@ class SocketAckManager {
     ///
     /// **Re-entrancy:** when `fireWith` is non-nil, the user callback is
     /// invoked synchronously here while still on the owning queue
-    /// (`handleQueue`). Callers re-entering by issuing a new emit from inside
-    /// the callback are supported because the public emit path dispatches via
-    /// `handleQueue.async`, deferring registration to the next queue tick
-    /// rather than nesting under this stack frame.
+    /// (`handleQueue`), and a new emit issued from inside that callback may
+    /// register its ack under this very stack frame. That is safe because this
+    /// entry is already removed from `timedAcks` before the callback runs: the
+    /// nested registration can only touch a different id, and no path can fire
+    /// this entry a second time.
     func cancelTimedAck(_ id: Int, fireWith error: Error? = nil) {
         guard let entry = timedAcks.removeValue(forKey: id) else { return }
         entry.timer?.cancel()
@@ -175,14 +186,17 @@ class SocketAckManager {
     ///   running. JS `_clearAcks` skips acks whose packet is still in the send
     ///   buffer: that packet has not reached the server yet, so its ack is still
     ///   owed once the socket reconnects.
-    func clearTimedAcks(reason: SocketAckError, keeping: Set<Int> = []) {
-        let snapshot = timedAcks.filter({ !keeping.contains($0.key) })
+    /// Identifies only the entries owned by the connection being retired.
+    var pendingTimedAckIDs: Set<Int> { Set(timedAcks.keys) }
+
+    func clearTimedAcks(reason: SocketAckError, keeping: Set<Int> = [], only ids: Set<Int>? = nil) {
+        let snapshot = timedAcks.filter { !keeping.contains($0.key) && (ids?.contains($0.key) ?? true) }
         for id in snapshot.keys {
             timedAcks.removeValue(forKey: id)
         }
         for (_, entry) in snapshot {
             entry.timer?.cancel()
-            entry.callback(reason, [])
+            if reason != .disconnected || entry.notifyOnDisconnect { entry.callback(reason, []) }
         }
     }
 }

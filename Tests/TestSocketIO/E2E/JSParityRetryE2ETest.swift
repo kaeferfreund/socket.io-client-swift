@@ -1,7 +1,7 @@
 import XCTest
 @testable import SocketIO
 
-/// Scenarios ported one-to-one from the JavaScript client's own test suite
+/// Scenarios adapted from the JavaScript client's own test suite
 /// (`socket.io/packages/socket.io-client/test/retry.ts`, v4.8.3), run against
 /// the same kind of server it is tested against.
 ///
@@ -11,7 +11,10 @@ import XCTest
 /// the internal queue length through the test accessor, mirroring the JS
 /// `socket._queue.length` assertions.
 ///
-/// See `PARITY.md` for the full matrix.
+/// Ordering/parking tests deliberately use a generous network deadline. A
+/// 10ms/50ms deadline measures the CI host's latency, not FIFO correctness.
+/// Exact retry budgets and stale callbacks also have controlled unit tests.
+/// See `PARITY.md` for the matrix and the review report for coverage limits.
 final class JSParityRetryE2ETest: XCTestCase {
     var server: TestServerProcess!
     var manager: SocketManager!
@@ -58,7 +61,7 @@ final class JSParityRetryE2ETest: XCTestCase {
     /// thing at the observable layer: strict FIFO order of the outgoing
     /// packets, one in-flight head, and an empty queue after all acks.
     func testRetryPreservesTheOrderOfThePackets() {
-        let socket = makeManager(.retries(1), .ackTimeout(0.05)).defaultSocket
+        let socket = makeManager(.retries(1), .ackTimeout(2)).defaultSocket
 
         var outgoing = [String]()
         socket.addAnyOutgoingListener { event in
@@ -72,26 +75,34 @@ final class JSParityRetryE2ETest: XCTestCase {
         // The JS test emits right after `io()` — while the handshake is still
         // in flight — so the queue parks all three packets and drains them in
         // order on CONNECT.
-        socket.emit("echo", 1) { _, data in
+        socket.emit("echo", 1) { error, data in
+            XCTAssertNil(error)
+            XCTAssertEqual(socket.testRetryQueueCount, 2)
             acks.append(data.first as? Int ?? -1)
         }
+        XCTAssertEqual(socket.testRetryQueueCount, 1)
 
-        socket.emit("echo", 2) { _, data in
+        socket.emit("echo", 2) { error, data in
+            XCTAssertNil(error)
+            XCTAssertEqual(socket.testRetryQueueCount, 1)
             acks.append(data.first as? Int ?? -1)
         }
+        XCTAssertEqual(socket.testRetryQueueCount, 2)
 
-        socket.emit("echo", 3) { _, _ in
-            acks.append(-2)
+        socket.emit("echo", 3) { error, data in
+            XCTAssertNil(error)
+            XCTAssertEqual(data.first as? Int, 3)
+            XCTAssertEqual(socket.testRetryQueueCount, 0)
+            acks.append(data.first as? Int ?? -1)
             allAcked.fulfill()
         }
+        XCTAssertEqual(socket.testRetryQueueCount, 3)
 
         connect(socket)
 
         wait(for: [allAcked], timeout: 5)
 
-        XCTAssertEqual(acks.first, 1)
-        XCTAssertEqual(acks.dropFirst().first, 2)
-        XCTAssertEqual(acks.last, -2)
+        XCTAssertEqual(acks, [1, 2, 3])
         XCTAssertEqual(outgoing, ["echo 1", "echo 2", "echo 3"],
                        "the queue must send strictly in order, one head packet at a time")
         XCTAssertEqual(socket.testRetryQueueCount, 0)
@@ -126,7 +137,7 @@ final class JSParityRetryE2ETest: XCTestCase {
     /// The queue must not send while disconnected — not even its head. The
     /// parked packet goes out on the next CONNECT and the ack succeeds.
     func testRetryDoesNotDrainTheQueueWhileDisconnected() {
-        let socket = makeManager(.retries(3), .ackTimeout(0.01)).defaultSocket
+        let socket = makeManager(.retries(3), .ackTimeout(2)).defaultSocket
 
         var outgoing = 0
         socket.addAnyOutgoingListener { _ in outgoing += 1 }
@@ -158,7 +169,7 @@ final class JSParityRetryE2ETest: XCTestCase {
     /// The queue drains (force) before the `connect` event, so an emit made
     /// inside a connect handler is queued once and sent once.
     func testRetryDoesNotEmitAPacketTwiceInTheConnectHandler() {
-        let socket = makeManager(.retries(3)).defaultSocket
+        let socket = makeManager(.retries(3), .ackTimeout(10)).defaultSocket
 
         var outgoing = [String]()
         socket.addAnyOutgoingListener { event in outgoing.append(event.event) }

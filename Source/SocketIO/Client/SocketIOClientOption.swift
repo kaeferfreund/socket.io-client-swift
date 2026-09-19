@@ -69,6 +69,14 @@ public enum SocketIOClientOption : ClientOption {
     /// waits `ackTimeout` (or the per-emit `timeout(after:)`) for the ack and
     /// is re-sent on failure until the budget is exhausted, in strict queue
     /// order. The final ack callback then fires with `SocketAckError.timeout`.
+    ///
+    /// Plain `emit` / `send` calls without a user acknowledgement callback require
+    /// a finite, non-negative `ackTimeout` when retries are enabled. Otherwise
+    /// the emit is rejected before queueing or sending, emits `.error` with
+    /// `[eventName, items, NSError]` (domain `SocketIO.Emit`, code `2`), and invokes
+    /// its local completion asynchronously, if provided. Zero is a valid timeout.
+    /// Explicit acknowledgement APIs retain their existing no-timeout behavior.
+    /// The server must acknowledge retried events even without a user callback.
     case retries(Int)
 
     /// A dictionary of GET parameters that will be included in the connect url.
@@ -160,6 +168,9 @@ public enum SocketIOClientOption : ClientOption {
     /// Native incoming-message and outgoing-queue limits.
     case webSocketOptions(SocketWebSocketOptions)
 
+    /// Complete incoming packet, attachment-count and nesting limits for all transports.
+    case parserOptions(SocketParserOptions)
+
     /// Carries a dictionary conversion failure to connection validation. No
     /// network request is started when this option is present.
     case invalidConfiguration(String)
@@ -176,6 +187,8 @@ public enum SocketIOClientOption : ClientOption {
         switch self {
         case .webSocketOptions:
             description = "webSocketOptions"
+        case .parserOptions:
+            description = "parserOptions"
         case .invalidConfiguration:
             description = "invalidConfiguration"
         case .ackTimeout:
@@ -246,6 +259,8 @@ public enum SocketIOClientOption : ClientOption {
 
         switch self {
         case let .webSocketOptions(options):
+            value = options
+        case let .parserOptions(options):
             value = options
         case let .invalidConfiguration(reason):
             value = reason

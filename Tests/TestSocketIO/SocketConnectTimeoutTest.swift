@@ -70,19 +70,35 @@ final class SocketConnectTimeoutTest: XCTestCase {
 
         let attempted = expectation(description: "reconnect attempt")
         attempted.assertForOverFulfill = false
-        socket.on(clientEvent: .reconnectAttempt) { _, _ in attempted.fulfill() }
+        var attemptNumber: Int?
+        socket.on(clientEvent: .reconnectAttempt) { data, _ in
+            attemptNumber = data.first as? Int
+            attempted.fulfill()
+        }
 
+        // JS `Manager.open(fn)`'s error callback: a failed attempt reports
+        // `reconnect_error` with the reason before the budget runs out.
+        let attemptFailed = expectation(description: "reconnect error")
+        attemptFailed.assertForOverFulfill = false
+        var attemptError: String?
+        socket.on(clientEvent: .reconnectError) { data, _ in
+            attemptError = data.first as? String
+            attemptFailed.fulfill()
+        }
+
+        // `reconnect_failed` replaced the Swift-only `.disconnect("Reconnect Failed")` in 17.0.0.
         let failed = expectation(description: "reconnect failed")
         failed.assertForOverFulfill = false
-        socket.on(clientEvent: .disconnect) { data, _ in
-            if data.first as? String == "Reconnect Failed" {
-                failed.fulfill()
-            }
+        socket.on(clientEvent: .reconnectFailed) { data, _ in
+            XCTAssertTrue(data.isEmpty, "JS `reconnect_failed` carries no payload")
+            failed.fulfill()
         }
 
         socket.connect()
 
-        wait(for: [timedOut, attempted, failed], timeout: 8)
+        wait(for: [timedOut, attempted, attemptFailed, failed], timeout: 8)
+        XCTAssertEqual(attemptNumber, 1, "JS emits the 1-based attempt number")
+        XCTAssertEqual(attemptError, "timeout")
     }
 
     func testAFailedReconnectCycleCanBeStartedAgain() {
@@ -102,8 +118,7 @@ final class SocketConnectTimeoutTest: XCTestCase {
                 secondAttempt.fulfill()
             }
         }
-        socket.on(clientEvent: .disconnect) { data, _ in
-            guard data.first as? String == "Reconnect Failed" else { return }
+        socket.on(clientEvent: .reconnectFailed) { _, _ in
             failures += 1
             if failures == 1 {
                 firstFailed.fulfill()

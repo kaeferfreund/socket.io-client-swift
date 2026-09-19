@@ -1,0 +1,41 @@
+name: Migration source and toolchain probe
+on:
+  push:
+    branches: [feat/socketio4-swift6.4]
+    paths: [.github/workflows/migration-probe.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: git archive --format=tar HEAD > migration-source.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: migration-source
+          path: migration-source.tar
+          retention-days: 1
+  toolchain:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Inspect installed Swift and Xcode
+        run: |
+          ls /Applications | grep Xcode
+          xcodebuild -version
+          swift --version
+      - name: Collect Swift 6 diagnostics
+        run: |
+          set -o pipefail
+          swift build -Xswiftc -swift-version -Xswiftc 6 2>&1 | tee migration-swift6.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: migration-swift6-diagnostics
+          path: migration-swift6.log
+          retention-days: 1

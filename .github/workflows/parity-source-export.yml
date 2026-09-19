@@ -1,0 +1,26 @@
+name: Parity source export
+on:
+  push:
+    branches: ["fix/remaining-client-parity"]
+    paths: [".github/workflows/parity-source-export.yml"]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Export tracked source only
+        run: |
+          git archive --format=zip HEAD > "$RUNNER_TEMP/current-source.zip"
+          git rev-parse HEAD > "$RUNNER_TEMP/source-head.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: current-parity-source
+          retention-days: 1
+          path: |
+            ${{ runner.temp }}/current-source.zip
+            ${{ runner.temp }}/source-head.txt

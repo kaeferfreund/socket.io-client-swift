@@ -322,7 +322,6 @@ private final class ClearAcksTestEngine: SocketEngineSpec {
     private(set) var urlPolling = URL(string: "http://localhost/")!
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
     private(set) var websocket = false
-    private(set) var version = SocketIOVersion.three
 
     /// Drives the JS "throttled timer" scenario: an emit made while this is
     /// `true` is buffered instead of written.

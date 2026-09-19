@@ -201,7 +201,7 @@ fixed. The fixes below change behavior that the sections above still describe
 as strict; where they conflict, this section is current. The decoder
 differential in `ReviewEvidence/DecoderDifferential.json` was re-recorded.
 
-## Engine.IO close and upgrade
+### Engine.IO close and upgrade
 
 Ported from `engine.io-client/test/connection.js` and `lib/socket.ts`:
 

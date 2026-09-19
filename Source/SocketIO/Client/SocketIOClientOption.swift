@@ -24,6 +24,14 @@
 
 import Foundation
 
+/// The socket.io version being used.
+public enum SocketIOVersion: Int {
+    /// socket.io 2, engine.io 3
+    case two = 2
+
+    /// socket.io 3, engine.io 4
+    case three = 3
+}
 
 protocol ClientOption : CustomStringConvertible, Equatable {
     func getSocketIOOptionValue() -> Any

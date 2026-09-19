@@ -277,13 +277,30 @@ final class SocketClearAcksOnCloseTest: XCTestCase {
     /// The promise form of the same scenario, again on a drop that reconnects.
     /// JS rejects the `emitWithAck` promise from `_clearAcks`; a Swift
     /// continuation has to be resumed exactly once, so it throws `.disconnected`.
+    ///
+    /// Everything here awaits `fulfillment(of:)`: a synchronous `wait(for:)`
+    /// inside a main-actor job cannot drain the main queue the manager runs on.
+    @MainActor
     func testAsyncEmitWithAckThrowsDisconnectedOnATransportDropThatReconnects() async {
-        await MainActor.run { _ = makeConnectedSocket(.ackTimeout(10)) }
+        var config: SocketIOClientConfiguration = [.log(false), .reconnects(true), .reconnectWait(0), .ackTimeout(10)]
+        manager = SocketManager(socketURL: URL(string: "http://localhost/")!, config: config)
+        engine = ClearAcksTestEngine(client: manager, url: manager.socketURL, options: nil)
+        manager.engine = engine
+        socket = manager.defaultSocket
+        config.removeAll()
 
+        let connected = expectation(description: "initial connect")
+        connected.assertForOverFulfill = false
+        let connectID = socket.on(clientEvent: .connect) { _, _ in connected.fulfill() }
+        socket.connect()
+        await fulfillment(of: [connected], timeout: 5)
+        socket.off(id: connectID)
+
+        let socket = self.socket!
         let thrown = expectation(description: "await throws the disconnect error")
-        Task {
+        let task = Task {
             do {
-                _ = try await self.socket.emitWithAck("echo", "a")
+                _ = try await socket.emitWithAck("echo", "a")
                 XCTFail("the acknowledgement must not resolve")
             } catch {
                 XCTAssertEqual(error as? SocketAckError, .disconnected)
@@ -291,12 +308,18 @@ final class SocketClearAcksOnCloseTest: XCTestCase {
             thrown.fulfill()
         }
 
-        await MainActor.run {
-            // Let the emit reach registration before the transport dies.
-            self.drain()
-            self.dropTransportAndWaitForReconnect()
-        }
-        await fulfillment(of: [thrown], timeout: 5)
+        // Let the emit reach registration before the transport dies.
+        let registered = expectation(description: "handle queue barrier")
+        manager.handleQueue.socketAsync { registered.fulfill() }
+        await fulfillment(of: [registered], timeout: 3)
+
+        let reconnected = expectation(description: "namespace re-joined")
+        reconnected.assertForOverFulfill = false
+        let reconnectID = socket.on(clientEvent: .connect) { _, _ in reconnected.fulfill() }
+        engine.dropTransport(reason: "transport close")
+        await fulfillment(of: [thrown, reconnected], timeout: 5)
+        socket.off(id: reconnectID)
+        _ = await task.value
     }
 }
 

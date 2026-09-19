@@ -60,11 +60,11 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     public private(set) var anyHandler: ((SocketAnyEvent) -> ())?
 
     /// Storage for the multi-listener `onAny` family. UUID-keyed because Swift
-    /// closures lack identity. Mutators serialize via `handleQueue.async`.
+    /// closures lack identity. Mutators run inline when already on `handleQueue`.
     private var anyListeners: [(id: UUID, handler: (SocketAnyEvent) -> ())] = []
 
     /// Storage for the `onAnyOutgoing` family. UUID-keyed because closures lack
-    /// identity. Mutators serialize via `handleQueue.async`.
+    /// identity. Mutators run inline when already on `handleQueue`.
     private var anyOutgoingListeners: [(id: UUID, handler: (SocketAnyEvent) -> ())] = []
 
     /// The array of handlers for this socket.
@@ -391,16 +391,18 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         return status == .connecting
     }
 
-    private func dispatchEvent(_ event: String, data: [Any], withAck ack: Int) {
+    private func dispatchEvent(_ event: String, data: [Any], withAck ack: Int, isInternalMessage: Bool) {
         DefaultSocketLogger.Logger.log("Handling event: \(event) with \(data.count) data item(s)", type: logType)
 
         anyHandler?(SocketAnyEvent(event: event, items: data))
 
         // Snapshot the list so a listener's self-removal during dispatch doesn't
         // mutate the iteration. Snapshot is cheap (array of tuples).
-        let snapshot = anyListeners
-        for entry in snapshot {
-            entry.handler(SocketAnyEvent(event: event, items: data))
+        if !isInternalMessage {
+            let snapshot = anyListeners
+            for entry in snapshot {
+                entry.handler(SocketAnyEvent(event: event, items: data))
+            }
         }
 
         for handler in handlers where handler.event == event {
@@ -489,24 +491,19 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         status = .disconnected
         sid = ""
 
-        // Snapshot before invoking reentrant listeners. A delayed teardown must
-        // never sweep a new acknowledgement registered by a replacement connect.
+        notifyDisconnectAndClearAcks(reason: reason)
+    }
+
+    /// Close notification precedes ack failures, as in JS Socket.onclose().
+    /// Snapshot IDs before reentrant listeners so this close cannot sweep a
+    /// registration created by a listener for a replacement connection.
+    private func notifyDisconnectAndClearAcks(reason: String) {
         let retiringAckIDs = ackHandlers.pendingTimedAckIDs
         let stillBuffered = bufferedAckIds
         handleClientEvent(.disconnect, data: [reason])
-
-        // Phase 9: fail any in-flight timed acks with .disconnected. Dispatched
-        // to handleQueue so the clear runs serialized with add/execute/cancel
-        // (the entry's `fired` flag is queue-protected, not lock-protected).
-        // Placed after handleClientEvent so the .disconnect notification fires
-        // before user ack callbacks observe the disconnected reason — matches
-        // the JS sequence where the socket emits 'disconnect' before draining
-        // ack callbacks.
-        // JS `_clearAcks` skips acks whose packet is still in the send buffer:
-        // that packet has not been sent yet, so its ack is still owed once the
-        // socket reconnects and the buffer is flushed.
-        manager?.handleQueue.async { [weak self] in
-            self?.ackHandlers.clearTimedAcks(reason: .disconnected, keeping: stillBuffered, only: retiringAckIDs)
+        performOnHandleQueue { [weak self] in
+            self?.ackHandlers.clearTimedAcks(reason: .disconnected,
+                                             keeping: stillBuffered, only: retiringAckIDs)
         }
     }
 
@@ -628,7 +625,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
                 ack(SocketAckError.disconnected, [])
                 return
             }
-            performAckRegistration { [weak self] in
+            performOnHandleQueue { [weak self] in
                 guard let self = self else {
                     ack(SocketAckError.disconnected, [])
                     return
@@ -999,7 +996,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // `connected`, so queueing while disconnected simply parks the packet
         // here (JS retry.ts "should not drain the queue while the socket is
         // disconnected").
-        manager?.handleQueue.async { [weak self] in
+        performOnHandleQueue { [weak self] in
             self?.drainRetriableQueue(force: false)
         }
 
@@ -1198,7 +1195,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// - parameter ack: If > 0 then this event expects to get an ack back from the client.
     open func handleEvent(_ event: String, data: [Any], isInternalMessage: Bool, withAck ack: Int = -1) {
         guard status == .connected || isInternalMessage else { return }
-        dispatchEvent(event, data: data, withAck: ack)
+        dispatchEvent(event, data: data, withAck: ack, isInternalMessage: isInternalMessage)
     }
 
     /// Causes a client to handle a socket.io packet. The namespace for the packet must match the namespace of the
@@ -1373,11 +1370,12 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     }
 
     /// Append a catch-all listener. Returns a `UUID` handle for removal.
-    /// Mirrors JS `socket.onAny(handler)`. Mutator serializes via `handleQueue.async`.
+    /// Mirrors JS `socket.onAny(handler)`. Mutates immediately on `handleQueue`,
+    /// asynchronously from other queues.
     @discardableResult
     open func addAnyListener(_ handler: @escaping (SocketAnyEvent) -> ()) -> UUID {
         let id = UUID()
-        manager?.handleQueue.async { [weak self] in
+        performOnHandleQueue { [weak self] in
             self?.anyListeners.append((id: id, handler: handler))
         }
         return id
@@ -1385,29 +1383,30 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
 
     /// Prepend a catch-all listener (fires before existing listeners). Returns
     /// a `UUID` handle. Mirrors JS `socket.prependAny(handler)`. Mutator
-    /// serializes via `handleQueue.async`.
+    /// mutates immediately on `handleQueue`, asynchronously from other queues.
     @discardableResult
     open func prependAnyListener(_ handler: @escaping (SocketAnyEvent) -> ()) -> UUID {
         let id = UUID()
-        manager?.handleQueue.async { [weak self] in
+        performOnHandleQueue { [weak self] in
             self?.anyListeners.insert((id: id, handler: handler), at: 0)
         }
         return id
     }
 
     /// Remove a listener by its `UUID` handle. Unknown id is a silent no-op
-    /// (matches JS `offAny`). Mutator serializes via `handleQueue.async`.
+    /// (matches JS `offAny`). Mutates immediately on `handleQueue`,
+    /// asynchronously from other queues.
     open func removeAnyListener(id: UUID) {
-        manager?.handleQueue.async { [weak self] in
+        performOnHandleQueue { [weak self] in
             self?.anyListeners.removeAll { $0.id == id }
         }
     }
 
     /// Remove every listener registered via `addAnyListener` / `prependAnyListener`.
-    /// Does NOT clear the legacy single `anyHandler`. Mutator serializes via
-    /// `handleQueue.async`.
+    /// Does NOT clear the legacy single `anyHandler`. Mutates immediately on
+    /// `handleQueue`, asynchronously from other queues.
     open func removeAllAnyListeners() {
-        manager?.handleQueue.async { [weak self] in
+        performOnHandleQueue { [weak self] in
             self?.anyListeners.removeAll(keepingCapacity: false)
         }
     }
@@ -1425,7 +1424,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     @discardableResult
     open func addAnyOutgoingListener(_ handler: @escaping (SocketAnyEvent) -> ()) -> UUID {
         let id = UUID()
-        manager?.handleQueue.async { [weak self] in
+        performOnHandleQueue { [weak self] in
             self?.anyOutgoingListeners.append((id: id, handler: handler))
         }
         return id
@@ -1435,7 +1434,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     @discardableResult
     open func prependAnyOutgoingListener(_ handler: @escaping (SocketAnyEvent) -> ()) -> UUID {
         let id = UUID()
-        manager?.handleQueue.async { [weak self] in
+        performOnHandleQueue { [weak self] in
             self?.anyOutgoingListeners.insert((id: id, handler: handler), at: 0)
         }
         return id
@@ -1443,14 +1442,14 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
 
     /// Remove an outgoing-side listener by its `UUID`. Unknown id is a silent no-op.
     open func removeAnyOutgoingListener(id: UUID) {
-        manager?.handleQueue.async { [weak self] in
+        performOnHandleQueue { [weak self] in
             self?.anyOutgoingListeners.removeAll { $0.id == id }
         }
     }
 
     /// Remove every registered outgoing-side listener.
     open func removeAllAnyOutgoingListeners() {
-        manager?.handleQueue.async { [weak self] in
+        performOnHandleQueue { [weak self] in
             self?.anyOutgoingListeners.removeAll(keepingCapacity: false)
         }
     }
@@ -1488,12 +1487,10 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     ///
     /// - parameter reason: The reason this socket is reconnecting.
     open func setReconnecting(reason: String) {
+        clearBufferedRecoveryReplayEvents()
         status = .connecting
-        // Same cleared-id convention as `didDisconnect`, which is what
-        // `testSocketIdIsClearedOnDisconnect` pins.
         sid = ""
-
-        handleClientEvent(.disconnect, data: [reason])
+        notifyDisconnectAndClearAcks(reason: reason)
     }
 
     // Test properties
@@ -1720,6 +1717,15 @@ public extension SocketIOClient {
 }
 
 extension SocketIOClient {
+    // Queue-confined mutations must be visible to the next operation in the
+    // same callback. Never sync-dispatch: callers already on the owning queue
+    // run inline; off-queue callers retain the existing asynchronous behavior.
+    private func performOnHandleQueue(_ work: @escaping () -> Void) {
+        guard let manager = manager else { return }
+        if (manager as? SocketManager)?.isOnHandleQueue == true { work() }
+        else { manager.handleQueue.async(execute: work) }
+    }
+
     /// Internal — called from `SocketTimedEmitter`. Allocates an ack id,
     /// registers the timed ack BEFORE running the emit funnel, then routes
     /// through the funnel.
@@ -1728,12 +1734,6 @@ extension SocketIOClient {
     /// connected guard fires `.error` and early-returns, the timer is already
     /// scheduled and will fire `cb(.timeout, [])` after `timeout` seconds —
     /// matching JS `_registerAckCallback` semantics.
-    private func performAckRegistration(_ work: @escaping () -> Void) {
-        guard let manager = manager else { return }
-        if (manager as? SocketManager)?.isOnHandleQueue == true { work() }
-        else { manager.handleQueue.async(execute: work) }
-    }
-
     func emitTimed(event: String,
                    items: [SocketData],
                    timeout: Double,
@@ -1742,7 +1742,7 @@ extension SocketIOClient {
                    ack: @escaping (Error?, [Any]) -> Void) {
         guard let manager = self.manager else { ack(SocketAckError.disconnected, []); return }
         let queue = manager.handleQueue
-        performAckRegistration { [weak self] in
+        performOnHandleQueue { [weak self] in
             guard let self = self else { return }
             if cancellation?.isCancelled == true { ack(CancellationError(), []); return }
             do {

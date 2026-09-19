@@ -4,6 +4,7 @@ import collections
 import csv
 import json
 import os
+import runpy
 from pathlib import Path
 import shutil
 import subprocess
@@ -24,6 +25,38 @@ class ReviewRegressions(unittest.TestCase):
         runtime = collections.Counter(row["package"] for row in rows if row["scope"] == "runtime-declaration")
         self.assertEqual(dict(runtime), summary["runtime_by_package"])
         self.assertEqual(len(rows) - sum(runtime.values()), summary["typescript_type_declarations"])
+
+    def test_reviewed_contracts_exist_and_strict_mode_refuses_incomplete_parity(self):
+        validate = runpy.run_path(str(ROOT / "scripts/check-parity-contracts.py"))["validate"]
+        self.assertEqual(validate(), [])
+        self.assertTrue(any("Complete parity NOT established" in e for e in validate(strict=True)))
+
+    def test_contract_check_rejects_missing_symbols_and_missing_runtime_evidence(self):
+        validate = runpy.run_path(str(ROOT / "scripts/check-parity-contracts.py"))["validate"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(ROOT / "Documentation", root / "Documentation")
+            shutil.copytree(ROOT / "Tests", root / "Tests", ignore=shutil.ignore_patterns("Fixtures"))
+            path = root / "Documentation/JavaScriptParityContracts.json"
+            manifest = json.loads(path.read_text())
+            manifest["contracts"][0]["tests"][0]["symbol"] += "DoesNotExist"
+            path.write_text(json.dumps(manifest))
+            self.assertTrue(any("missing test method" in e for e in validate(root=root)))
+            empty_log = root / "empty.log"
+            empty_log.write_text("No test executions\n")
+            self.assertTrue(any("No passed XCTest" in e for e in validate(swift_log=empty_log)))
+
+    def test_contract_check_rejects_an_unreviewed_backlog_change(self):
+        validate = runpy.run_path(str(ROOT / "scripts/check-parity-contracts.py"))["validate"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(ROOT / "Documentation", root / "Documentation")
+            shutil.copytree(ROOT / "Tests", root / "Tests", ignore=shutil.ignore_patterns("Fixtures"))
+            path = root / "Documentation/JavaScriptParityContracts.json"
+            manifest = json.loads(path.read_text())
+            manifest["remaining_unmapped_ids"] = []
+            path.write_text(json.dumps(manifest))
+            self.assertIn("Unmapped backlog changed without explicit review", validate(root=root))
 
     def test_mktemp_failure_stops_before_prepare_or_compilation(self):
         with tempfile.TemporaryDirectory() as directory:

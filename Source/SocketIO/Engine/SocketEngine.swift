@@ -442,8 +442,8 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             urlWebSocket.scheme = "ws"
         }
 
-        if let connectParams = self.connectParams, !connectParams.isEmpty {
-            for (key, value) in connectParams {
+        if let connectParams = self.connectParams {
+            for (key, value) in connectParams.sorted(by: { $0.key < $1.key }) {
                 let keyEsc = key.urlEncode()!
                 let valueEsc = "\(value)".urlEncode()!
 
@@ -455,16 +455,17 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             queryString += "&" + urlQuery
         }
 
-        urlWebSocket.percentEncodedQuery = "transport=websocket" + queryString
-        urlPolling.percentEncodedQuery = "transport=polling&b64=1" + queryString
-
-        if !urlWebSocket.percentEncodedQuery!.contains("EIO") {
-            urlWebSocket.percentEncodedQuery = urlWebSocket.percentEncodedQuery! + engineIOParam
+        // Engine.IO owns these keys. Inspect decoded *names*, never substring
+        // matches (e.g. token=EIO must not suppress the protocol version).
+        let reserved: Set<String> = ["EIO", "transport", "sid", "b64"]
+        let parameters = queryString.split(separator: "&", omittingEmptySubsequences: true).filter { part in
+            let name = String(part.split(separator: "=", maxSplits: 1,
+                                         omittingEmptySubsequences: false)[0])
+            return !reserved.contains(name.removingPercentEncoding ?? name)
         }
-
-        if !urlPolling.percentEncodedQuery!.contains("EIO") {
-            urlPolling.percentEncodedQuery = urlPolling.percentEncodedQuery! + engineIOParam
-        }
+        let suffix = parameters.isEmpty ? "" : "&" + parameters.joined(separator: "&")
+        urlWebSocket.percentEncodedQuery = "transport=websocket" + suffix + engineIOParam
+        urlPolling.percentEncodedQuery = "transport=polling&b64=1" + suffix + engineIOParam
 
         return (urlPolling.url!, urlWebSocket.url!)
     }

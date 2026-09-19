@@ -20,6 +20,8 @@ final class SocketReconnectEventsTest: XCTestCase {
     private var engine: ReconnectTestEngine!
 
     override func tearDown() {
+        manager?.defaultSocket.removeAllAnyOutgoingListeners()
+        manager?.defaultSocket.removeAllHandlers()
         manager?.disconnect()
         manager = nil
         engine = nil
@@ -444,5 +446,160 @@ private final class ReconnectTestEngine: SocketEngineSpec {
 
         let nsp = String(msg[msg.index(after: msg.startIndex)..<comma])
         client?.parseEngineMessage("0\(nsp),{\"sid\":\"sid-\(connectAttempts)\"}")
+    }
+}
+
+// Follow-up: drive the actual manager automatic-reconnect route, not a direct
+// call to didDisconnect(). The fake controls only the network handshake.
+extension SocketReconnectEventsTest {
+    func testAutomaticReconnectFailsSentTimedAckBeforeReconnectAttempt() {
+        let manager = makeManager()
+        let socket = manager.defaultSocket
+        connect(socket)
+        var order: [String] = []
+        socket.on(clientEvent: .disconnect) { _, _ in order.append("disconnect") }
+        socket.timeout(after: 60).emit("never_ack") { error, _ in
+            XCTAssertEqual(error as? SocketAckError, .disconnected)
+            order.append("ack")
+        }
+        let reconnected = expectation(description: "reconnected")
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in
+            XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+            order.append("attempt")
+        }
+        socket.once(clientEvent: .connect) { _, _ in reconnected.fulfill() }
+        manager.engineDidClose(reason: "transport close")
+        wait(for: [reconnected], timeout: 5)
+        XCTAssertEqual(order, ["disconnect", "ack", "attempt"])
+    }
+
+    func testAutomaticReconnectFailsAckTimeoutAckAndIgnoresLateReply() {
+        let manager = makeManager(.ackTimeout(60))
+        let socket = manager.defaultSocket
+        connect(socket)
+        var calls = 0
+        socket.emit("never_ack", ack: { error, _ in
+            XCTAssertEqual(error as? SocketAckError, .disconnected); calls += 1
+        })
+        let oldID = socket.currentAck
+        let reconnected = expectation(description: "reconnected")
+        socket.once(clientEvent: .connect) { _, _ in reconnected.fulfill() }
+        manager.engineDidClose(reason: "ping timeout")
+        wait(for: [reconnected], timeout: 5)
+        XCTAssertEqual(calls, 1)
+        socket.handleAck(oldID, data: ["late"])
+        XCTAssertEqual(calls, 1)
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+    }
+
+    func testAutomaticReconnectSilentlyRemovesSentNoTimeoutCallbackAck() {
+        let manager = makeManager()
+        let socket = manager.defaultSocket
+        connect(socket)
+        var calls = 0
+        socket.emit("never_ack", ack: { _, _ in calls += 1 })
+        let oldID = socket.currentAck
+        let reconnected = expectation(description: "reconnected")
+        socket.once(clientEvent: .connect) { _, _ in reconnected.fulfill() }
+        manager.engineDidClose(reason: "transport close")
+        wait(for: [reconnected], timeout: 5)
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+        socket.handleAck(oldID, data: [])
+        XCTAssertEqual(calls, 0)
+    }
+
+    func testAutomaticReconnectKeepsAckBufferedByDisconnectListener() {
+        let manager = makeManager()
+        let socket = manager.defaultSocket
+        connect(socket)
+        var bufferedID: Int?
+        var replies = 0
+        socket.once(clientEvent: .disconnect) { _, _ in
+            socket.timeout(after: 60).emit("buffered") { error, data in
+                XCTAssertNil(error)
+                XCTAssertEqual(data.first as? String, "ok")
+                replies += 1
+            }
+            bufferedID = socket.currentAck
+        }
+        let reconnected = expectation(description: "reconnected")
+        socket.once(clientEvent: .connect) { _, _ in reconnected.fulfill() }
+        manager.engineDidClose(reason: "transport close")
+        wait(for: [reconnected], timeout: 5)
+        XCTAssertEqual(replies, 0)
+        XCTAssertEqual(socket.ackHandlers.pendingTimedAckIDs, Set([bufferedID!]))
+        socket.handleAck(bufferedID!, data: ["ok"])
+        XCTAssertEqual(replies, 1)
+    }
+
+    func testAutomaticReconnectRetriesHeadWithFreshAckWithoutReordering() throws {
+        let manager = makeManager(.retries(1), .ackTimeout(60))
+        let socket = manager.defaultSocket
+        connect(socket)
+        var replies: [String] = []
+        socket.emit("first", ack: { error, _ in XCTAssertNil(error); replies.append("first") })
+        let oldID = socket.currentAck
+        socket.emit("second", ack: { error, _ in XCTAssertNil(error); replies.append("second") })
+        XCTAssertEqual(socket.testRetryQueueCount, 2)
+        let reconnected = expectation(description: "reconnected")
+        socket.once(clientEvent: .connect) { _, _ in reconnected.fulfill() }
+        manager.engineDidClose(reason: "transport close")
+        wait(for: [reconnected], timeout: 5)
+        let newID = socket.currentAck
+        XCTAssertNotEqual(oldID, newID)
+        socket.handleAck(oldID, data: [])
+        XCTAssertTrue(replies.isEmpty)
+        let events = try engine.written.filter { $0.hasPrefix("2") }.map { try manager.parseString($0).event }
+        XCTAssertEqual(events, ["first", "first"])
+        socket.handleAck(newID, data: [])
+        XCTAssertEqual(replies, ["first"])
+        socket.handleAck(socket.currentAck, data: [])
+        XCTAssertEqual(replies, ["first", "second"])
+        XCTAssertEqual(socket.testRetryQueueCount, 0)
+    }
+
+    func testAutomaticReconnectExhaustsRetryBudgetWithoutStrandingNextPacket() {
+        let manager = makeManager(.retries(1), .ackTimeout(60))
+        let socket = manager.defaultSocket
+        connect(socket)
+        var failures = 0
+        socket.emit("first", ack: { error, _ in
+            XCTAssertEqual(error as? SocketAckError, .disconnected); failures += 1
+        })
+        socket.emit("second", ack: { error, _ in XCTAssertNil(error) })
+        for _ in 0..<2 {
+            let reconnected = expectation(description: "reconnected")
+            socket.once(clientEvent: .connect) { _, _ in reconnected.fulfill() }
+            manager.engineDidClose(reason: "transport close")
+            wait(for: [reconnected], timeout: 5)
+        }
+        XCTAssertEqual(failures, 1)
+        XCTAssertEqual(socket.testRetryQueueCount, 1)
+        socket.handleAck(socket.currentAck, data: [])
+        XCTAssertEqual(socket.testRetryQueueCount, 0)
+    }
+}
+
+extension SocketReconnectEventsTest {
+    func testAutomaticReconnectFailsAsyncAckWithoutTimeout() {
+        let manager = makeManager()
+        let socket = manager.defaultSocket
+        connect(socket)
+        let failed = expectation(description: "async ack rejects on automatic transport drop")
+        socket.addAnyOutgoingListener { event in
+            if event.event == "pending-async" { manager.engineDidClose(reason: "transport close") }
+        }
+        let task = Task {
+            do {
+                let _: [Any] = try await socket.emitWithAck("pending-async")
+                XCTFail("the server never acknowledged this event")
+            } catch {
+                XCTAssertEqual(error as? SocketAckError, .disconnected)
+            }
+            failed.fulfill()
+        }
+        wait(for: [failed], timeout: 5)
+        task.cancel()
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
     }
 }

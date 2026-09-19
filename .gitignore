@@ -52,3 +52,6 @@ docs/docsets/
 docs/undocumented.json
 
 .swiftpm
+
+# Local integration-test dependencies
+Tests/TestSocketIO/E2E/Fixtures/node_modules/

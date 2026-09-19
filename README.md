@@ -34,23 +34,28 @@ Socket.IO release.
 
 ## Why this fork?
 
-The [official Swift client](https://github.com/socketio/socket.io-client-swift) is
-the foundation of this project and **already supports Socket.IO 4**. The reason for
-this fork is more specific: our target stack needs native Apple transports, an
-explicit Swift 6 language-mode baseline, and additional modern client behavior
-that the inspected upstream implementation does not provide together.
+This fork exists to address **production problems with the original Swift stack**.
+We needed fixes we could maintain, fewer behavioral surprises between our web
+and iOS applications, and client features that were missing from the original
+implementation.
 
-| What we need | What this fork provides |
+| Why we continued the project | What changes here |
 | --- | --- |
-| **Native networking without Starscream** | `URLSession` for polling and `URLSessionWebSocketTask` for WebSocket, with no third-party Swift dependencies. |
-| **A Swift 6 baseline** | Swift 6.4 tooling, Swift 6 language mode and concurrency checks in CI, with explicit queue-ownership rules. |
-| **Recovery and acknowledgement control** | Connection state recovery, dynamic authentication, ordered retries and cancellable async/await acknowledgements. |
-| **Reviewable compatibility evidence** | Native regression tests, pinned JavaScript test mappings and parser comparisons, with explicit scope and exclusions. |
+| **Development had stalled while production bugs remained** | The official Swift client's default branch has not advanced since October 2024. This fork continues development, pairs fixes with regression tests and keeps them in the library rather than in application-specific workarounds. |
+| **Starscream was another inactive dependency with recurring problems** | Its default branch has not advanced since March 2024. We replaced the Starscream-based transport with Apple's native `URLSessionWebSocketTask`, alongside `URLSession` polling. No third-party Swift dependencies. |
+| **Web and native clients need consistent behavior** | Reconnection events, acknowledgement cleanup, buffering and delivery should not unexpectedly change with the client language. Supported behavior is checked against a pinned JavaScript reference, with remaining API and platform differences documented. |
+| **Important client features were missing** | Connection state recovery, per-connection dynamic authentication, ordered acknowledgement retries and cancellable async/await acknowledgements are implemented in this fork. |
+| **More extensive validation is practical today** | AI-assisted review and test development are backed by native regression and real-server tests, JavaScript comparisons, Swift 6 concurrency checks and Thread Sanitizer in CI. The evidence is the reproducible checks, not an AI-generated quality promise. |
 
-These are requirements for this fork, not a claim that every application must
-leave upstream. See **[the source-linked comparison and trade-offs](Documentation/Guides/WhyThisFork.md)**
-for the inspected revisions, what is shared, and when the official client may
-still fit better. Existing applications should read the [17.x migration guide](Documentation/Guides/Migration.md).
+Maintenance snapshot, checked **2026-09-19**: the latest default-branch commits are
+[2024-10-01 for the official Swift client](https://github.com/socketio/socket.io-client-swift/commit/42da871d9369f290d6ec4930636c40672143905b)
+and [2024-03-07 for Starscream](https://github.com/daltoniam/Starscream/commit/c6bfd1af48efcc9a9ad203665db12375ba6b145a).
+These are dated observations, not a statement about the maintainers' future plans.
+
+The official client already supports Socket.IO 4 and SPM; those are not the reasons
+for this fork. See **[the production rationale, concrete behavior differences and
+source-linked comparison](Documentation/Guides/WhyThisFork.md)**. Existing applications
+should read the [17.x migration guide](Documentation/Guides/Migration.md).
 
 ## Requirements
 
@@ -170,6 +175,10 @@ The [documentation index](Documentation/README.md) also includes architecture,
 release procedures, the API source reference and the complete retained review evidence.
 
 ## Validation you can inspect
+
+AI assists implementation review, comparison with the JavaScript client and
+regression-test development. Source review and reproducible test results remain
+the basis for accepting changes; AI output is not a correctness certificate.
 
 The [Swift workflow](.github/workflows/swift.yml) runs the native regression suite,
 checks mapped JavaScript contracts against actual passed tests, and exercises

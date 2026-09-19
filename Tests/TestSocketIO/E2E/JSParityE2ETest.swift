@@ -1212,6 +1212,7 @@ final class JSParityE2ETest: XCTestCase {
         }
     }
 
+    @MainActor
     func testAsyncTimedEchoRejectsWhenDisconnectedImmediatelyAfterSending() {
         let socket = connect(makeManager().defaultSocket)
         let rejected = expectation(description: "async ACK rejects on disconnect")

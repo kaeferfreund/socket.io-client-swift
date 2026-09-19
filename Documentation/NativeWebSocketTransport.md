@@ -21,7 +21,7 @@ settle. The native FIFO receives `5` before held polling/application packets.
 An unsuccessful optional upgrade resumes healthy polling; failure on the active
 WebSocket closes the engine and lets the existing manager decide about reconnect.
 
-## Compatibility changes (major prerelease)
+## Compatibility changes in 17.0
 
 Normal SocketManager/SocketIOClient use does not require a backend selection.
 Minimum deployment versions: iOS 15, macOS 12, tvOS 15, watchOS 9. These are
@@ -86,16 +86,16 @@ transport failure rather than silently dropping a nonvolatile application packet
 and is **not** part of these transport limits. `maximumAttachments` defaults to
 10, matching JS `maxAttachments`; the byte limits are opt-in. The nesting-depth
 limit remains enabled by default at 512 and may reject packets accepted by the
-JavaScript parser. See the
-"Deliberate deviations" section of `PARITY.md`.
+JavaScript parser. See the [parity scope and deliberate deviations](../PARITY.md).
 
 ## Distribution and release
 
 Swift Package Manager is the only supported installation method. `Package.swift`
 declares no third-party Swift dependencies. Version 17.0.0 is published from the
-immutable `v17.0.0` tag. Publication remains blocked by the checks in
-[Release17.md](Release17.md). Development consumers should explicitly pin the
-reviewed commit until release.
+`v17.0.0` tag. [Release17.md](Release17.md) records that release and its validation.
+Later branch changes are not part of that tag. Development consumers should pin
+the reviewed commit and inspect its CI results; new releases follow the
+[release checklist](Development/Releasing.md).
 
 ## Validation
 

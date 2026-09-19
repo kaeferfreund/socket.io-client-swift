@@ -6,7 +6,8 @@ The checked-out client package declares 4.8.3; the commit, not a moving version
 label, identifies the reviewed implementation.
 
 **All 195 applicable runtime declarations now have complete native assertion
-mappings and passed execution evidence (801 Swift tests, zero failures). This is
+mappings and recorded execution evidence (801 Swift tests, zero failures in the
+final assertion audit). Inspect CI for the current checkout. This is
 scoped test parity, not proof of every possible JavaScript behavior.**
 The previous 116-row matrix covered only socket.io-client, omitted Engine.IO and
 both parsers, and contained stale/generic test pointers and inconsistent totals.
@@ -72,13 +73,14 @@ The native queue, TLS policy, graceful polling teardown and parser limits have
 focused tests. Compression, WebTransport and several JavaScript-specific APIs are
 not implemented. Reconnect-event semantics now match the JavaScript manager
 (`reconnect` means success and carries the attempt number; `reconnect_error` and
-`reconnect_failed` exist) — a breaking change in 17.0.0, see the README. The
+`reconnect_failed` exist) — a breaking change in 17.0.0, see the
+[connection lifecycle guide](Documentation/Guides/Connections.md#reconnection). The
 outgoing encoder throws instead of substituting an empty payload and rejects
 cyclic Foundation graphs before bridging. Its finite node/byte/depth budgets
 are deliberate deviations, as are sorted object keys and `\/` slash escaping
 (JS keeps insertion order with index-like keys first and leaves `/` unescaped;
 both decode identically, decided 2026-09-19 to document rather than change);
-full encoder parity remains an open release gate. Callback, async and legacy acknowledgement entry points now share ordered
+encoder gate R2 is closed with those documented deviations, not a claim of identical output. Callback, async and legacy acknowledgement entry points now share ordered
 retry delivery; native API representations remain documented separately. Runtime tests, SDK builds, API compatibility and device validation
 are different acceptance gates.
 

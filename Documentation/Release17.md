@@ -47,7 +47,7 @@ silently ignored. See [the native migration guide](NativeWebSocketTransport.md)
 and [Swift 6 / Socket.IO 4 migration](SocketIO4Swift6Migration.md).
 
 Reconnection event payloads and timing changed; consult the
-[breaking-change table](../README.md#breaking-changes-in-1700).
+[reconnection semantics](Guides/Connections.md#reconnection).
 Automatic server-cookie replay requires `withCredentials(true)` and uses an
 isolated engine-owned cookie jar. `autoConnect` remains false by default.
 Use the manager and sockets on their serial `handleQueue`; they are not Sendable.
@@ -68,13 +68,14 @@ behavior or a device/release certificate. See [PARITY.md](../PARITY.md).
 
 ## Release validation and follow-up scope
 
-Publication requires all seven CI jobs to pass on the exact release commit:
+The 17.0.0 release was validated by all seven then-required CI jobs on its exact commit:
 844 native tests and the strict parity checker against their actual log, Thread
 Sanitizer, strict concurrency, four Apple SDK package builds, pinned upstream
 Node suites, parser differential checks and wire proofs. CI also builds and runs
 an independent Swift Package consumer; when dispatched against the release tag,
 it resolves version 17.0.0 from GitHub instead of using a local package path.
-The release page records the final commit and CI run links.
+The release page records the final commit and CI run links. For later releases,
+use the [current release checklist](Development/Releasing.md) and all current CI jobs.
 
 All 195 applicable upstream runtime declarations have complete native assertion
 mappings. The strict checker remains mandatory; exclusions and contract mappings

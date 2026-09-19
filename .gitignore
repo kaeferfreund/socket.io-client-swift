@@ -53,3 +53,8 @@ docs/undocumented.json
 
 # Local integration-test dependencies
 Tests/TestSocketIO/E2E/Fixtures/node_modules/
+
+# Local Python validation artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/

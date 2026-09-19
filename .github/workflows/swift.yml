@@ -2,9 +2,8 @@ name: Swift
 
 on:
   push:
-    branches: [ "master", "development", "feat/socketio4-swift6.4" ]
+    branches: [ "**" ]
   pull_request:
-    branches: [ "master", "development", "feat/connect-timeout", "feat/socketio4-swift6.4" ]
   workflow_dispatch:
 
 env:
@@ -40,6 +39,8 @@ jobs:
         run: swift build -v
       - name: Build and run an independent Swift Package consumer
         run: bash scripts/test-spm-consumer.sh
+      - name: Compile and initialize the README quick start as an independent consumer
+        run: bash scripts/test-documentation-examples.sh
       - name: Run complete unit and real-server test suite
         run: |
           set -o pipefail
@@ -226,3 +227,22 @@ jobs:
           name: upstream-client-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/upstream-client-results
           retention-days: 7
+
+  repository-hygiene:
+    name: Documentation links, examples tooling and repository hygiene
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Test the offline documentation checker
+        run: python3 scripts/test-documentation.py
+      - name: Check current documentation paths and anchors
+        run: python3 scripts/check-documentation.py
+      - name: Check shell script syntax
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' script; do
+            bash -n "$script"
+          done < <(find scripts -name '*.sh' -print0)

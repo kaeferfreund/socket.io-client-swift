@@ -86,8 +86,7 @@ Encoder gate R2 is closed with documented deviations. R3 and the scheduling
 half of R4 remain deferred architecture work without a demonstrated defect; see
 [ProtocolParityReview.md](ProtocolParityReview.md).
 
-The user authorized publishing the current state as v17. Manual TimeMonkey/Bun
-upgrade checks and physical iOS/watchOS runtime checks remain outstanding and
+Physical iOS/watchOS runtime checks remain outstanding and
 are not certified by this release. The supported installation method is SPM;
 independent CocoaPods and framework application integration remain unverified,
 although all four SDK framework builds are checked in CI. See

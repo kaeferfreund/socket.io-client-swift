@@ -71,9 +71,6 @@ Stream-Codec bleiben ausdrücklich ausgeschlossen.
 
 ## Weiterhin echte manuelle oder Release-Aufgaben
 
-- Gerätetest mit TimeMonkey/Bun: geprüften Commit pinnen, erzwungenes WebSocket
-  entfernen und stabilen Polling→WebSocket-Upgrade auf dem Gerät bestätigen.
-  Der alte Thread enthält keinen bestätigten Abschluss dieses Tests.
 - iOS/watchOS-Hardware: Hintergrund/Vordergrund, Suspend, Netzverlust/-rückkehr,
   WLAN↔Mobilfunk, IPv6 und Proxy-Umgebungen. macOS-CI ersetzt diese Nachweise nicht.
 - SPM-Consumer wird separat in CI gebaut und ausgeführt; beim CI-Lauf auf dem

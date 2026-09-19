@@ -170,7 +170,7 @@ publication gate for 17.0.0.
 
 There are multiple acknowledgement APIs/registries and multiple buffering paths. This increases the number of cancellation, identity-reset and reconnect combinations that must remain consistent. Introduce one internal acknowledgement record with explicit timeout/disconnect/retry policy, keep public compatibility adapters at the edge, and express connection/namespace transitions as a small documented state machine.
 
-Decide separately whether the public reconnect-event API should migrate to JavaScript semantics. A silent event rename would break existing consumers. Provide an explicit compatibility/version strategy, then run a differential trace suite for disconnect, retry, middleware refusal, successful recovery, identity change and reconnect exhaustion. The current code review is not permission to silently change TimeMonkey's event handling.
+Decide separately whether the public reconnect-event API should migrate to JavaScript semantics. A silent event rename would break existing consumers. Provide an explicit compatibility/version strategy, then run a differential trace suite for disconnect, retry, middleware refusal, successful recovery, identity change and reconnect exhaustion.
 
 ### R4. Finish test traceability and deterministic scheduling
 

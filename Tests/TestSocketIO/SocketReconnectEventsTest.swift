@@ -588,9 +588,11 @@ extension SocketReconnectEventsTest {
         socket.addAnyOutgoingListener { event in
             if event.event == "pending-async" { manager.engineDidClose(reason: "transport close") }
         }
+        // The socket is used again after the Task; box it so the closure can be sent.
+        let boxed = SocketUncheckedSendableBox(socket)
         let task = Task {
             do {
-                let _: [Any] = try await socket.emitWithAck("pending-async")
+                let _: [Any] = try await boxed.value.emitWithAck("pending-async")
                 XCTFail("the server never acknowledged this event")
             } catch {
                 XCTAssertEqual(error as? SocketAckError, .disconnected)

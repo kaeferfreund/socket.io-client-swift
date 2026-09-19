@@ -30,6 +30,7 @@
 - **`Data` emitted through `rawEmitView` is now an error.** That view deliberately does not shred binary into attachments, so `Data` has no wire form there; it used to be silently replaced by an empty payload.
 - **A query string in the server URL is now used.** `SocketEngine` rebuilt its transport URLs from scratch and discarded whatever query the `socketURL` carried, so `SocketManager(socketURL: URL(string: "https://example.com/?token=abc")!)` never sent `token`. The URL's parameters are now the connection query, unless `.connectParams` is set — JS `socket.io-client/lib/index.ts` does `if (parsed.query && !opts.query) opts.query = parsed.queryKey`, i.e. an explicit query replaces rather than merges. Percent-encoded parameters are passed through verbatim. Ported from `socket.ts` "query option" (all four titles).
 - **JSON object keys are written in sorted order.** A Swift `Dictionary` has no insertion order for the encoder to preserve, so the choice was between an arbitrary order and a reproducible one; JSON object order carries no meaning. Binary attachments are numbered in that same sorted traversal, so the same payload always produces the same wire bytes.
+- **A pending acknowledgement is settled by a transport drop that reconnects**, where it used to survive untouched. An error-first callback and an `async emitWithAck` now receive `SocketAckError.disconnected` at the close instead of staying pending across the reconnect. See the matching entry under *Fixes* for the full `_clearAcks` rules.
 
 ## Fixes
 

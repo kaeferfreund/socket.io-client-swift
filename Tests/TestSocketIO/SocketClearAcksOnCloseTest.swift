@@ -296,10 +296,12 @@ final class SocketClearAcksOnCloseTest: XCTestCase {
         socket.off(id: connectID)
 
         let socket = self.socket!
+        // The socket is used again after the Task; box it so the closure can be sent.
+        let boxed = SocketUncheckedSendableBox(socket)
         let thrown = expectation(description: "await throws the disconnect error")
         let task = Task {
             do {
-                _ = try await socket.emitWithAck("echo", "a")
+                _ = try await boxed.value.emitWithAck("echo", "a")
                 XCTFail("the acknowledgement must not resolve")
             } catch {
                 XCTAssertEqual(error as? SocketAckError, .disconnected)

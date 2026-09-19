@@ -285,10 +285,14 @@ JavaScript client's contract. Everything below changes an observable API; see
 | `Data` through `rawEmitView` | Silently sent an empty payload. | Throws `SocketPacketError.unsupportedValue`; that view deliberately does not shred binary into attachments. |
 | Server-URL query string | Discarded when the engine built its transport URLs. | Used as the connection query, unless `.connectParams` is set (JS `if (parsed.query && !opts.query)`). |
 | JSON object key order | Arbitrary, varied between runs. | Sorted, so the wire output is reproducible. A Swift `Dictionary` has no insertion order to preserve, and JSON object order carries no meaning. |
+| Pending acknowledgement on a retried drop | Survived the reconnect untouched, so it could match an id the new session re-issued or fire a late timeout. | Settled at the close, as JS `Socket.onclose` → `_clearAcks()` does on **every** close: an error-first callback and an `async emitWithAck` get the disconnect error, a plain callback is dropped silently, and an acknowledgement whose packet is still buffered is kept. The retry queue's head keeps its place and its budget and is re-sent under a fresh id. |
 
 Additions that are not breaking: `async` `socket.emitWithAck(_:_:)` and
 `socket.timeout(after:).emitWithAck(_:_:)`, `SocketPacket.encodedPacketString()`
-(the throwing encoder) and `SocketPacketError`.
+(the throwing encoder), `SocketPacketError`, and
+`.bufferLimits(SocketBufferLimits)` — every limit in it is off by default, so
+the client stays JavaScript-equal unless you opt in (see
+[Optional pipeline buffer limits](#optional-pipeline-buffer-limits)).
 
 ## TLS and migration from Starscream
 
@@ -349,10 +353,61 @@ transport limits each incoming message to 16 MiB and pending outgoing payload to
 [SocketWebSocketOptions](Source/SocketIO/Engine/Transport/SocketWebSocketOptions.swift).
 The server's Engine.IO `maxPayload` separately governs outgoing polling batches.
 
-None of these settings is a total application-memory limit. In particular,
-disconnected-send and retry queues can grow while offline; avoid producing an
-unbounded stream of reliable events during long outages. Use `socket.volatile`
-only for updates that may safely be dropped.
+None of these settings is a total application-memory limit; see the next section
+for the queues that accumulate *across* packets.
+
+## Optional pipeline buffer limits
+
+`.parserOptions` bounds one incoming packet and `.webSocketOptions` bounds one
+native WebSocket message. Neither bounds what accumulates *between* packets: the
+send buffer of a socket that is offline, the retry queue behind a head the
+server never acknowledges, the recovery replay buffer, packets the engine hands
+the manager faster than they are parsed, or one very large polling response.
+`.bufferLimits(SocketBufferLimits)` is that third layer.
+
+**Every limit is off by default**, because the JavaScript client has no such
+bound either — out of the box this client behaves exactly like `socket.io-client`
+and its `sendBuffer` grows while you are offline. Opt in where you need the
+guarantee:
+
+```swift
+let limits = SocketBufferLimits(
+    maximumSendBufferPackets: 1_000,      // emits buffered while disconnected
+    maximumSendBufferBytes: 8 << 20,
+    maximumRetryQueuePackets: 200,        // entries behind an unacknowledged head
+    maximumRecoveryReplayPackets: 5_000,  // replayed events during session recovery
+    maximumUnparsedPackets: 512,          // engine → manager handoff backpressure
+    maximumPollingResponseBytes: 4 << 20, // one incoming long-polling HTTP body
+    binaryReconstructionTimeout: 30       // seconds a partial binary packet may wait
+)
+let manager = SocketManager(
+    socketURL: URL(string: "https://example.com")!,
+    config: [.bufferLimits(limits)]
+)
+```
+
+Overflow is explicit and never silent:
+
+* **Outgoing** (`sendBuffer`, retry queue): the **new** emit fails locally. Its
+  write completion runs once, its acknowledgement settles once with a
+  `SocketBufferLimitError`, and the `.error` client event carries the same
+  error. Nothing already accepted is evicted — an emit you were told is queued
+  is never dropped behind your back.
+* **Incoming** (replay buffer, handoff backlog, polling body): the connection is
+  closed with `"transport error"`. A half-reconstructed binary packet that
+  outlives `binaryReconstructionTimeout` closes with `"parse error"` instead,
+  and nothing is replayed from the partial packet. Reconnection then proceeds
+  normally if it is enabled.
+
+With `maximumPollingResponseBytes` set, the body is bounded *while it is
+received*: an announced `Content-Length` above the cap is refused before any
+body byte is transferred, and a chunked body is cancelled as soon as the
+accumulated bytes cross the cap. All configured values must be positive; an
+invalid set is rejected before connecting.
+
+These are queue-retention bounds measured in estimated payload bytes, not a
+total application-memory limit and not an allocator cap. `socket.volatile`
+remains the right tool for updates that may safely be dropped.
 
 ## Testing and JavaScript parity
 

@@ -60,3 +60,16 @@ are deliberate deviations; full encoder parity remains an open release gate. Leg
 still differ; see the review rather than treating these as browser-only
 exceptions. Runtime tests, SDK builds, API compatibility and device validation
 are different acceptance gates.
+
+Acknowledgements are now cleared on **every** close, including a drop the
+manager retries, exactly as JS `Socket.onclose` → `_clearAcks()` does — the last
+acknowledged divergence on that path (round 3, 2026-09-19). The new
+`.bufferLimits(SocketBufferLimits)` option bounds the send buffer, the retry
+queue, the recovery replay buffer, the engine-to-manager handoff, one incoming
+polling body and the binary reconstruction deadline; **its defaults are
+unlimited, so the out-of-the-box behaviour stays JavaScript-equal** — JS has no
+such bounds either — and the limits are opt-in hardening, like the byte limits
+in `SocketParserOptions`. A Thread Sanitizer run and a
+`-strict-concurrency=complete` warning ratchet are now CI jobs, and fixture
+dependencies are pinned with a committed lockfile; device and simulator
+validation remains an open gate.

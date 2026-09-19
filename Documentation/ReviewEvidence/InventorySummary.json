@@ -9,9 +9,9 @@
   },
   "typescript_type_declarations": 14,
   "review_statuses": {
-    "candidate-existing-test": 70,
+    "candidate-existing-test": 68,
     "api-difference": 15,
-    "focused-regression": 89,
+    "focused-regression": 91,
     "platform-specific": 36,
     "unsupported-feature": 43,
     "typescript-only": 14,

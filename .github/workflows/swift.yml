@@ -38,6 +38,8 @@ jobs:
         working-directory: Tests/TestSocketIO/E2E/Fixtures
       - name: Build without third-party Swift dependencies
         run: swift build -v
+      - name: Build and run an independent Swift Package consumer
+        run: bash scripts/test-spm-consumer.sh
       - name: Run complete unit and real-server test suite
         run: |
           set -o pipefail

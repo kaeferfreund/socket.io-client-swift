@@ -1,12 +1,12 @@
-## 17.0.0 (release preparation; unpublished)
+## 17.0.0 — 2026-09-19
 
 - Share ordered retries across callback, async and legacy acknowledgement APIs; support cancellation and per-socket timeout/retry overrides.
 - Buffer pre-connect incoming events generally, preserving receive/send/connect ordering and clearing failed connection state.
 - Add polling/WebSocket transport lists, `tryAllTransports` and `rememberUpgrade`.
-- Prepare immutable podspec tag `v17.0.0` and framework version 17.0.0.
-- Keep WebTransport/stream codec explicitly unsupported. Complete JS assertion parity and release acceptance remain open; see [release preparation](Documentation/Release17.md).
+- Publish stable Swift Package Manager version `17.0.0` with immutable tag `v17.0.0` and matching framework/podspec metadata.
+- Keep WebTransport/stream codec explicitly unsupported. All 195 applicable upstream runtime declarations have native assertion mappings; see [release notes and validation scope](Documentation/Release17.md).
 
-The entries below record development history for this unreleased major version.
+The entries below record development history leading up to 17.0.0. Earlier entries describe intermediate behavior; the release notes and current migration guides describe the final public API.
 
 ## Native configuration cleanup (2026-09-19)
 

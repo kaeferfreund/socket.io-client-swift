@@ -4,8 +4,7 @@ A native Swift client for Socket.IO 4.x on iOS, macOS, tvOS and watchOS.
 
 Built on Apple's URLSession, with native HTTP long-polling and URLSessionWebSocketTask transports. No Starscream and no third-party Swift runtime dependencies.
 
-17.0.0 is currently being prepared and has not been published yet.
-Until the release tag is available, use a reviewed commit from master for reproducible builds. See [Release 17 status](Documentation/Release17.md).
+**17.0.0 is the stable release.** See the [release notes](https://github.com/kaeferfreund/socket.io-client-swift/releases/tag/v17.0.0) and [migration guide](Documentation/SocketIO4Swift6Migration.md).
 
 ## At a glance
 
@@ -69,7 +68,7 @@ and enter:
 https://github.com/kaeferfreund/socket.io-client-swift.git
 ```
 
-While 17.0.0 is unreleased, pin a reviewed commit for reproducible builds.
+Use version **17.0.0** or later within the 17.x series.
 
 For a Package.swift:
 
@@ -77,7 +76,7 @@ For a Package.swift:
 dependencies: [
     .package(
         url: "https://github.com/kaeferfreund/socket.io-client-swift.git",
-        revision: "<commit-sha>"
+        from: "17.0.0"
     )
 ]
 ```
@@ -88,15 +87,6 @@ Then add the library to your target:
 .product(
     name: "SocketIO",
     package: "socket.io-client-swift"
-)
-```
-
-After v17.0.0 is published, use the stable version range instead of a branch or revision:
-
-```swift
-.package(
-    url: "https://github.com/kaeferfreund/socket.io-client-swift.git",
-    from: "17.0.0"
 )
 ```
 

@@ -406,6 +406,19 @@ packet. JS `JSON.stringify` never does that: it produces the value or throws.
   dictionaries in the same sorted order, so attachment numbering is stable too.
   JSON object order carries no meaning, and the reproducibility is what makes
   the exact wire strings testable.
+  Validated against the pinned `socket.io-parser` encoder on 2026-09-19: JS
+  writes array-index-like keys first in ascending numeric order (`"2"` before
+  `"10"`), then every other key — including `"-1"`, `"01"` and `"1.5"` — in
+  insertion order. Because plain `[String: Any]` input carries no insertion
+  order at all, no encoder change can reproduce that for the current API;
+  a JS-identical wire string would need an ordered input type (for example
+  `KeyValuePairs`) plus a custom JSON writer. **Decision (2026-09-19): keep
+  sorted keys and document the difference.** Decoders on both sides treat the
+  orders as equal, which the encode differential proves.
+- **Escaped slashes.** `JSONSerialization` writes `/` as `\/`; `JSON.stringify`
+  leaves it unescaped. Both decode to the same string. Number formatting for
+  very large or very small doubles (JS `1e+21`) is also not guaranteed to be
+  byte-identical. Same decision as above: documented, not changed.
 - **Bounded Foundation normalization (2026-09-19 follow-up).** Foundation
   arrays/dictionaries are traversed by identity through CoreFoundation before
   recursive bridging. Ancestor cycles throw `cyclicPayload`; shared acyclic

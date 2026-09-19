@@ -69,6 +69,20 @@ def validate(root=ROOT, swift_log=None, upstream_inventory=None, strict=False):
                 errors.append(name + ': missing test method ' + symbol)
             if swift_log is not None and symbol not in passed:
                 errors.append(name + ': XCTest did not report a PASS for ' + symbol)
+    # The inventory's swift_tests column is a derived view of the gated
+    # contracts, never independent evidence: it must name exactly the symbols
+    # the contracts certify for that row, so readers and CI see the same tests.
+    contract_symbols = {}
+    for contract in manifest['contracts']:
+        for id in contract['upstream_ids']:
+            contract_symbols.setdefault(id, set()).update(t['symbol'] for t in contract['tests'])
+    for row in rows:
+        if row['status'] != 'focused-regression':
+            continue
+        listed = {ref for ref in re.split(r'[;\s]+', row['swift_tests']) if ref}
+        expected = contract_symbols.get(row['id'], set())
+        if listed != expected:
+            errors.append(row['id'] + ': inventory swift_tests differ from the gated contract tests')
     review = manifest.get('remaining_review')
     if review is None:
         errors.append('Missing explicit remaining-client review')

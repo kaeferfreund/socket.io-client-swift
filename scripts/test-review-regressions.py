@@ -123,6 +123,25 @@ class ReviewRegressions(unittest.TestCase):
             path.write_text(json.dumps(manifest))
             self.assertTrue(any("exclusion must refer" in e for e in validate(root=root)))
 
+    def test_inventory_test_pointers_must_match_the_gated_contracts(self):
+        validate = runpy.run_path(str(ROOT / "scripts/check-parity-contracts.py"))["validate"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(ROOT / "Documentation", root / "Documentation")
+            shutil.copytree(ROOT / "Tests", root / "Tests", ignore=shutil.ignore_patterns("Fixtures"))
+            path = root / "Documentation/JavaScriptTestInventory.csv"
+            with path.open(newline="") as source:
+                rows = list(csv.DictReader(source))
+            row = next(r for r in rows if r["status"] == "focused-regression")
+            # A bare class name or a stale pointer is not the certified test.
+            row["swift_tests"] = "SomeTestClass"
+            with path.open("w", newline="") as target:
+                writer = csv.DictWriter(target, fieldnames=rows[0].keys(), lineterminator="\n")
+                writer.writeheader()
+                writer.writerows(rows)
+            self.assertIn(row["id"] + ": inventory swift_tests differ from the gated contract tests",
+                          validate(root=root))
+
     def test_mktemp_failure_stops_before_prepare_or_compilation(self):
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)

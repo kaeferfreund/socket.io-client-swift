@@ -63,7 +63,7 @@
         "JS-132"
       ],
       "kind": "native-assertion-equivalent",
-      "assertions": "Polling-only raw Engine.IO sends bytes 0...4 then cash money \u20ac\u20ac\u20ac. Assert exactly two echoes, binary Data type and bytes first, exact multibyte text second. Data replaces ArrayBuffer.",
+      "assertions": "Polling-only raw Engine.IO sends bytes 0...4 then cash money €€€. Assert exactly two echoes, binary Data type and bytes first, exact multibyte text second. Data replaces ArrayBuffer.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
@@ -77,7 +77,7 @@
         "JS-136"
       ],
       "kind": "native-assertion-equivalent",
-      "assertions": "After real polling-to-WebSocket upgrade, send bytes 0...4 then cash money \u20ac\u20ac\u20ac. Assert exactly two echoes in original order and with original binary/text types and values; native Data replaces ArrayBuffer.",
+      "assertions": "After real polling-to-WebSocket upgrade, send bytes 0...4 then cash money €€€. Assert exactly two echoes in original order and with original binary/text types and values; native Data replaces ArrayBuffer.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
@@ -724,7 +724,7 @@
         "JS-104"
       ],
       "kind": "assertion-port",
-      "assertions": "JS `Socket.onclose` runs `_clearAcks()` on every close, so a transport drop that the manager retries settles a pending acknowledgement exactly as `disconnect()` does: `socket.timeout(N).emit` and a configured-`ackTimeout` callback receive the disconnect error and the registry is left empty (JS asserts `Object.keys(socket.acks).length === 0`), the `emitWithAck` continuation is resumed with `.disconnected` as JS rejects the promise, and a callback registered without `withError` is removed silently without being invoked. The real server-side transport kill covers the same contract end to end with an emit the server never acknowledges.",
+      "assertions": "JS `Socket.onclose` runs `_clearAcks()` on every close, so a transport drop that the manager retries settles a pending acknowledgement exactly as `disconnect()` does: `socket.timeout(N).emit` and a configured-`ackTimeout` callback receive the disconnect error and the registry is left empty (JS asserts `Object.keys(socket.acks).length === 0`), the `emitWithAck` continuation is resumed with `.disconnected` as JS rejects the promise, and a callback registered without `withError` is removed silently without being invoked. The real server-side transport kill covers the same contract end to end with an emit the server never acknowledges. The promise variant (JS-104) is certified by its own async tests: `emitWithAck` throws `.disconnected` both on an explicit disconnect and on a retried transport drop.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/SocketClearAcksOnCloseTest.swift",
@@ -741,6 +741,14 @@
         {
           "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
           "symbol": "JSParityE2ETest.testPendingAckFailsWhenTheTransportIsKilledAndTheSocketReconnects"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketClearAcksOnCloseTest.swift",
+          "symbol": "SocketClearAcksOnCloseTest.testAsyncEmitWithAckThrowsDisconnectedOnATransportDropThatReconnects"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketTimedEmitterTest.swift",
+          "symbol": "SocketTimedEmitterAsyncTest.testAsyncEmitThrowsDisconnectedOnDisconnect"
         }
       ]
     },

@@ -75,7 +75,10 @@ not implemented. Reconnect-event semantics now match the JavaScript manager
 `reconnect_failed` exist) — a breaking change in 17.0.0, see the README. The
 outgoing encoder throws instead of substituting an empty payload and rejects
 cyclic Foundation graphs before bridging. Its finite node/byte/depth budgets
-are deliberate deviations; full encoder parity remains an open release gate. Callback, async and legacy acknowledgement entry points now share ordered
+are deliberate deviations, as are sorted object keys and `\/` slash escaping
+(JS keeps insertion order with index-like keys first and leaves `/` unescaped;
+both decode identically, decided 2026-09-19 to document rather than change);
+full encoder parity remains an open release gate. Callback, async and legacy acknowledgement entry points now share ordered
 retry delivery; native API representations remain documented separately. Runtime tests, SDK builds, API compatibility and device validation
 are different acceptance gates.
 

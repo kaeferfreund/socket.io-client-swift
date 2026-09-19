@@ -591,13 +591,11 @@
     },
     {
       "id": "remaining-js-194",
-      "kind": "native-error-contract",
       "upstream_ids": [
         "JS-194"
       ],
-      "assertions": [
-        "A 101-byte payload against maxHttpBufferSize=100 produces polling write error HTTP 413 and a transport error close carrying structured detail."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real a*101 exceeds 100-byte polling server limit. Error callback must carry SocketTransportError with HTTP 413, operation write, polling write (HTTP 413) description and empty body; close must follow the error with transport error and identical detail object. Native URLSession completed response/type replaces XHR readyState/TransportError fields; queued b additionally covers JS-151.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
@@ -607,33 +605,25 @@
     },
     {
       "id": "remaining-js-195",
-      "kind": "native-error-contract",
       "upstream_ids": [
         "JS-195"
       ],
-      "assertions": [
-        "A 101-byte WebSocket payload against maxHttpBufferSize=100 closes with peer code 1009. A simultaneous receive error must not erase the peer close code or turn it into a generic error close."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real WebSocket a*101 over 100-byte server limit closes with transport close, typed detail operation close, code 1009, empty close reason and websocket close (WebSocket 1009) description. Require no preceding error callback. Native SocketTransportError fields replace CloseEvent fields; IE11 branch is platform-specific.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
           "symbol": "EngineRemainingParityE2ETest.testOversizeWebSocketReports1009AndCloseDetail"
-        },
-        {
-          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
-          "symbol": "SocketRemainingParityTest.testCloseDetailIncludesPeerCodeEvenWithReceiveError"
         }
       ]
     },
     {
       "id": "remaining-js-196",
-      "kind": "native-error-contract",
       "upstream_ids": [
         "JS-196"
       ],
-      "assertions": [
-        "An actual stale-SID polling GET reports HTTP 400 and the exact Session ID unknown JSON body, followed by one detailed transport error close."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real polling request with nonexistent SID returns 400: error callback asserts typed polling read error, exact status and exact Session ID unknown JSON body; close follows with transport error and same detail. Stale request injected at transport layer because user query may not override engine-owned SID. Native completed URLSession response replaces XHR readyState.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
@@ -643,13 +633,11 @@
     },
     {
       "id": "remaining-js-197",
-      "kind": "native-error-contract",
       "upstream_ids": [
         "JS-197"
       ],
-      "assertions": [
-        "An actual stale-SID WebSocket handshake fails and closes with native transport detail. URLSession need not expose the HTTP rejection status; no fabricated XHR or CloseEvent object is claimed."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real WebSocket handshake carrying nonexistent SID must report typed websocket close-operation error with native underlying error; close follows with transport error and the same detail object. Native URLSession error replaces JS generic error Event; no unsupported HTTP response-body/status claim is made.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
@@ -912,12 +900,12 @@
       "upstream_ids": [
         "JS-200"
       ],
-      "kind": "native-adaptation",
-      "assertions": "After a successful WebSocket opening the default configuration starts with polling; original explicitly-false option after upgrade still to be compared.",
+      "kind": "native-assertion-equivalent",
+      "assertions": "First real connection begins polling and demonstrably upgrades (server upgrade marker and native WS status), then closes. Create another engine with explicit rememberUpgrade false, require successful open and its first observed request to use polling GET, not WebSocket. Native request observation replaces JS transport.name; require real upgrade instead of the original timeout fallback.",
       "tests": [
         {
-          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
-          "symbol": "SocketNativeEngineTest.testRememberUpgradeDisabledStillStartsWithPolling"
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testExplicitRememberUpgradeFalseStartsPollingAfterARealUpgrade"
         }
       ]
     },
@@ -2472,6 +2460,48 @@
         {
           "path": "Tests/TestSocketIO/SocketProtocolSafetyTest.swift",
           "symbol": "SocketProtocolSafetyTest.testOriginalPacketValidityPayloadCases"
+        }
+      ]
+    },
+    {
+      "id": "JS-149",
+      "upstream_ids": [
+        "JS-149"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real default Engine.IO connection opens; close then immediately send hi, await close and local refused-write completion, observe 200 ms with no incoming application packet. Require empty outgoing queue and no 4hi in actual server POST bodies or WebSocket frames. Native absence of queued/wire packet replaces JS packetCreate negative event assertion.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testSendImmediatelyAfterRealCloseDoesNotCreateAMessage"
+        }
+      ]
+    },
+    {
+      "id": "JS-150",
+      "upstream_ids": [
+        "JS-150"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real polling server maxPayload 100: send original a*99, b*30, c*30, d*35, euro*33 and f*99, require all six exact echoed messages in order. Assert multiple POST batches and every observed body at most 100 UTF-8 bytes. This is raw Engine.IO, not a substitute Socket.IO envelope test.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testOriginalSixMessagesRespectMaxPayloadIncludingUTF8"
+        }
+      ]
+    },
+    {
+      "id": "JS-151",
+      "upstream_ids": [
+        "JS-151"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real polling maxPayload 100: send a*101 followed immediately by b, require transport-error closure with HTTP 413 for the rejected first write. Oversized first packet is sent rather than silently dropped or preventing error completion. Native typed close detail replaces JS close event.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testOversizePollingReports413AndCloseDetail"
         }
       ]
     }

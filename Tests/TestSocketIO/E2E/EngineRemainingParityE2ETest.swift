@@ -177,6 +177,67 @@ final class EngineRemainingParityE2ETest: XCTestCase {
         for request in posts { XCTAssertLessThanOrEqual(try XCTUnwrap(request["bytes"] as? Int), 100) }
     }
 
+    func testOriginalSixMessagesRespectMaxPayloadIncludingUTF8() throws {
+        try make([.forcePolling(true)], maximum: 100)
+        let values = [("a", 99), ("b", 30), ("c", 30), ("d", 35), ("€", 33), ("f", 99)]
+            .map { String(repeating: $0.0, count: $0.1) }
+        roundTrip(values.map { .text($0) })
+        let requests = try XCTUnwrap(snapshot()["requests"] as? [[String: Any]])
+        let posts = requests.filter { ($0["method"] as? String) == "POST" }
+        XCTAssertGreaterThan(posts.count, 1)
+        for post in posts { XCTAssertLessThanOrEqual(try XCTUnwrap(post["bytes"] as? Int), 100) }
+    }
+
+    func testSendImmediatelyAfterRealCloseDoesNotCreateAMessage() throws {
+        try make([])
+        let opened = expectation(description: "real engine opens")
+        client.opened = { opened.fulfill() }
+        client.message = { _ in XCTFail("No application message should arrive after close") }
+        engine.connect()
+        wait(for: [opened], timeout: 5)
+        let closed = expectation(description: "engine closes")
+        let refused = expectation(description: "refused write completes locally")
+        client.closed = { _, _ in closed.fulfill() }
+        engine.disconnect(reason: "io client disconnect")
+        engine.send("hi", withData: []) { refused.fulfill() }
+        wait(for: [closed, refused], timeout: 5)
+        let settled = expectation(description: "no delayed packet")
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.2) { settled.fulfill() }
+        wait(for: [settled], timeout: 1)
+        engine.engineQueue.sync { XCTAssertTrue(engine.postWait.isEmpty) }
+        let observed = try snapshot()
+        let requests = try XCTUnwrap(observed["requests"] as? [[String: Any]])
+        XCTAssertFalse(requests.contains { ($0["body"] as? String)?.contains("4hi") == true })
+        let frames = try XCTUnwrap(observed["frames"] as? [[String: Any]])
+        XCTAssertFalse(frames.contains { ($0["payload"] as? String) == "4hi" })
+    }
+
+    func testExplicitRememberUpgradeFalseStartsPollingAfterARealUpgrade() throws {
+        try make([], environment: ["EMIT_UPGRADE_MARKER": "1"])
+        roundTrip([.text("first connection upgraded")], afterUpgrade: true)
+        let firstRequests = try XCTUnwrap(snapshot()["requests"] as? [[String: Any]])
+        XCTAssertTrue((firstRequests.first?["url"] as? String)?.contains("transport=polling") == true)
+        let closed = expectation(description: "upgraded connection closes")
+        client.closed = { _, _ in closed.fulfill() }
+        engine.disconnect(reason: "io client disconnect")
+        wait(for: [closed], timeout: 5)
+        let offset = try XCTUnwrap(snapshot()["requests"] as? [[String: Any]]).count
+
+        let secondClient = RemainingEngineClient()
+        let second = SocketEngine(client: secondClient, url: URL(string: "http://127.0.0.1:\(server.port)")!,
+                                  config: [.path("/engine.io/"), .rememberUpgrade(false)])
+        defer { second.disconnect(reason: "test teardown"); second.engineQueue.sync {} }
+        let opened = expectation(description: "second connection opens")
+        secondClient.opened = { opened.fulfill() }
+        secondClient.failed = { reason, _ in XCTFail(reason) }
+        second.connect()
+        wait(for: [opened], timeout: 5)
+        let requests = try XCTUnwrap(snapshot()["requests"] as? [[String: Any]])
+        let first = try XCTUnwrap(requests.dropFirst(offset).first)
+        XCTAssertEqual(first["method"] as? String, "GET")
+        XCTAssertTrue((first["url"] as? String)?.contains("transport=polling") == true)
+    }
+
     private func assertCookiePolicy(_ enabled: Bool) throws {
         try make([.forcePolling(true), .withCredentials(enabled)])
         roundTrip([.text("cookie check")])
@@ -213,14 +274,37 @@ final class EngineRemainingParityE2ETest: XCTestCase {
         let closed = expectation(description: "one detailed close")
         closed.assertForOverFulfill = true
         var failures: [SocketTransportError] = []
-        client.failed = { _, detail in if let detail = detail { failures.append(detail) } }
+        client.failed = { reason, detail in
+            guard let detail else { return XCTFail("Missing typed transport error: " + reason) }
+            XCTAssertEqual(detail.httpStatusCode, status)
+            XCTAssertEqual(detail.operation, operation)
+            XCTAssertEqual(detail.transport, status == nil ? "websocket" : "polling")
+            if let status {
+                XCTAssertEqual(detail.errorDescription, "polling \(operation) (HTTP \(status))")
+                if status == 413 { XCTAssertEqual(detail.responseText, "") }
+                if status == 400 {
+                    XCTAssertEqual(detail.responseText, "{\"code\":1,\"message\":\"Session ID unknown\"}")
+                }
+            } else {
+                XCTAssertNotNil(detail.underlyingError)
+            }
+            failures.append(detail)
+        }
         client.closed = { reason, detail in
             XCTAssertEqual(reason, code == nil ? "transport error" : "transport close")
             XCTAssertNotNil(detail)
             XCTAssertEqual(detail?.httpStatusCode, status)
             XCTAssertEqual(detail?.closeCode, code)
             XCTAssertEqual(detail?.operation, operation)
-            if code == nil { XCTAssertEqual(failures.count, 1) }
+            if code == nil {
+                XCTAssertEqual(failures.count, 1)
+                XCTAssertTrue(failures.first === detail, "Error and close must carry the same detail")
+            } else {
+                XCTAssertTrue(failures.isEmpty)
+                XCTAssertEqual(detail?.closeReason, "")
+                XCTAssertEqual(detail?.errorDescription, "websocket close (WebSocket \(code!))")
+            }
+            if status == 413 { XCTAssertEqual(detail?.responseText, "") }
             if status == 400 {
                 XCTAssertEqual(detail?.responseText, "{\"code\":1,\"message\":\"Session ID unknown\"}")
             }
@@ -231,7 +315,10 @@ final class EngineRemainingParityE2ETest: XCTestCase {
     }
     func testOversizePollingReports413AndCloseDetail() throws {
         try make([.forcePolling(true)], maximum: 100)
-        client.opened = { [self] in engine.send(String(repeating: "a", count: 101), withData: []) }
+        client.opened = { [self] in
+            engine.send(String(repeating: "a", count: 101), withData: [])
+            engine.send("b", withData: [])
+        }
         expectFailure(status: 413, code: nil, operation: "write") { engine.connect() }
     }
     func testOversizeWebSocketReports1009AndCloseDetail() throws {

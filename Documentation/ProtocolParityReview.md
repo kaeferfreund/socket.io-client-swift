@@ -1,6 +1,8 @@
 # Swift Socket.IO: protocol parity and safety review
 
-**Current follow-up:** [ClientParityFollowup.md](ClientParityFollowup.md) supersedes the historical listener, acknowledgement, query and CI limitations below. The remaining release gates stay explicit.
+**Current follow-up:** later assertion mapping and CI gates in this document and
+`JavaScriptParityContracts.json` supersede the historical listener, acknowledgement,
+query and CI limitations below. The remaining release gates stay explicit.
 
 **Review date:** 2026-09-18. **PR:** #18, `fix/coderabbit-findings-audit` against `master`.
 
@@ -24,7 +26,7 @@ The ownership contract is now more explicit: `closeOutEngine` captures **both th
 
 ### F1. Peer-controlled parser traps and unsafe binary reconstruction, high severity
 
-The starting parser crashed in isolated subprocesses on short packet strings such as `2`, `2123`, `51-`, and on a binary placeholder with an out-of-bounds `num`. These are Socket.IO payloads that a peer could place inside an Engine.IO MESSAGE. The test harness compiled the real parser/packet source, with only manager and logging conveniences replaced. The recorded input/exit evidence is in `ReviewEvidence/BaselineParserReproduction.json`.
+The starting parser crashed in isolated subprocesses on short packet strings such as `2`, `2123`, `51-`, and on a binary placeholder with an out-of-bounds `num`. These are Socket.IO payloads that a peer could place inside an Engine.IO MESSAGE. The test harness compiled the real parser/packet source, with only manager and logging conveniences replaced.
 
 `SocketParsable.swift` now uses a forward-only, bounds-checked UTF-8 cursor. Numeric headers are parsed with overflow checks; namespace Unicode is preserved. Mandatory event/ack payloads and attachment-count syntax are validated before indexing. Modern CONNECT_ERROR payloads follow the modern shape; the explicitly selected legacy protocol retains its older error shapes. All six reserved event names are rejected in the relevant event paths, including `newListener` and `removeListener`.
 
@@ -177,7 +179,7 @@ Decide separately whether the public reconnect-event API should migrate to JavaS
 **Status (2026-09-19): traceability CLOSED, scheduling DEFERRED to after
 17.0.0.** Every applicable upstream runtime declaration now has a gated
 assertion contract that CI checks against the real test log (section 8 and
-`FinalParityAssertions-2026-09-19.md`). Injectable schedulers and a nonblocking
+`JavaScriptParityContracts.json`). Injectable schedulers and a nonblocking
 fixture-process harness remain desirable test-infrastructure work without a
 demonstrated production defect; they are not a publication gate for 17.0.0.
 
@@ -199,16 +201,16 @@ were authored on Linux and have not run yet; their first macOS run is the
 measurement. Still open: everything below that needs real hardware — device and
 simulator runs, background/foreground, network loss and recovery,
 Wi-Fi/cellular transitions, IPv6, proxy environments, cancellation while
-suspended, and independent package/framework/CocoaPods consumer integration
-against a release tag. See section 9.3 and `REMAINING-WORK.md` section 5.
+suspended, and independent Swift package consumer integration against a
+release tag. See section 9.3.
 
-Run device/simulator application tests for background/foreground, network loss/recovery, Wi-Fi/cellular transitions, IPv6, proxy environments and cancellation while suspended. macOS unit tests and SDK framework builds are not equivalent to runtime validation on iPhone or Apple Watch. Run Thread Sanitizer and strict-concurrency builds separately; do not stamp mutable clients `@unchecked Sendable` to silence warnings.
+Run device/simulator application tests for background/foreground, network loss/recovery, Wi-Fi/cellular transitions, IPv6, proxy environments and cancellation while suspended. macOS unit tests and SDK package builds are not equivalent to runtime validation on iPhone or Apple Watch. Run Thread Sanitizer and strict-concurrency builds separately; do not stamp mutable clients `@unchecked Sendable` to silence warnings.
 
-Pin fixture dependency versions/lockfiles and record resolved versions for reproducible comparisons. Test Swift package, framework and CocoaPods consumer integration independently before release. A branch build is not a signed app, a release tag or a published pod.
+Pin fixture dependency versions/lockfiles and record resolved versions for reproducible comparisons. Test Swift package consumer integration independently before release. A branch build is not a signed app or a release tag.
 
 ## 6. Evidence and reproduction
 
-The initial PR's CI ran **435 Swift tests with two retry failures**. The first hardened intermediate snapshot ran **466 tests with zero failures** in [run 35375584340](https://github.com/kaeferfreund/socket.io-client-swift/actions/runs/35375584340), including real server/TLS tests; its four Apple framework SDK builds and wire proofs also passed. That intermediate run preceded the additional heartbeat and identity-reset regressions. Final committed-source validation is recorded in the PR and `ReviewEvidence/Validation.json`; its run/commit, not the intermediate count, controls the merge decision.
+The initial PR's CI ran **435 Swift tests with two retry failures**. The first hardened intermediate snapshot ran **466 tests with zero failures** in [run 35375584340](https://github.com/kaeferfreund/socket.io-client-swift/actions/runs/35375584340), including real server/TLS tests; its four Apple SDK package builds and wire proofs also passed. That intermediate run preceded the additional heartbeat and identity-reset regressions. Final committed-source validation is recorded in the PR; its run/commit, not the intermediate count, controls the merge decision.
 
 Reproduce on macOS with Swift/Xcode, Node and OpenSSL installed:
 
@@ -686,9 +688,8 @@ Tests: `SocketAckManagerTest.testConcurrentAckIdAllocationNeverRepeats` and
 **Still open, and not automatable here.** Device and simulator runs
 (background/foreground transitions, network loss and recovery, Wi-Fi/cellular
 transitions, IPv6, proxy environments, cancellation while suspended), watchOS in
-particular, and independent Swift package / framework / CocoaPods consumer
-integration against a release tag. These remain manual gates; see
-`REMAINING-WORK.md` section 5. The two new CI jobs have not been executed in
+particular, and independent Swift package consumer integration against a
+release tag. These remain manual gates. The two new CI jobs have not been executed in
 this round — they were written on a Linux box where `swift test` cannot run —
 so their first macOS run is the measurement, including the strict-concurrency
 baseline.

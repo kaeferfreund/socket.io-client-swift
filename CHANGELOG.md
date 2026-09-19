@@ -1,9 +1,14 @@
+## Unreleased
+
+- Swift Package Manager is the only supported installation method. Carthage, CocoaPods and the Xcode project are removed.
+- Remove completed review-audit notes that are superseded by `PARITY.md` and the gated inventory.
+
 ## 17.0.0 — 2026-09-19
 
 - Share ordered retries across callback, async and legacy acknowledgement APIs; support cancellation and per-socket timeout/retry overrides.
 - Buffer pre-connect incoming events generally, preserving receive/send/connect ordering and clearing failed connection state.
 - Add polling/WebSocket transport lists, `tryAllTransports` and `rememberUpgrade`.
-- Publish stable Swift Package Manager version `17.0.0` with immutable tag `v17.0.0` and matching framework/podspec metadata.
+- Publish stable Swift Package Manager version `17.0.0` with immutable tag `v17.0.0`.
 - Keep WebTransport/stream codec explicitly unsupported. All 195 applicable upstream runtime declarations have native assertion mappings; see [release notes and validation scope](Documentation/Release17.md).
 
 The entries below record development history leading up to 17.0.0. Earlier entries describe intermediate behavior; the release notes and current migration guides describe the final public API.
@@ -74,7 +79,7 @@ The entries below record development history leading up to 17.0.0. Earlier entri
 - `stopPolling()` now marks the session invalidated and detaches it, with a fresh POST barrier. It used to invalidate the `URLSession` while leaving it in place, so a later `doPoll()` would hand an invalidated session to `dataTask` — an Objective-C exception on Darwin.
 - An invalid `parserOptions` value in a dictionary configuration now reports `invalid value for parserOptions; expected SocketParserOptions` instead of the unrelated legacy-TLS migration message.
 - `emit(_:with:ack:)` without an `ackTimeout` no longer drops the callback when the manager has been released: it fires `SocketAckError.disconnected`, like `emitTimed` already did.
-- Audit of published CodeRabbit findings across PRs #1–#17: strengthen server-ID, active-cache and reconnect tests; prevent overlapping timeout polls in the maxPayload wire proof; correct timeout/cache-buster/disconnect documentation. See `Documentation/CodeRabbitAudit.md`.
+- Audit of published CodeRabbit findings across PRs #1–#17: strengthen server-ID, active-cache and reconnect tests; prevent overlapping timeout polls in the maxPayload wire proof; correct timeout/cache-buster/disconnect documentation.
 - The `.disconnect` payload now carries the JS reason strings (`io server disconnect`, `io client disconnect`, `transport close`, `transport error`, `ping timeout`, `parse error`), JS-aligned with `socket.on("disconnect", reason => ...)` in `socket.io-client/lib/socket.ts` and engine.io-client's `onclose`. Previously the client surfaced ad-hoc strings (`Got Disconnect`, `Namespace leave`, `Disconnect`, `Manager Deinit`, engine error texts, `Ping timeout` with a capital P, or the raw engine.io close frame). A failed transport now reports `transport error` while the detailed error text stays in the `.error`/`.connectError` payload, and a clean close reports `transport close` regardless of the close-frame reason. One Swift-specific reason is kept deliberately: `"timeout"` (connect-timeout close; JS surfaces `connect_error` only). The Swift-only `"Reconnect Failed"` reason was removed in 17.0.0 in favour of the JS `reconnect_failed` event — see the breaking changes above.
 - An undecodable packet now closes the engine with reason "parse error" (sockets get `.disconnect("parse error")`, reconnection starts if enabled) instead of being dropped silently; JS-aligned with `Manager.ondata`/`onclose` in `socket.io-client/lib/manager.ts`. Found by porting the JS client's own scenario "should close the engine upon decoding exception".
 - By default every long-polling request (handshake GET, polls, POSTs) now carries a unique `t=` cache-busting query parameter (`.timestampRequests(false)` disables it), JS-aligned with `Polling.uri()` in engine.io-client; the WebSocket URL carries it only when explicitly enabled. New options `.timestampRequests(Bool)` / `.timestampParam(String)` with JS defaults (polling stamped, WebSocket not; param name `"t"`). Previously the client relied on `URLRequest.cachePolicy = .reloadIgnoringLocalCacheData`, which only bypasses the local cache — proxies, CDNs, and corporate caches in between could still serve a stale response to a long-poll.

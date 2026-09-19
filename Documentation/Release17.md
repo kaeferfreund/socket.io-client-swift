@@ -2,8 +2,7 @@
 
 Stable release dated 2026-09-19, distributed through Swift Package Manager using
 the immutable [`v17.0.0` tag](https://github.com/kaeferfreund/socket.io-client-swift/releases/tag/v17.0.0).
-The framework and retained podspec metadata also declare 17.0.0.
-CocoaPods registry publication is not part of this release.
+Swift Package Manager is the only supported installation method.
 
 ## Additional parity corrections
 
@@ -48,7 +47,7 @@ silently ignored. See [the native migration guide](NativeWebSocketTransport.md)
 and [Swift 6 / Socket.IO 4 migration](SocketIO4Swift6Migration.md).
 
 Reconnection event payloads and timing changed; consult the
-[breaking-change table](../README.md#breaking-changes-in-1700).
+[reconnection semantics](Guides/Connections.md#reconnection).
 Automatic server-cookie replay requires `withCredentials(true)` and uses an
 isolated engine-owned cookie jar. `autoConnect` remains false by default.
 Use the manager and sockets on their serial `handleQueue`; they are not Sendable.
@@ -69,13 +68,14 @@ behavior or a device/release certificate. See [PARITY.md](../PARITY.md).
 
 ## Release validation and follow-up scope
 
-Publication requires all seven CI jobs to pass on the exact release commit:
+The 17.0.0 release was validated by all seven then-required CI jobs on its exact commit:
 844 native tests and the strict parity checker against their actual log, Thread
-Sanitizer, strict concurrency, four Apple SDK framework builds, pinned upstream
+Sanitizer, strict concurrency, four Apple SDK package builds, pinned upstream
 Node suites, parser differential checks and wire proofs. CI also builds and runs
 an independent Swift Package consumer; when dispatched against the release tag,
 it resolves version 17.0.0 from GitHub instead of using a local package path.
-The release page records the final commit and CI run links.
+The release page records the final commit and CI run links. For later releases,
+use the [current release checklist](Development/Releasing.md) and all current CI jobs.
 
 All 195 applicable upstream runtime declarations have complete native assertion
 mappings. The strict checker remains mandatory; exclusions and contract mappings
@@ -87,10 +87,13 @@ half of R4 remain deferred architecture work without a demonstrated defect; see
 [ProtocolParityReview.md](ProtocolParityReview.md).
 
 Physical iOS/watchOS runtime checks remain outstanding and
-are not certified by this release. The supported installation method is SPM;
-independent CocoaPods and framework application integration remain unverified,
-although all four SDK framework builds are checked in CI. See
-[REMAINING-WORK.md](../REMAINING-WORK.md) for the follow-up backlog.
+are not certified by this release: background/foreground, suspend, network
+loss and return, Wi-Fi↔cellular handover, IPv6 and proxy environments.
+macOS CI does not replace these proofs. Swift Package Manager is the only
+supported installation method; CI builds the package for all four Apple SDKs.
+
+A follow-up multi-model council review was explicitly deferred; the
+historical review instructions must not trigger a new paid review on their own.
 
 ## Pre-release evidence
 

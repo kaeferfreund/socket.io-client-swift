@@ -131,6 +131,8 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     var connectPayload: [String: Any]?
 
     private(set) var currentAck = -1
+    /// Guards the `currentAck` allocator; see `allocateAckId()`.
+    private let ackIdLock = NSLock()
 
     private lazy var logType = "SocketIOClient{\(nsp)}"
     private var bufferedRecoveryReplayEvents = [(event: String, data: [Any], ack: Int)]()
@@ -456,9 +458,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     }
 
     func createOnAck(_ items: [Any], binary: Bool = true) -> OnAckCallback {
-        currentAck += 1
-
-        return OnAckCallback(ackNumber: currentAck, items: items, socket: self)
+        return OnAckCallback(ackNumber: allocateAckId(), items: items, socket: self)
     }
 
     /// Called when the client connects to a namespace. If the client was created with a namespace upfront,
@@ -1912,7 +1912,16 @@ extension SocketIOClient {
 
     /// Allocate IDs on handleQueue together with acknowledgement registration.
     func allocateAckId() -> Int {
+        // The modern paths call this from `handleQueue`, but the legacy
+        // `emitWithAck` chain allocates through `createOnAck` on the caller's
+        // thread, so the counter itself is lock-guarded. Without that, a legacy
+        // emit on one thread and a modern one on `handleQueue` would race on the
+        // same `Int` — and could hand two registrations the same id.
+        ackIdLock.lock()
+        defer { ackIdLock.unlock() }
+
         currentAck += 1
+
         return currentAck
     }
 }

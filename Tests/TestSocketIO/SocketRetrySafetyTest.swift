@@ -124,9 +124,15 @@ final class SocketRetrySafetyTest: XCTestCase {
         XCTAssertEqual(socket.ackHandlers.pendingTimedAckIDs, [newID])
         socket.handleAck(oldID, data: ["stale"])
         XCTAssertEqual(replies, 0)
+        XCTAssertEqual(socket.ackHandlers.pendingTimedAckIDs, [newID])
+        XCTAssertEqual(engine.sentPackets.count, 2)
         socket.handleAck(newID, data: ["current"])
+        socket.handleAck(newID, data: ["duplicate"])
+        socket.handleAck(oldID, data: ["late again"])
         XCTAssertEqual(replies, 1)
+        XCTAssertEqual(engine.sentPackets.count, 2)
         XCTAssertEqual(socket.testRetryQueueCount, 0)
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
     }
 
     func testConnectEventSeesAlreadyDrainedRetryHead() throws {
@@ -221,8 +227,13 @@ final class SocketRetrySafetyTest: XCTestCase {
         drain()
         XCTAssertEqual(oldCalls, 0)
         XCTAssertEqual(newCalls, 0)
+        XCTAssertEqual(socket.ackHandlers.pendingTimedAckIDs, [50])
         socket.ackHandlers.executeTimedAck(50, with: [])
+        socket.ackHandlers.executeTimedAck(50, with: ["duplicate"])
+        drain()
+        XCTAssertEqual(oldCalls, 0)
         XCTAssertEqual(newCalls, 1)
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
     }
 }
 

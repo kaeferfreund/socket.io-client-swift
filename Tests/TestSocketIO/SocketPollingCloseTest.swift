@@ -18,6 +18,7 @@ private final class PollingCloseFixture {
     private var handshakes = 0
     private var postObserver: ((Request) -> Void)?
     private var stopObserver: ((String) -> Void)?
+    private var pollObserver: (() -> Void)?
     private var holdPosts = true
 
     var posts: [Request] {
@@ -28,6 +29,11 @@ private final class PollingCloseFixture {
     var heldPostCount: Int {
         lock.lock(); defer { lock.unlock() }
         return heldPosts.count
+    }
+
+    func observePolls(_ observer: @escaping () -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        pollObserver = observer
     }
 
     /// Installs observers before I/O, without racing the protocol's callback queue.
@@ -80,12 +86,15 @@ private final class PollingCloseFixture {
         let held = method == "POST" && body != "1" && holdPosts
         if held { heldPosts.append(request) }
         let observer = postObserver
+        let poll = pollObserver
         lock.unlock()
         if method == "GET" && sid == nil {
             request.reply("0{\"sid\":\"\(handshakeID)\",\"upgrades\":[],\"maxPayload\":32,\"pingInterval\":25000,\"pingTimeout\":20000}")
         } else if method == "POST" {
             observer?(observed)
             if !held { request.reply("ok") }
+        } else if method == "GET" {
+            poll?()
         }
     }
 
@@ -258,7 +267,11 @@ final class SocketPollingCloseTest: XCTestCase {
     }
 
     private func checkFailedPost(networkError: Bool) throws {
+        let polling = expectation(description: "old long poll started")
+        fixture.observePolls { polling.fulfill() }
         connect()
+        wait(for: [polling], timeout: 5)
+        fixture.observePolls { }
         let started = expectation(description: "first POST in flight")
         let closed = expectation(description: "transport failed once")
         let stopped = expectation(description: "old long poll cancelled")

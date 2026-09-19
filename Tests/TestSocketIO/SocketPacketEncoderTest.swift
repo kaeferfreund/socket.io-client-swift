@@ -402,6 +402,21 @@ final class SocketPacketEncoderTest: XCTestCase {
     // above bounds deep graphs only. Adding the JS test here would crash the
     // suite rather than assert anything.
 
+    /// A volatile packet that is discarded is never encoded, so it cannot
+    /// report an encoding error either — JS decides `discardPacket` before
+    /// `JSON.stringify` ever runs.
+    func testDiscardedVolatileEmitIsSilentEvenWithAnUnencodablePayload() {
+        engine.writable = false
+        var reported = false
+        socket.on(clientEvent: .error) { _, _ in reported = true }
+
+        socket.volatile.emit("bad", UnencodableData())
+        drain()
+
+        XCTAssertFalse(reported, "A dropped volatile packet stays silent")
+        XCTAssertTrue(engine.sentPackets.isEmpty)
+    }
+
     /// A custom `SocketData` whose conversion throws still reports through the
     /// same `.error` channel, and sends nothing.
     func testThrowingSocketRepresentationIsReportedAndSendsNothing() {

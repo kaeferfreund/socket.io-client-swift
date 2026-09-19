@@ -341,7 +341,11 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             }
 
             do {
-                let payloadData = try JSONSerialization.data(withJSONObject: effective, options: .fragmentsAllowed)
+                // Sorted for the same reason `SocketPacket` sorts: a Swift
+                // Dictionary has no insertion order, so a reproducible CONNECT
+                // frame is the only alternative to an arbitrary one.
+                let payloadData = try JSONSerialization.data(withJSONObject: effective,
+                                                             options: [.fragmentsAllowed, .sortedKeys])
                 if let jsonString = String(data: payloadData, encoding: .utf8) {
                     payloadStr = jsonString
                 }

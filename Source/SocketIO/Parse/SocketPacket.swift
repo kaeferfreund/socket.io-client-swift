@@ -379,6 +379,9 @@ extension SocketPacket {
     /// fractional-second digits and a `Z` suffix (`2024-01-02T03:04:05.678Z`).
     /// Years outside 0000–9999, which JS writes in its expanded `±YYYYYY` form,
     /// are not reproduced.
+    ///
+    /// Shared: it is configured once here and only ever read afterwards, and
+    /// `DateFormatter.string(from:)` is documented as safe to call concurrently.
     private static let iso8601Formatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")

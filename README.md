@@ -155,9 +155,19 @@ do not enable both. `.path("/socket.io/")` configures the HTTP endpoint, while
 default namespace. Other namespaces still require their own `connect()`.
 
 Automatic reconnection is enabled by default for recoverable connection loss.
-Observe `.connect` for a successful initial connection **and** reconnection.
-In this fork, `.reconnect` marks the start of reconnection, not its completion.
+The event stream matches the JavaScript client: the drop reports `.disconnect`
+with the real reason, each retry reports `.reconnectAttempt` with its 1-based
+attempt number, a failed retry reports `.reconnectError`, and the cycle ends
+either with `.reconnect` (carrying the attempt number that succeeded, followed
+by `.connect` once the namespace is re-joined) or with `.reconnectFailed`.
 An intentional `disconnect()` requires an explicit `connect()` to rejoin.
+
+```swift
+socket.on(clientEvent: .disconnect)       { data, _ in print("dropped:", data.first ?? "") }
+socket.on(clientEvent: .reconnectAttempt) { data, _ in print("attempt", data.first ?? "") }
+socket.on(clientEvent: .reconnect)        { data, _ in print("back after attempt", data.first ?? "") }
+socket.on(clientEvent: .reconnectFailed)  { _, _ in print("gave up") }
+```
 
 ## Acknowledgements and retries
 
@@ -246,6 +256,31 @@ It does not retract events already delivered to application handlers or by itsel
 close the live connection. Ensure disconnect/ack handlers do not reconnect using
 the old credentials or enqueue new old-user work during the switch.
 
+## Breaking changes in 17.0.0
+
+This major prerelease moves behaviour that used to be Swift-specific onto the
+JavaScript client's contract. Everything below changes an observable API; see
+[the changelog](CHANGELOG.md) for the reasoning and
+[the parity review](Documentation/ProtocolParityReview.md) for the ported tests.
+
+| Change | Before | Now |
+| --- | --- | --- |
+| `.reconnect` | Fired when reconnection **started**, payload was the disconnect reason. | Fires when a reconnection **succeeded**, payload is the 1-based attempt number (JS `reconnect`). |
+| `.reconnectAttempt` | Payload was the number of attempts **remaining**. | Payload is the 1-based number of the attempt being made (JS `reconnect_attempt`). |
+| `.disconnect` on a retried drop | Not emitted; the reason arrived with `.reconnect`. | Emitted with the real reason (`transport close`, `ping timeout`, `parse error`, …), as JS `Socket.onclose` does. |
+| Reconnect exhaustion | `.disconnect("Reconnect Failed")`. | New `.reconnectFailed` (no payload). The sockets already got their real `.disconnect`. |
+| Per-attempt failure | Nothing. | New `.reconnectError` with the reason. |
+| Unencodable emit payload | Silently sent a different packet with an empty payload (`2[]`). | Throws `SocketPacketError`: the `.error` client event carries it, any acknowledgement settles once with it, and no packet is written, buffered or queued. |
+| `Date` in an emit | Not a `SocketData`, and unencodable if forced through. | Encodes as the ISO-8601 string `JSON.stringify` produces (`2024-01-02T03:04:05.678Z`), nested at any depth. |
+| Non-finite `Double` in an emit | Made the whole payload unencodable. | Encodes as `null`, like `JSON.stringify(NaN)`. |
+| `Data` through `rawEmitView` | Silently sent an empty payload. | Throws `SocketPacketError.unsupportedValue`; that view deliberately does not shred binary into attachments. |
+| Server-URL query string | Discarded when the engine built its transport URLs. | Used as the connection query, unless `.connectParams` is set (JS `if (parsed.query && !opts.query)`). |
+| JSON object key order | Arbitrary, varied between runs. | Sorted, so the wire output is reproducible. A Swift `Dictionary` has no insertion order to preserve, and JSON object order carries no meaning. |
+
+Additions that are not breaking: `async` `socket.emitWithAck(_:_:)` and
+`socket.timeout(after:).emitWithAck(_:_:)`, `SocketPacket.encodedPacketString()`
+(the throwing encoder) and `SocketPacketError`.
+
 ## TLS and migration from Starscream
 
 An `https://` URL uses normal system certificate validation for both polling and
@@ -330,7 +365,10 @@ bash scripts/test-parser-safety.sh
 ```
 
 The [Swift workflow](.github/workflows/swift.yml) also runs polling wire proofs
-and a decoder comparison against a pinned official JavaScript implementation.
+and a differential against a pinned official JavaScript implementation, in both
+directions: the real upstream decoder reads seeded vectors alongside this
+client's decoder, and the packets this client encodes are read back by that same
+upstream decoder.
 Check the CI run for the exact commit you use, not a historical test count.
 SDK builds cover macOS and the iOS/tvOS/watchOS simulators; they do not replace
 runtime testing in your application on physical devices and across network changes.

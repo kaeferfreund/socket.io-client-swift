@@ -267,3 +267,185 @@ Ported from `socket.io-parser/test/parser.js`:
   its manager reports as the same `parse error` close — so the observable
   outcome matches for the socket that owns the namespace. `.two` managers still
   accept it, because the v2 grammar allows a bare ERROR packet.
+
+## 8. Round 2 (2026-09-18): JavaScript-aligned reconnect events and a throwing encoder
+
+Round 1 (section 7) closed the Engine.IO close/upgrade and parser-leniency gaps.
+Round 2 closes the two behavioural gaps sections 4 and 5 named as still open —
+the reconnect-event stream and review gate **R2**, the silent outgoing JSON
+fallback — and ports the remaining `socket.io-client` and `engine.io-parser`
+rows that had no mapping. Where the sections above still describe the old
+behaviour, this section is current. Every change is a **breaking** change and is
+listed in `README.md` ("Breaking changes in 17.0.0") and `CHANGELOG.md`.
+
+### 8.1 Reconnect events (`socket.io-client/lib/manager.ts`)
+
+Section 4 recorded: *"`SocketIOClient.setReconnecting` emits Swift `.reconnect`
+at the start of reconnection; the JavaScript manager emits successful
+`reconnect` later and exposes a different reconnect-event stream."* That
+divergence is gone. The Swift event stream is now the JS one:
+
+| JS (`Manager`) | Swift | Payload |
+| --- | --- | --- |
+| `Socket.onclose(reason)` → `disconnect` | `.disconnect` | the real close reason |
+| `reconnect_attempt` | `.reconnectAttempt` | 1-based attempt number |
+| `reconnect_error` | `.reconnectError` (new) | the reason the attempt failed |
+| `reconnect_failed` | `.reconnectFailed` (new) | none |
+| `reconnect` | `.reconnect` | the attempt number that succeeded |
+
+- **`.reconnect` now means success.** `SocketManager._engineDidOpen` reads
+  `currentReconnectAttempt` before `status = .connected` resets it (JS
+  `onreconnect()` reads `backoff.attempts` before `backoff.reset()`), and emits
+  `.reconnect(attempt)` before the namespaces are re-joined — so it always
+  precedes the `.connect` that follows the server's CONNECT ack.
+- **`.reconnectAttempt` carries the attempt, not the remainder.** JS emits
+  `backoff.attempts`, which the preceding `backoff.duration()` has already
+  incremented, i.e. `1` for the first attempt of a loop.
+- **A retried drop reports `.disconnect` with the real reason.**
+  `setReconnecting(reason:)` is Swift's `Socket.onclose`: it clears `sid` and
+  emits `.disconnect(reason)`, while parking the socket in `.connecting` —
+  which is what makes `_engineDidOpen` re-join its namespace — and leaving
+  `active` set. The reason used to be delivered as the `.reconnect` payload.
+- **Exhaustion emits `.reconnectFailed` and nothing else.** The Swift-only
+  `.disconnect("Reconnect Failed")` is gone: the sockets already received their
+  real reason when the connection dropped, which is exactly what JS does. The
+  sockets are moved out of the `.connecting` parking state *before* the event
+  fires, so a handler that calls `connect()` — the JS "should attempt reconnects
+  after a failed reconnect" scenario — is not undone by the loop that is ending.
+- **A failed attempt emits `.reconnectError`.** A close that arrives while the
+  loop is running is JS's `open(fn)` error callback; the next attempt is already
+  scheduled by then, so only the event is left to fire. The connect-timeout path
+  therefore reports `.connectError("timeout")` *and* `.reconnectError("timeout")`
+  during a loop, and only `.connectError("timeout")` on the initial attempt —
+  which is what JS's `onError` + `maybeReconnectOnOpen` split produces.
+- **Manager events reach every socket.** Swift has no manager-level event bus,
+  so `emitAll` delivers `reconnect*` to every socket of the manager, including
+  one that was never connected. `.reconnectAttempt` used to be filtered to
+  sockets in `.connecting`.
+
+Tests: `SocketReconnectEventsTest` (8 cases, driven by a fake engine that
+decides per attempt whether the handshake succeeds), plus the updated
+`SocketConnectTimeoutTest` and the `JSParityE2ETest` reconnect scenarios, which
+now assert `.reconnectFailed` instead of the removed disconnect reason.
+
+### 8.2 A throwing encoder replaces the silent `[]` fallback (gate R2)
+
+`SocketPacket.completeMessage` returned `message + "[]"` whenever
+`JSONSerialization` refused the payload, so a non-finite `Double`, a `Date` or
+an unsupported object turned the caller's operation into a *different* wire
+packet. JS `JSON.stringify` never does that: it produces the value or throws.
+
+- **One normalization, applied before anything takes ownership.**
+  `SocketPacket.jsonSafeEmitData(_:allowBinary:)` runs in every public emit
+  entry point — before `_addToQueue`, before the send buffer, before any ack
+  registration — and again in the internal emit funnel as the single choke point
+  for the paths that build `[Any]` directly (`rawEmitView`, the Objective-C ack
+  views). Re-running it on an already-normalized array is a no-op.
+- **`Date` → ISO-8601.** `Date.prototype.toJSON()` is `toISOString()`, so a
+  `Date` at any depth becomes `"2024-01-02T03:04:05.678Z"` (UTC, exactly three
+  fractional digits). `Date`/`NSDate` now conform to `SocketData`.
+- **Non-finite numbers → `null`**, as `JSON.stringify(NaN)` produces. A JSON
+  boolean is an `NSNumber` too and is filtered out by the existing
+  `isJSONNumber` helper before the finiteness check.
+- **Everything else throws `SocketPacketError`** (`unsupportedValue`,
+  `nonStringKey`, `nestingTooDeep`, `unserializablePayload`). The `.error`
+  client event carries the error, any acknowledgement the caller asked for
+  settles exactly once with it, and no packet is written, buffered or queued.
+- **`SocketPacket.encodedPacketString()`** is the throwing encoder;
+  `packetString` keeps its signature for code that builds packets by hand, and
+  logs when it falls back. No client path can reach that fallback any more.
+- **Payload-less packet types encode as JS encodes them.** `encodeAsString`
+  appends `JSON.stringify(obj.data)` only `if (null != obj.data)`, and CONNECT /
+  DISCONNECT / CONNECT_ERROR carry a single value rather than the argument
+  array. `SocketPacket` now renders those as a JSON fragment (`0/woot,{…}`,
+  `1/woot,`, `4"Unauthorized"`) instead of wrapping them in an array. Nothing in
+  this client encoded those types before — the manager writes CONNECT and
+  DISCONNECT as raw strings — so this only makes the encoder able to reproduce
+  the reference encoder, which the new differential direction relies on.
+- **`JSONSerialization` is never handed an invalid graph.** It raises an
+  uncatchable Objective-C exception for one, so validity is checked with
+  `isValidJSONObject` before every encode.
+
+**Deliberate deviations.**
+
+- **Sorted object keys.** JS preserves object insertion order; a Swift
+  `Dictionary` has none, so the choice is between an arbitrary order and a
+  reproducible one. Keys are sorted on output and the binary shredder walks
+  dictionaries in the same sorted order, so attachment numbering is stable too.
+  JSON object order carries no meaning, and the reproducibility is what makes
+  the exact wire strings testable.
+- **Cycles remain out of scope.** A self-referencing Foundation container
+  (`NSMutableDictionary` holding itself) overflows the stack inside Swift's
+  `as? [String: Any]` bridging, before any code in this package runs — this was
+  verified, not assumed: the ported test crashed the suite and was removed in
+  favour of this note. `SocketPacket.maximumEmitNestingDepth` (512, the
+  decoder's default) bounds deep graphs only. `socket.io-parser/test/parser.js`
+  "throws an error when encoding circular objects" therefore stays
+  `known-divergence` in the inventory, now for a narrower reason than before.
+- **Extended years.** `Date.toISOString()` writes years outside 0000–9999 in an
+  expanded `±YYYYYY` form; the Swift formatter does not.
+
+**The differential now runs in both directions.** `scripts/parser-parity/main.swift`
+gained an encode mode and `compare.cjs` 1,000 seeded encode vectors: every
+packet type, `/`, `/foo` and `/é🦧` namespaces, ack ids including `0`, and
+binary placed at any depth. Each vector is encoded by this client — through
+`jsonSafeEmitData` and `packetFromEmit`, the real emit path — and read back by
+the pinned upstream decoder, and the decoded packet must equal the source.
+**1,000 encode cases, zero differences.** The decode direction and its recorded
+malformed-input contract in `ReviewEvidence/DecoderDifferential.json` are
+unchanged; that file gained the two new `encodeCases`/`encodeDifferences` keys.
+
+### 8.3 Remaining `socket.io-client` mappings
+
+- **The server URL's query string is used.** `SocketEngine.createURLs` rebuilt
+  its transport URLs from scratch and dropped whatever query the `socketURL`
+  carried, so `SocketManager(socketURL: …/?token=abc)` never sent `token`. The
+  URL's parameters are now the connection query unless `.connectParams` is set;
+  JS `lib/index.ts` does `if (parsed.query && !opts.query) opts.query =
+  parsed.queryKey`, i.e. an explicit query *replaces* rather than merges.
+  Percent-encoded parameters pass through verbatim rather than being escaped a
+  second time. (`SocketQueryOptionTest`, and `JSParityE2ETest` against the
+  fixture server's `handshake.query`.)
+- **Async `emitWithAck`.** `socket.emitWithAck(ev, …)` and
+  `socket.timeout(after:).emitWithAck(ev, …)` are new `async throws` APIs. The
+  bare form is bounded by `SocketManager.ackTimeout` when configured (JS
+  `flags.timeout ?? _opts.ackTimeout`); without one a disconnect throws
+  `SocketAckError.disconnected` rather than never resolving, because a Swift
+  continuation must be resumed exactly once. JS leaves such a promise pending
+  forever — a deliberate, documented deviation.
+- **`onAnyOutgoing` and binary.** The listener already received the caller's
+  `Data` rather than the attachment placeholder; that is now asserted, flat and
+  nested.
+
+### 8.4 Engine.IO codec
+
+This client has no standalone engine.io-parser: encoding lives in
+`SocketEngine.sendWebSocketMessage` and `SocketEnginePollable` (the
+`"<type><payload>"` frame, the `\u{1e}` payload joiner, `createBinaryDataForSend`),
+and decoding in `parseEngineMessage` / `parsePollingMessage` / `parseEngineData`,
+which dispatch as they decode. `SocketEnginePacketCodecTest` asserts the wire
+strings and what the engine hands its client — `encodePacket`/`decodePacket`'s
+observable contract — for `"4test"`, the malformed `""` and `"a123"`, the full
+`0\u{1e}1\u{1e}2probe\u{1e}3probe\u{1e}4test` payload, raw and base64 binary
+(`"bAQIDBA=="`), and the mixed `4test\u{1e}bAQIDBA==` payload. No production
+behaviour changed here; the tests record what was already true.
+
+Two consequences of the fused decode-and-dispatch design are asserted
+explicitly rather than glossed over: a CLOSE inside a payload ends the session,
+so packets after it are not delivered, and the ArrayBuffer/Buffer/typed-array
+distinction has a single Swift representation, `Data`. The browser and
+typed-array rows of the engine.io-parser inventory are marked
+`platform-specific` for that reason.
+
+### 8.5 What round 2 did not do
+
+Review gates **R1** (one coherent resource policy) and **R5** (device and
+distribution validation) are untouched, as are the 57 unmapped
+`engine.io-client` rows (URI parsing, cookies, close details, binary over
+polling and WebSocket). Acknowledgement lifetime across a retried drop is still
+not JS-exact: JS `Socket.onclose` calls `_clearAcks()` on every close, while
+this client clears timed acks only on a terminal `didDisconnect`, so an
+outstanding timed ack survives an automatic reconnect cycle here. That was left
+alone deliberately in this round — it touches the retry queue and the send
+buffer, and none of those paths can be exercised end to end on the Linux box
+this round was written on.

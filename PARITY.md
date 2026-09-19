@@ -25,9 +25,11 @@ socket.io/engine.io suites are outside this client-port inventory.
 See [the full inventory](Documentation/JavaScriptTestInventory.csv),
 [the review and release gates](Documentation/ProtocolParityReview.md), and
 [the recorded decoder comparison](Documentation/ReviewEvidence/DecoderDifferential.json).
-Inventory labels distinguish focused regressions, candidate old pointers, missing
-mappings, API differences and unsupported features. A candidate is not a proof
-that all assertions of an upstream test have been ported.
+Inventory labels distinguish focused regressions, candidate old pointers,
+unmapped rows, API differences and unsupported features. A candidate is not a
+proof that all assertions of an upstream test have been ported. The round-2 pass
+(2026-09-18) closed every `mapping-gap` row; 66 rows are now focused
+regressions and one `known-divergence` remains (encoding a cyclic object graph).
 
 The local decoder comparison exercised 5,000 generated valid text/binary vectors
 against the actual pinned JavaScript decoder and current Swift decoder, with zero
@@ -36,14 +38,22 @@ Three are representation only: payload-less EVENT/ACK packets (`2`, `3`, `2123`)
 decode in both, JS with `data === undefined` and Swift with empty data. Five are
 deliberate: Swift rejects a CONNECT or CONNECT_ERROR without payload (which JS
 decodes and then fails on in `onpacket`, closing with the same `parse error`), a
-binary header without payload, and a non-decimal attachment count. This is
-decoder evidence only, not complete Socket.IO lifecycle, transport or
-application equivalence.
+binary header without payload, and a non-decimal attachment count.
+
+The comparison also runs in the encode direction: 1,000 seeded packets — every
+type, Unicode namespaces, binary at any depth — are encoded by this client and
+read back by that same pinned JavaScript decoder, with zero differences. This is
+parser evidence only, not complete Socket.IO lifecycle, transport or application
+equivalence.
 
 Native transport uses URLSessionWebSocketTask with separate polling URLSession.
 The native queue, TLS policy, graceful polling teardown and parser limits have
 focused tests. Compression, WebTransport and several JavaScript-specific APIs are
-not implemented. Swift reconnect-event semantics and legacy/async acknowledgement
-contracts still differ; see the review rather than treating these as browser-only
+not implemented. Reconnect-event semantics now match the JavaScript manager
+(`reconnect` means success and carries the attempt number; `reconnect_error` and
+`reconnect_failed` exist) — a breaking change in 17.0.0, see the README. The
+outgoing encoder throws instead of substituting an empty payload, but still does
+not detect cyclic object graphs. Legacy and async acknowledgement contracts
+still differ; see the review rather than treating these as browser-only
 exceptions. Runtime tests, SDK builds, API compatibility and device validation
 are different acceptance gates.

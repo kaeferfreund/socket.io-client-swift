@@ -788,6 +788,21 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             return
         }
 
+        // Phase 7: volatile gate — JS-aligned per `socket.io-client/lib/socket.ts`
+        // `emit()` body which sets `discardPacket = volatile && !transport.writable`.
+        // Drop is silent: no .error, no outgoing listener fire, no buffering.
+        // It runs before the encoder for the same reason it does in JS: a
+        // discarded packet is never encoded, so it cannot report an encoding
+        // error either.
+        if volatile, !(manager?.engine?.writable ?? false) {
+            DefaultSocketLogger.Logger.log(
+                "volatile packet dropped (transport not writable)",
+                type: logType
+            )
+            wrappedCompletion?()
+            return
+        }
+
         // Last-resort encoder gate. The public entry points already validated
         // (and normalized) their payload so their acks can carry the error;
         // this covers the paths that build `[Any]` directly — `rawEmitView`,
@@ -803,18 +818,6 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             wrappedCompletion?()
             handleClientEvent(.error, data: [error])
 
-            return
-        }
-
-        // Phase 7: volatile gate — JS-aligned per `socket.io-client/lib/socket.ts`
-        // `emit()` body which sets `discardPacket = volatile && !transport.writable`.
-        // Drop is silent: no .error, no outgoing listener fire, no buffering.
-        if volatile, !(manager?.engine?.writable ?? false) {
-            DefaultSocketLogger.Logger.log(
-                "volatile packet dropped (transport not writable)",
-                type: logType
-            )
-            wrappedCompletion?()
             return
         }
 

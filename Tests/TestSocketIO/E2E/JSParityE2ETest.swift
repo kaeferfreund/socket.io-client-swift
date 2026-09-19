@@ -1145,13 +1145,107 @@ final class JSParityE2ETest: XCTestCase {
         XCTAssertFalse(t?.isEmpty ?? true)
     }
 
+    // MARK: original timeout scenarios (socket.ts)
+
+    func testZeroTimeoutEchoCallsBackExactlyOnce() throws {
+        let socket = makeManager().defaultSocket
+        socket.connect()
+        var callbacks = 0
+        let timedOut = expectation(description: "zero timeout")
+        socket.timeout(after: 0).emit("echo", 42) { error, _ in
+            callbacks += 1
+            XCTAssertEqual(error as? SocketAckError, .timeout)
+            if callbacks == 1 { timedOut.fulfill() }
+        }
+        wait(for: [timedOut], timeout: 5)
+        settle(0.2)
+        XCTAssertEqual(callbacks, 1)
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+
+        // Also test the stronger case with an established connection. A second
+        // server ACK forms a wire-order barrier behind the expired echo ACK.
+        if socket.status != .connected { connect(socket) }
+        var connectedCallbacks = 0
+        let expired = expectation(description: "connected zero timeout")
+        socket.timeout(after: 0).emit("echo", 42) { error, _ in
+            connectedCallbacks += 1
+            XCTAssertEqual(error as? SocketAckError, .timeout)
+            if connectedCallbacks == 1 { expired.fulfill() }
+        }
+        wait(for: [expired], timeout: 5)
+        XCTAssertEqual(try serverSocketId(for: socket), socket.sid)
+        XCTAssertEqual(connectedCallbacks, 1)
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+    }
+
+    func testCallbackEchoAcknowledgesTheOriginalIntegerBeforeTimeout() {
+        let socket = makeManager().defaultSocket
+        socket.connect()
+        let acked = expectation(description: "original echo acknowledged")
+        socket.timeout(after: 5).emit("echo", 42) { error, data in
+            XCTAssertNil(error)
+            XCTAssertEqual(data.first as? Int, 42)
+            acked.fulfill()
+        }
+        wait(for: [acked], timeout: 6)
+    }
+
+    func testCallbackUnknownEventTimesOutAgainstTheRealServer() {
+        let socket = makeManager().defaultSocket
+        socket.connect()
+        let timedOut = expectation(description: "unknown event times out")
+        socket.timeout(after: 0.05).emit("unknown") { error, _ in
+            XCTAssertEqual(error as? SocketAckError, .timeout)
+            timedOut.fulfill()
+        }
+        wait(for: [timedOut], timeout: 5)
+    }
+
+    func testAsyncUnknownEventTimesOutAgainstTheRealServer() async {
+        let socket = makeManager().defaultSocket
+        socket.connect()
+        do {
+            _ = try await socket.timeout(after: 0.05).emitWithAck("unknown")
+            XCTFail("An unacknowledged event must reject")
+        } catch {
+            XCTAssertEqual(error as? SocketAckError, .timeout)
+        }
+    }
+
+    func testAsyncTimedEchoRejectsWhenDisconnectedImmediatelyAfterSending() {
+        let socket = connect(makeManager().defaultSocket)
+        let rejected = expectation(description: "async ACK rejects on disconnect")
+        var sent = false
+        socket.addAnyOutgoingListener { event in
+            guard event.event == "echo" else { return }
+            sent = true
+            // Registration has completed before outgoing listeners run. Queue
+            // close directly behind the send, before a network ACK can return.
+            self.manager.handleQueue.socketAsync { socket.disconnect() }
+        }
+        let task = Task { @MainActor in
+            do {
+                _ = try await socket.timeout(after: 10).emitWithAck("echo", "a")
+                XCTFail("Disconnect must reject the pending async ACK")
+            } catch {
+                XCTAssertEqual(error as? SocketAckError, .disconnected)
+            }
+            rejected.fulfill()
+        }
+        defer { task.cancel() }
+        wait(for: [rejected], timeout: 5)
+        XCTAssertTrue(sent)
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+    }
+
     // MARK: socket.ts — "should use the default timeout value"
 
     func testDefaultAckTimeoutApplies() {
-        let socket = connect(makeManager(.ackTimeout(0.05)).socket(forNamespace: "/"))
+        let socket = makeManager(.ackTimeout(0.05)).defaultSocket
+        socket.connect()
 
         let timedOut = expectation(description: "default timeout fires")
-        socket.emit("never_ack", ack: { err, _ in
+        socket.emit("unknown", ack: { err, _ in
             XCTAssertEqual(err as? SocketAckError, .timeout)
             timedOut.fulfill()
         })

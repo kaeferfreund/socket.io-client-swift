@@ -117,8 +117,9 @@ final class SocketSendBufferTest: XCTestCase {
     func testATimedOutEmitIsDroppedFromTheBuffer() {
         let timedOut = expectation(description: "ack times out")
 
-        socket.timeout(after: 0.1).emit("msg", "hello") { err, _ in
+        socket.timeout(after: 0.05).emit("event") { err, _ in
             XCTAssertEqual(err as? SocketAckError, .timeout)
+            XCTAssertEqual(self.socket.testRetainedBuffers.sendPackets, 0)
             timedOut.fulfill()
         }
 

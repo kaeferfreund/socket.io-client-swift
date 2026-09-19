@@ -1942,6 +1942,118 @@
           "symbol": "JSParityE2ETest.testReopenACachedSocket"
         }
       ]
+    },
+    {
+      "id": "JS-094",
+      "upstream_ids": [
+        "JS-094"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Disconnected emit of event with a 50 ms timeout: assert timeout error and zero buffered packets inside the timeout callback, then simulate CONNECT and assert no expired packet is sent. Native testRetainedBuffers exposes the original private sendBuffer assertion; this local timer scenario needs no server.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketSendBufferTest.swift",
+          "symbol": "SocketSendBufferTest.testATimedOutEmitIsDroppedFromTheBuffer"
+        }
+      ]
+    },
+    {
+      "id": "JS-095",
+      "upstream_ids": [
+        "JS-095"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Start connection to the real server and immediately emit unknown with a 50 ms explicit timeout, without a connect barrier; callback must report SocketAckError.timeout. Native explicit connect replaces JS autoConnect.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testCallbackUnknownEventTimesOutAgainstTheRealServer"
+        }
+      ]
+    },
+    {
+      "id": "JS-096",
+      "upstream_ids": [
+        "JS-096"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Start real connection, immediately emit echo 42 with zero timeout, assert timeout error and exactly one callback after 200 ms. Additionally repeat on an established connection, wait for a subsequent server ACK as an ordered wire barrier behind the expired echo ACK, and assert exactly one callback and no pending ACK. Count every callback regardless of outcome, so a second successful ACK cannot evade the negative assertion.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testZeroTimeoutEchoCallsBackExactlyOnce"
+        }
+      ]
+    },
+    {
+      "id": "JS-097",
+      "upstream_ids": [
+        "JS-097"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real server: start connect and emit echo 42 immediately, without awaiting connect; explicit timed callback must receive nil error and integer 42. Native timeout scaled to five seconds for CI, preserving before-deadline semantics; default-timeout emit and ping/pong are not used as substitutes.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testCallbackEchoAcknowledgesTheOriginalIntegerBeforeTimeout"
+        }
+      ]
+    },
+    {
+      "id": "JS-098",
+      "upstream_ids": [
+        "JS-098"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real server: start connect and immediately await timeout(50 ms).emitWithAck(unknown); resolution fails the test, rejection must be SocketAckError.timeout. Swift async/throws replaces JS promise rejection.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testAsyncUnknownEventTimesOutAgainstTheRealServer"
+        }
+      ]
+    },
+    {
+      "id": "JS-100",
+      "upstream_ids": [
+        "JS-100"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Configure ackTimeout 50 ms, start real connect and immediately emit unknown with a plain callback and no explicit timeout; assert SocketAckError.timeout. Native manager default is inherited by the socket; explicit connect replaces autoConnect.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testDefaultAckTimeoutApplies"
+        }
+      ]
+    },
+    {
+      "id": "JS-101",
+      "upstream_ids": [
+        "JS-101"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Connect to real server, emit echo a with modern untimed ACK callback and immediately enqueue disconnect on the same handle queue. Assert empty pending ACK registry and inverted expectation proving callback never fires after disconnect, including delayed server responses. Native error-first callback is the supported plain ACK surface; legacy sentinel API is not used as evidence.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testANoTimeoutAckIsNotCalledAfterDisconnecting"
+        }
+      ]
+    },
+    {
+      "id": "JS-105",
+      "upstream_ids": [
+        "JS-105"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real established connection: await timeout(10 s).emitWithAck(echo,a); outgoing listener queues disconnect immediately after send registration, before a server ACK can return. Assert actual send, rejection with SocketAckError.disconnected within five seconds (before timeout), and empty ACK registry. This replaces synthetic didDisconnect-only evidence with the public disconnect API.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testAsyncTimedEchoRejectsWhenDisconnectedImmediatelyAfterSending"
+        }
+      ]
     }
   ],
   "remaining_review": {

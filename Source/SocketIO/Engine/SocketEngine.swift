@@ -499,8 +499,9 @@ open class SocketEngine: NSObject, URLSessionDelegate,
                     self.parseEngineMessage(message)
                 case .message(.binary(let data)):
                     self.parseEngineData(data)
-                case .closed(_, let reason, let error):
-                    self.websocketDidDisconnect(error: error, reason: reason.flatMap { String(data: $0, encoding: .utf8) })
+                case .closed(let code, let reason, let error):
+                    self.websocketDidDisconnect(error: error, reason: reason.flatMap { String(data: $0, encoding: .utf8) },
+                                                closeCode: code)
                 }
             }
         }
@@ -1045,14 +1046,18 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         }
     }
 
-    private func websocketDidDisconnect(error: Error?, reason: String? = nil, reportSendError: Bool = false) {
+    private func websocketDidDisconnect(error: Error?, reason: String? = nil, reportSendError: Bool = false,
+                                        closeCode: Int? = nil) {
         guard !closed else { return }
         let failed = webSocketTransport
         webSocketTransport = nil
         wsConnected = false
         failed?.onEvent = nil
         failed?.abort()
-        if polling && connected {
+        // A retired polling session (`stopPolling()`) has no transport to fall
+        // back to: resuming its poll loop would leave the engine "connected"
+        // without any transport until the next reset.
+        if polling && connected && !invalidated {
             // An optional upgrade candidate may fail without ending a healthy
             // polling connection. Resume both paused write and poll paths.
             probing = false
@@ -1071,12 +1076,26 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             return
         }
         let message = error?.localizedDescription ?? reason ?? "Socket Disconnected"
-        // JS parity: a receive failure on an established connection is a
-        // disconnect, not CONNECT_ERROR (which the manager broadcasts to every
-        // namespace, including previously refused ones). Opening failures and
-        // explicit local send failures still surface the error as well.
-        if error != nil && (!connected || reportSendError) {
-            client?.engineDidError(reason: message)
+        // The original failure must not be lost behind the close reason: JS
+        // engine.io-client `_onError` always emits `error` before
+        // `_onClose("transport error")`, and the manager forwards it. The socket
+        // then decides (`Socket.onerror`) whether that is a `connect_error`.
+        // The native close code and reason travel with it, which is what a
+        // dropped WebSocket under an established connection otherwise hides.
+        if let error = error {
+            let native = error as NSError
+            var details = ["\(native.domain)/\(native.code): \(native.localizedDescription)"]
+            if let underlying = native.userInfo[NSUnderlyingErrorKey] as? NSError {
+                details.append("underlying \(underlying.domain)/\(underlying.code): \(underlying.localizedDescription)")
+            }
+            if let code = closeCode { details.append("close code \(code)") }
+            if let reason = reason, !reason.isEmpty { details.append("reason \(reason)") }
+            let detail = details.joined(separator: "; ")
+            DefaultSocketLogger.Logger.error("WebSocket failed: \(detail)", type: SocketEngine.logType)
+            client?.engineDidError(reason: reportSendError ? message : detail)
+        } else if let code = closeCode {
+            DefaultSocketLogger.Logger.log("WebSocket closed with code \(code)\(reason.map { ": " + $0 } ?? "")",
+                                           type: SocketEngine.logType)
         }
         // The disconnect reason is the JS close reason, not the error text —
         // the detail lives in the engineDidError payload above (engine.io-client

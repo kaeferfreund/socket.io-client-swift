@@ -385,6 +385,60 @@ final class SocketNativeEngineTest: XCTestCase {
         XCTAssertTrue(client.errors.isEmpty)
     }
 
+    /// engine.io-client `_onError`: the native failure is reported (`error`)
+    /// before the close; the client used to swallow it under an established
+    /// connection and only report "transport error".
+    func testTransportFailureUnderAnEstablishedConnectionReportsItsDetailBeforeClosing() {
+        let (engine, client, transport) = make()
+        open(engine, transport)
+        engine.engineQueue.sync { XCTAssertTrue(engine.connected) }
+
+        let failure = NSError(domain: "NSPOSIXErrorDomain", code: 57,
+                              userInfo: [NSLocalizedDescriptionKey: "Socket is not connected",
+                                         NSUnderlyingErrorKey: NSError(domain: "kNWErrorDomainPOSIX", code: 57, userInfo: nil)])
+        transport.onEvent?(.closed(code: 1006, reason: Data("gone".utf8), error: failure)); drain(engine)
+
+        XCTAssertEqual(client.closes, ["transport error"])
+        XCTAssertEqual(client.errors.count, 1)
+        let detail = client.errors.first ?? ""
+        XCTAssertTrue(detail.contains("NSPOSIXErrorDomain/57"), detail)
+        XCTAssertTrue(detail.contains("Socket is not connected"), detail)
+        XCTAssertTrue(detail.contains("underlying kNWErrorDomainPOSIX/57"), detail)
+        XCTAssertTrue(detail.contains("close code 1006"), detail)
+        XCTAssertTrue(detail.contains("reason gone"), detail)
+    }
+
+    /// A clean close under an established connection stays a plain
+    /// "transport close" without an error event, like JS `_onClose`.
+    func testCleanTransportCloseUnderAnEstablishedConnectionReportsNoError() {
+        let (engine, client, transport) = make()
+        open(engine, transport)
+        transport.onEvent?(.closed(code: 1000, reason: nil, error: nil)); drain(engine)
+        XCTAssertEqual(client.closes, ["transport close"])
+        XCTAssertEqual(client.errors, [])
+    }
+
+    /// After `stopPolling()` retired the polling session, a failed upgrade
+    /// candidate cannot fall back to polling: there is no transport to poll
+    /// with, so the engine closes instead of staying "connected" without one.
+    func testUpgradeFailureAfterStopPollingClosesInsteadOfResumingPolling() {
+        let client = NativeEngineClient()
+        let engine = NativePollingTestEngine(client: client, url: url, config: [])
+        let candidate = NativeEngineTransport()
+        engine.webSocketTransportFactory = { _ in candidate }
+        engine.engineQueue.sync { engine.parseEngineMessage(upgradeHandshake) }
+        candidate.onEvent?(.opened(protocol: nil)); drain(engine)
+        engine.engineQueue.sync { engine.stopPolling() }
+        let pollsBefore = engine.polls
+        candidate.onEvent?(.closed(code: nil, reason: nil, error: EngineWebSocketError.closed)); drain(engine)
+        engine.engineQueue.sync {
+            XCTAssertTrue(engine.closed)
+            XCTAssertFalse(engine.connected)
+        }
+        XCTAssertEqual(engine.polls, pollsBefore, "no poll may start on the retired session")
+        XCTAssertEqual(client.closes, ["transport error"])
+    }
+
     func testUpgradeWaitsForGetAndPostAndQueuesUpgradeFirst() {
         let client = NativeEngineClient()
         let engine = NativePollingTestEngine(client: client, url: url, config: [])

@@ -28,7 +28,7 @@ The starting parser crashed in isolated subprocesses on short packet strings suc
 
 `SocketPacket` validates placeholder types and indices before retaining/reconstructing attachments. Boolean NSNumber bridges no longer masquerade as numeric event names or indices. A malformed header, a second binary header, unexpected binary data, or a text packet interleaved into a pending binary reconstruction terminates the affected parse session rather than indexing invalid storage or leaving ambiguous framing. Empty Engine.IO MESSAGE payloads no longer disappear silently at the manager parser boundary.
 
-New `SocketParserOptions` default to **10 attachments, 16 MiB binary bytes per reconstructed packet, 16 MiB text packet bytes, and JSON depth 100**. Positive values and a bounded depth setting are required. These limits are deliberately stricter than unlimited acceptance; they are not proof of an end-to-end memory cap. Existing `.webSocketOptions(...)` still separately controls native complete-message/queued-send bounds.
+New `SocketParserOptions` default to **10 attachments, unlimited binary bytes, unlimited text packet bytes, and JSON depth 512** (the byte limits were 16 MiB and the depth 100 until the council follow-up in section 7). Positive values and a bounded depth setting are required. These limits are deliberately stricter than unlimited acceptance; they are not proof of an end-to-end memory cap. Existing `.webSocketOptions(...)` still separately controls native complete-message/queued-send bounds.
 
 Tests: `SocketProtocolSafetyTest`, extended `SocketParserTest`, manager parser-failure regressions and `scripts/test-parser-safety.sh`.
 

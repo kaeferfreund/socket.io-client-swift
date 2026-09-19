@@ -211,6 +211,17 @@ internal final class URLSessionWebSocketTransport: EngineWebSocketTransport {
         let previousState = state
         let oldConnection = connection
         let pending = batches
+        // Every transport end passes through here: log the native detail before
+        // the connection is torn down, so a dropped socket can be diagnosed.
+        let native = error.map { $0 as NSError }
+        let underlying = native?.userInfo[NSUnderlyingErrorKey] as? NSError
+        DefaultSocketLogger.Logger.log(
+            "WebSocket finish: state=\(previousState), localClose=\(localClose), "
+                + "closeCode=\(code.map { String($0) } ?? "none"), "
+                + "reason=\(reason.flatMap { String(data: $0, encoding: .utf8) } ?? "none"), "
+                + "error=\(native.map { "\($0.domain)/\($0.code): \($0.localizedDescription)" } ?? "none"), "
+                + "underlying=\(underlying.map { "\($0.domain)/\($0.code): \($0.localizedDescription)" } ?? "none")",
+            type: "URLSessionWebSocketTransport")
         state = .closed
         connection = nil
         batches.removeAll(keepingCapacity: false)

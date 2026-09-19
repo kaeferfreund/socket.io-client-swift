@@ -244,6 +244,102 @@ final class SocketReconnectEventsTest: XCTestCase {
         XCTAssertEqual(socket.status, .connected)
     }
 
+    // MARK: manager.ts `reconnect()` — the attempt runs after `backoff.duration()`
+
+    /// JS waits for the backoff before `reconnect_attempt` and `open()`. The
+    /// client used to open immediately and only space the *next* attempt, which
+    /// turned a drop right after every handshake into a tight loop.
+    func testReconnectAttemptWaitsForTheBackoffDelay() {
+        let manager = makeManager(alwaysFail: true, .reconnectWait(1), .reconnectAttempts(1))
+        let socket = manager.socket(forNamespace: "/")
+
+        let attempted = expectation(description: "reconnect_attempt after the delay")
+        attempted.assertForOverFulfill = false
+        var attemptedAt: Date?
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in
+            attemptedAt = Date()
+            attempted.fulfill()
+        }
+
+        let startedAt = Date()
+        socket.connect()
+
+        wait(for: [attempted], timeout: 5)
+        let delay = attemptedAt!.timeIntervalSince(startedAt)
+        XCTAssertGreaterThanOrEqual(delay, 0.5, "1 s base minus the maximum 50 % jitter")
+        XCTAssertLessThanOrEqual(delay, 2.5, "1 s base plus the maximum 50 % jitter, plus scheduling slack")
+    }
+
+    // MARK: manager.ts `_close()` — `skipReconnect` cancels a pending attempt
+
+    func testManagerDisconnectCancelsAScheduledReconnectAttempt() {
+        let manager = makeManager(alwaysFail: true, .reconnectWait(1))
+        let socket = manager.socket(forNamespace: "/")
+
+        let unexpected = expectation(description: "no reconnect attempt after disconnect()")
+        unexpected.isInverted = true
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in unexpected.fulfill() }
+
+        socket.connect()          // fails, schedules attempt 1 in ~1 s
+        manager.disconnect()      // JS `_close()`: skipReconnect
+
+        wait(for: [unexpected], timeout: 2)
+        XCTAssertEqual(manager.status, .disconnected)
+    }
+
+    // MARK: connection.ts — "should stop reconnecting when force closed" (manager.ts `_destroy`)
+
+    /// Disconnecting the last active socket closes the manager, which ends the
+    /// reconnect loop. The loop used to keep running with nothing to re-join.
+    func testDisconnectingTheLastActiveSocketStopsTheReconnectLoop() {
+        let manager = makeManager(alwaysFail: true)
+        let socket = manager.socket(forNamespace: "/")
+
+        var attempts = 0
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in
+            attempts += 1
+            if attempts == 1 { socket.disconnect() }
+        }
+
+        socket.connect()
+
+        let settled = expectation(description: "settled")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { settled.fulfill() }
+        wait(for: [settled], timeout: 3)
+
+        XCTAssertEqual(attempts, 1, "Closing the last socket must stop the loop after the first attempt")
+        XCTAssertEqual(manager.status, .disconnected)
+        XCTAssertFalse(socket.active)
+    }
+
+    /// The counterpart: another active socket keeps the manager, and its loop, alive.
+    func testDisconnectingOneSocketKeepsReconnectingForAnotherActiveOne() {
+        let manager = makeManager(.reconnectAttempts(2))
+        let socket = manager.socket(forNamespace: "/")
+        let other = manager.socket(forNamespace: "/other")
+        connect(socket)
+        connect(other)
+
+        var attempts = 0
+        var otherAttempts = [Int]()
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in
+            attempts += 1
+            if attempts == 1 { socket.disconnect() }
+        }
+        other.on(clientEvent: .reconnectAttempt) { data, _ in otherAttempts.append(data.first as? Int ?? -1) }
+        let failed = expectation(description: "reconnect_failed on the surviving socket")
+        failed.assertForOverFulfill = false
+        other.on(clientEvent: .reconnectFailed) { _, _ in failed.fulfill() }
+
+        engine.alwaysFail = true
+        manager.engineDidClose(reason: "transport close")
+
+        wait(for: [failed], timeout: 10)
+        XCTAssertEqual(otherAttempts, [1, 2], "The surviving socket must see the whole budget")
+        XCTAssertEqual(attempts, 1)
+        XCTAssertNotEqual(manager.status, .disconnected)
+    }
+
     // MARK: connection.ts — "should attempt reconnects after a failed reconnect"
 
     /// The JS test re-`connect()`s from the `reconnect_failed` handler and

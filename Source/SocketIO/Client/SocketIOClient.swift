@@ -1106,8 +1106,16 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         retryQueue.removeAll(keepingCapacity: false)
         retryQueueLock.unlock()
 
+        // `cancelTimedAck` must run on the owning handleQueue; the public
+        // `clearRecoveryState()` reaches here without that precondition. Order
+        // it before the `clearTimedAcks` dispatch that follows in the callers.
+        let cancelIDs = dropped.compactMap { $0.ackID }
+        if !cancelIDs.isEmpty {
+            manager?.handleQueue.async { [weak self] in
+                for id in cancelIDs { self?.ackHandlers.cancelTimedAck(id) }
+            }
+        }
         for entry in dropped {
-            if let id = entry.ackID { ackHandlers.cancelTimedAck(id) }
             entry.writeCompletion?()
             entry.userAck?(SocketAckError.disconnected, [])
         }

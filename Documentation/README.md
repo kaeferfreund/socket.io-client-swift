@@ -5,6 +5,13 @@
 Start with the application guides. Implementation reviews and historical evidence
 are separate references, not prerequisites for using the library.
 
+## Choosing a client
+
+[Why this fork?](Guides/WhyThisFork.md) compares the inspected official Swift
+client with this continuation, links the source snapshots, and explains the
+trade-offs. Start there when deciding whether to adopt the package; go directly
+to the application guides when you are ready to integrate it.
+
 ## Application guides
 
 | Topic | Read |

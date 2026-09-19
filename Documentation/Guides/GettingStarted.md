@@ -66,7 +66,14 @@ and enter:
 https://github.com/kaeferfreund/socket.io-client-swift.git
 ```
 
-Use version **17.0.0** or later within the 17.x series.
+Use version **17.0.0** or later within the 17.x series. In Xcode, select
+**Up to Next Major Version** from **17.0.0** and add the **SocketIO** product
+to your app target.
+
+A version requirement selects a published release, not the development branch
+you are viewing. Select a reviewed branch or commit explicitly to evaluate
+unreleased changes. See the [17.0.0 release notes](../Release17.md) and
+[why this fork exists](WhyThisFork.md).
 
 For a Package.swift:
 
@@ -96,12 +103,16 @@ import SocketIO
 
 ## Quick start
 
-Keep the SocketManager alive for as long as you use its sockets.
+Keep the `SocketManager` alive for as long as you use its sockets. The wrapper
+uses `@MainActor` because the default `handleQueue` is the main queue. This does
+not make the underlying manager or socket `Sendable`, and a custom queue needs
+its own consistent ownership strategy.
 
 ```swift
 import Foundation
 import SocketIO
 
+@MainActor
 final class RealtimeClient {
     private let manager: SocketManager
     private let socket: SocketIOClient
@@ -153,7 +164,7 @@ final class RealtimeClient {
 
 Register listeners before connecting.
 
-autoConnect defaults to false, so the socket only connects when you call:
+`autoConnect` defaults to `false`, so the socket only connects when you call:
 
 ```swift
 socket.connect()

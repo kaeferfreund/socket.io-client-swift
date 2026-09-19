@@ -70,7 +70,7 @@ final class SocketRemainingParityTest: XCTestCase {
             XCTAssertEqual(instance.urlPolling.path, "/custom")
             XCTAssertEqual(instance.urlWebSocket.path, "/custom")
         }
-        XCTAssertEqual(engine([.path("/custom")]).urlPolling.path, "/custom/")
+        XCTAssertEqual(URLComponents(url: engine([.path("/custom")]).urlPolling, resolvingAgainstBaseURL: false)?.percentEncodedPath, "/custom/")
     }
     func testProtocolVersionsHaveNativeWireConstants() {
         XCTAssertEqual(engine().engineIOParam, "&EIO=4")
@@ -192,6 +192,11 @@ final class SocketRemainingParityTest: XCTestCase {
         XCTAssertTrue(detail.responseTruncated)
         XCTAssertFalse(detail.description.contains("AAAA"))
         XCTAssertFalse(detail.description.contains("secret"))
+    }
+    func testInvalidUTF8ResponseRemainsBoundedAfterLossyDecoding() {
+        let detail = SocketTransportError(transport: "polling", operation: "read", body: Data(repeating: 255, count: 4096))
+        XCTAssertLessThanOrEqual(detail.responseText?.utf8.count ?? Int.max, 4096)
+        XCTAssertTrue(detail.responseTruncated)
     }
     func testManagerPassesSameErrorToDisconnectAndDoesNotLeakIt() {
         let queue = DispatchQueue(label: "remaining.detail")

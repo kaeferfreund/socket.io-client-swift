@@ -56,6 +56,11 @@ internal final class URLSessionWebSocketConnection: EngineWebSocketConnection {
         self.sessionDelegate = sessionDelegate
     }
 
+    internal var closeDetails: (code: Int?, reason: Data?) {
+        let code = task?.closeCode
+        return (code == .invalid ? nil : code?.rawValue, task?.closeReason)
+    }
+
     internal func start() {
         guard !started else { return }
         started = true

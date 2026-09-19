@@ -278,10 +278,24 @@ final class SocketClearAcksOnCloseTest: XCTestCase {
     /// JS rejects the `emitWithAck` promise from `_clearAcks`; a Swift
     /// continuation has to be resumed exactly once, so it throws `.disconnected`.
     func testAsyncEmitWithAckThrowsDisconnectedOnATransportDropThatReconnects() async {
-        await MainActor.run { _ = makeConnectedSocket(.ackTimeout(10)) }
-
+        let initial = expectation(description: "initial connect")
+        let registered = expectation(description: "emit reached the fake transport")
+        let rejoined = expectation(description: "namespace re-joined")
         let thrown = expectation(description: "await throws the disconnect error")
-        Task {
+        // Never block the MainActor with synchronous XCTest waits. The fake
+        // transport and manager need that executor to deliver CONNECT and ACK.
+        await MainActor.run {
+            self.manager = SocketManager(socketURL: URL(string: "http://localhost/")!,
+                config: [.log(false), .reconnects(true), .reconnectWait(0), .ackTimeout(10)])
+            self.engine = ClearAcksTestEngine(client: self.manager, url: self.manager.socketURL, options: nil)
+            self.manager.engine = self.engine
+            self.socket = self.manager.defaultSocket
+            self.socket.once(clientEvent: .connect) { _, _ in initial.fulfill() }
+            self.engine.onEventWrite = { registered.fulfill() }
+            self.socket.connect()
+        }
+        await fulfillment(of: [initial], timeout: 5)
+        let emit = Task {
             do {
                 _ = try await self.socket.emitWithAck("echo", "a")
                 XCTFail("the acknowledgement must not resolve")
@@ -290,13 +304,17 @@ final class SocketClearAcksOnCloseTest: XCTestCase {
             }
             thrown.fulfill()
         }
-
+        defer { emit.cancel() }
+        await fulfillment(of: [registered], timeout: 5)
         await MainActor.run {
-            // Let the emit reach registration before the transport dies.
-            self.drain()
-            self.dropTransportAndWaitForReconnect()
+            self.socket.once(clientEvent: .connect) { _, _ in rejoined.fulfill() }
+            self.engine.dropTransport(reason: "transport close")
         }
-        await fulfillment(of: [thrown], timeout: 5)
+        await fulfillment(of: [thrown, rejoined], timeout: 5)
+        await MainActor.run {
+            XCTAssertTrue(self.socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+            XCTAssertEqual(self.socket.status, .connected)
+        }
     }
 }
 
@@ -328,6 +346,7 @@ private final class ClearAcksTestEngine: SocketEngineSpec {
     /// `true` is buffered instead of written.
     var hasPingExpired = false
 
+    var onEventWrite: (() -> Void)?
     private var sessions = 0
     /// Every non-CONNECT frame handed to the transport.
     private(set) var sent = [String]()
@@ -360,6 +379,7 @@ private final class ClearAcksTestEngine: SocketEngineSpec {
 
         guard msg.hasPrefix("0") else {
             sent.append(msg)
+            onEventWrite?()
             return
         }
 

@@ -549,7 +549,11 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         }
     }
 
-    private func _engineDidClose(reason: String) {
+    public func engineDidClose(reason: String, error: SocketTransportError) {
+        handleQueue.async { self._engineDidClose(reason: reason, error: error) }
+    }
+
+    private func _engineDidClose(reason: String, error: SocketTransportError? = nil) {
         cancelConnectTimeout()
 
         waitingPackets.removeAll()
@@ -563,10 +567,17 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         }
 
         if status == .disconnected || !reconnects {
-            didDisconnect(reason: reason)
+            if let error = error {
+                forAll { socket in
+                    guard socket.status != .notConnected else { return }
+                    socket.handleTransportClose(reason: reason, error: error, reconnecting: false)
+                }
+            } else {
+                didDisconnect(reason: reason)
+            }
         } else if !reconnecting {
             reconnecting = true
-            tryReconnect(reason: reason)
+            tryReconnect(reason: reason, error: error)
         } else if reconnectTimer != nil {
             // JS `reconnect()` returns early while `_reconnecting`: a close that
             // arrives during the backoff wait is not an attempt failure and
@@ -591,7 +602,11 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         }
     }
 
-    private func _engineDidError(reason: String) {
+    public func engineDidError(reason: String, error: SocketTransportError) {
+        handleQueue.async { self._engineDidError(reason: reason, error: error) }
+    }
+
+    private func _engineDidError(reason: String, error: SocketTransportError? = nil) {
         cancelConnectTimeout()
 
         DefaultSocketLogger.Logger.error("\(reason)", type: SocketManager.logType)
@@ -606,9 +621,9 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             guard socket.active else { return }
 
             if socket.status == .connected {
-                socket.handleClientEvent(.error, data: [reason])
+                socket.handleClientEvent(.error, data: error.map { [reason, $0] } ?? [reason])
             } else {
-                socket.handleClientEvent(.connectError, data: [reason])
+                socket.handleClientEvent(.connectError, data: error.map { [reason, $0] } ?? [reason])
             }
         }
     }
@@ -964,7 +979,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         return pendingConnectPayloads.removeValue(forKey: socket.nsp)
     }
 
-    private func tryReconnect(reason: String) {
+    private func tryReconnect(reason: String, error: SocketTransportError? = nil) {
         guard reconnecting else { return }
 
         DefaultSocketLogger.Logger.log("Starting reconnect", type: SocketManager.logType)
@@ -976,7 +991,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         forAll {socket in
             guard socket.status == .connected else { return }
 
-            socket.setReconnecting(reason: reason)
+            socket.handleTransportClose(reason: reason, error: error, reconnecting: true)
         }
 
         scheduleReconnectAttempt()

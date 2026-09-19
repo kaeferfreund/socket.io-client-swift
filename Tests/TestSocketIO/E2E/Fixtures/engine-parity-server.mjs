@@ -32,18 +32,28 @@ const observeFrames = (transport) => {
 };
 engine.on('connection', (socket) => {
   observeFrames(socket.transport);
-  socket.on('upgrade', observeFrames);
+  socket.on('upgrade', (transport) => {
+    observeFrames(transport);
+    if (process.env.EMIT_UPGRADE_MARKER === '1') socket.send('__parity_upgraded__');
+  });
+  if (process.env.SEND_GREETING === '1') socket.send('hi');
   socket.on('message', (data) => socket.send(data));
 });
 http.prependListener('request', (req) => {
   if (!req.url.startsWith('/engine.io')) return;
   const record = { method: req.method, url: req.url, headers: req.headers, body: '', bytes: 0 };
   observations.requests.push(record);
-  req.on('data', (chunk) => {
-    record.bytes += chunk.length;
-    // Keep the diagnostic fixture bounded even on deliberately oversized input.
-    if (record.bytes <= 8192) record.body += chunk.toString();
-  });
+  // A data listener resumes even an empty GET and emits its normal request-close
+  // before the pending poll responds. Observe without changing stream flow.
+  const push = req.push;
+  req.push = function(chunk, encoding) {
+    if (chunk !== null) {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
+      record.bytes += bytes.length;
+      if (record.bytes <= 8192) record.body += bytes.toString();
+    }
+    return push.call(this, chunk, encoding);
+  };
 });
 http.on('upgrade', (req) => {
   observations.requests.push({ method: 'UPGRADE', url: req.url, headers: req.headers });

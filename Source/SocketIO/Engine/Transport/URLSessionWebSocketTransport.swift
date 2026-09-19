@@ -210,6 +210,8 @@ internal final class URLSessionWebSocketTransport: EngineWebSocketTransport {
         guard state == .connecting || state == .open else { return }
         let previousState = state
         let oldConnection = connection
+        let code = code ?? oldConnection?.closeDetails.code
+        let reason = reason ?? oldConnection?.closeDetails.reason
         let pending = batches
         // Every transport end passes through here: log the native detail before
         // the connection is torn down, so a dropped socket can be diagnosed.

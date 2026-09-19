@@ -58,6 +58,12 @@ extension Dictionary where Key == String, Value == Any {
             return .autoConnect(autoConnect)
         case let ("connectParams", params as [String: Any]):
             return .connectParams(params)
+        case let ("withCredentials", enabled as Bool):
+            return .withCredentials(enabled)
+        case let ("forceBase64", enabled as Bool):
+            return .forceBase64(enabled)
+        case let ("addTrailingSlash", enabled as Bool):
+            return .addTrailingSlash(enabled)
         case let ("cookies", cookies as [HTTPCookie]):
             return .cookies(cookies)
         case let ("extraHeaders", headers as [String: String]):
@@ -104,6 +110,8 @@ extension Dictionary where Key == String, Value == Any {
             return .enableSOCKSProxy(enable)
         case let ("version", version as Int):
             return .version(SocketIOVersion(rawValue: version) ?? .three)
+        case ("withCredentials", _), ("forceBase64", _), ("addTrailingSlash", _):
+            return .invalidConfiguration("invalid value for " + key + "; expected Bool")
         case ("parserOptions", _):
             return .invalidConfiguration("invalid value for parserOptions; expected SocketParserOptions")
         case ("bufferLimits", _):

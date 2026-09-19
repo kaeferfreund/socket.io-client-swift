@@ -47,7 +47,7 @@ final class EngineRemainingParityE2ETest: XCTestCase {
                                             maxHttpBufferSize: maximum, extraEnvironment: environment)
         client = RemainingEngineClient()
         client.failed = { reason, _ in XCTFail("Unexpected transport failure: \(reason)") }
-        var config: SocketIOClientConfiguration = [.log(false)]
+        var config: SocketIOClientConfiguration = [.log(false), .path("/engine.io/")]
         options.forEach { config.insert($0) }
         engine = SocketEngine(client: client, url: URL(string: "http://127.0.0.1:\(server.port)")!, config: config)
     }
@@ -61,7 +61,7 @@ final class EngineRemainingParityE2ETest: XCTestCase {
     /// The native engine's binary send consists of a text header followed by
     /// attachments. Assert the extra empty header too; do not pretend to expose
     /// the standalone JS Socket.send(ArrayBuffer) API.
-    private func roundTrip(_ packets: [EngineWebSocketMessage]) {
+    private func roundTrip(_ packets: [EngineWebSocketMessage], afterUpgrade: Bool = false) {
         var expected: [EngineWebSocketMessage] = []
         for packet in packets {
             if case .binary = packet { expected.append(.text("")) }
@@ -71,8 +71,7 @@ final class EngineRemainingParityE2ETest: XCTestCase {
         received.expectedFulfillmentCount = expected.count
         received.assertForOverFulfill = true
         var actual: [EngineWebSocketMessage] = []
-        client.message = { packet in actual.append(packet); received.fulfill() }
-        client.opened = { [self] in
+        let send: () -> Void = { [self] in
             for packet in packets {
                 switch packet {
                 case .text(let value): engine.send(value, withData: [])
@@ -80,21 +79,36 @@ final class EngineRemainingParityE2ETest: XCTestCase {
                 }
             }
         }
+        client.message = { [self] packet in
+            if afterUpgrade && packet == .text("__parity_upgraded__") {
+                engine.engineQueue.sync { XCTAssertFalse(engine.polling); XCTAssertTrue(engine.wsConnected) }
+                send()
+            } else {
+                actual.append(packet); received.fulfill()
+            }
+        }
+        if !afterUpgrade { client.opened = send }
         engine.connect()
         wait(for: [received], timeout: 10)
         XCTAssertEqual(actual, expected)
     }
 
-    func testConnectLocalhostPolling() throws {
-        try make([.forcePolling(true)])
-        roundTrip([.text("connected")])
+    private func assertServerGreeting(_ options: [SocketIOClientOption]) throws {
+        try make(options, environment: ["SEND_GREETING": "1"])
+        let greeting = expectation(description: "open precedes unsolicited server greeting")
+        var opened = false
+        client.opened = { opened = true }
+        client.message = { packet in
+            XCTAssertTrue(opened)
+            XCTAssertEqual(packet, .text("hi"))
+            greeting.fulfill()
+        }
+        engine.connect()
+        wait(for: [greeting], timeout: 10)
         engine.engineQueue.sync { XCTAssertTrue(engine.connected); XCTAssertFalse(engine.sid.isEmpty) }
     }
-    func testConnectLocalhostWebSocket() throws {
-        try make([.forceWebsockets(true)])
-        roundTrip([.text("connected")])
-        engine.engineQueue.sync { XCTAssertTrue(engine.connected); XCTAssertTrue(engine.wsConnected) }
-    }
+    func testConnectLocalhostPolling() throws { try assertServerGreeting([.forcePolling(true)]) }
+    func testConnectLocalhostWebSocket() throws { try assertServerGreeting([.forceWebsockets(true)]) }
     func testMultibyteUTF8Polling() throws {
         try make([.forcePolling(true)])
         roundTrip([.text("cash money €€€")])
@@ -131,6 +145,28 @@ final class EngineRemainingParityE2ETest: XCTestCase {
         let requests = try XCTUnwrap(snapshot["requests"] as? [[String: Any]])
         XCTAssertTrue(requests.contains { ($0["url"] as? String)?.contains("b64=1") == true })
     }
+    func testForcedBase64AfterActualTransportUpgrade() throws {
+        try make([.forceBase64(true)], environment: ["EMIT_UPGRADE_MARKER": "1"])
+        roundTrip([.binary(Data([0, 1, 2, 3, 4])), .binary(Data())], afterUpgrade: true)
+        let frames = try XCTUnwrap(snapshot()["frames"] as? [[String: Any]])
+        XCTAssertFalse(frames.contains { ($0["binary"] as? Bool) == true })
+        XCTAssertTrue(frames.contains { ($0["payload"] as? String) == "bAAECAwQ=" })
+        XCTAssertTrue(frames.contains { ($0["payload"] as? String) == "b" })
+    }
+    private func assertCookiesAcrossUpgrade(_ enabled: Bool) throws {
+        try make([.withCredentials(enabled)], environment: ["EMIT_UPGRADE_MARKER": "1"])
+        roundTrip([.text("upgraded")], afterUpgrade: true)
+        let requests = try XCTUnwrap(snapshot()["requests"] as? [[String: Any]])
+        let upgrade = try XCTUnwrap(requests.first { ($0["method"] as? String) == "UPGRADE" })
+        let headers = try XCTUnwrap(upgrade["headers"] as? [String: Any])
+        if enabled {
+            let cookie = try XCTUnwrap(headers["cookie"] as? String)
+            XCTAssertEqual(Set(cookie.components(separatedBy: "; ")), ["one=1", "two=2"])
+        } else { XCTAssertNil(headers["cookie"]) }
+    }
+    func testCookiesSurvivePollingToWebSocketUpgrade() throws { try assertCookiesAcrossUpgrade(true) }
+    func testDisabledCookiesStayDisabledDuringUpgrade() throws { try assertCookiesAcrossUpgrade(false) }
+
     func testBinaryMaxPayloadBatching() throws {
         try make([.forcePolling(true)], maximum: 100)
         roundTrip([.binary(Data(repeating: 1, count: 72)), .binary(Data(repeating: 2, count: 20)),

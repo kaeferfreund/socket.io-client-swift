@@ -244,7 +244,10 @@ extension SocketEnginePollable {
                 }
 
                 if this.polling && !this.closed {
-                    this.didError(reason: err?.localizedDescription ?? "Error")
+                    let detail = SocketTransportError(transport: "polling", operation: "read",
+                                                      response: res as? HTTPURLResponse, body: data,
+                                                      underlyingError: err)
+                    this.didError(reason: err?.localizedDescription ?? detail.description, error: detail)
                 }
 
                 return
@@ -288,7 +291,7 @@ extension SocketEnginePollable {
 
         DefaultSocketLogger.Logger.log("POSTing", type: "SocketEnginePolling")
 
-        doRequest(for: req) {[weak self] _, res, err in
+        doRequest(for: req) {[weak self] data, res, err in
             guard let this = self, !this.closed else { return }
             guard let res = res as? HTTPURLResponse, res.statusCode == 200 else {
                 if let err = err {
@@ -298,7 +301,10 @@ extension SocketEnginePollable {
                 }
 
                 if this.polling && !this.closed {
-                    this.didError(reason: err?.localizedDescription ?? "Error")
+                    let detail = SocketTransportError(transport: "polling", operation: "write",
+                                                      response: res as? HTTPURLResponse, body: data,
+                                                      underlyingError: err)
+                    this.didError(reason: err?.localizedDescription ?? detail.description, error: detail)
                 }
 
                 return

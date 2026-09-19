@@ -41,13 +41,26 @@ def prose(text):
     return ''.join(lines)
 
 
+def mask_inline_code(text):
+    """Mask matched backtick spans, preserving offsets and source line numbers."""
+    return re.sub(
+        r'(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)',
+        lambda match: re.sub(r'[^\n]', ' ', match[0]),
+        text,
+        flags=re.S,
+    )
+
+
 class HTMLReferences(HTMLParser):
+    """Collect actual HTML link targets and anchors, ignoring valueless attributes."""
     def __init__(self):
+        """Initialize empty link and anchor collections with HTML entity decoding."""
         super().__init__(convert_charrefs=True)
         self.links = []
         self.anchors = set()
 
     def handle_starttag(self, tag, attrs):
+        """Record href/src targets with line numbers and explicit id/name anchors."""
         for key, value in attrs:
             if value is None:
                 continue
@@ -58,9 +71,10 @@ class HTMLReferences(HTMLParser):
 
 
 def anchors(text):
+    """Return explicit HTML anchors and deduplicated GitHub-style heading slugs."""
     text = prose(text)
     parser = HTMLReferences()
-    parser.feed(text)
+    parser.feed(mask_inline_code(text))
     result, used = set(parser.anchors), set()
     for match in re.finditer(r'^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$', text, re.M):
         title = re.sub(r'\[([^]]+)\]\([^)]*\)', r'\1', match[1])
@@ -77,13 +91,16 @@ def anchors(text):
 
 
 def links(text):
+    """Yield source line and destination pairs, flagging undefined references."""
     text = prose(text)
     # Inline code is prose for heading slugs, but not for link extraction.
-    text = re.sub(r'(`+)(.+?)\1', lambda m: ' ' * len(m[0]), text)
+    text = mask_inline_code(text)
     parser = HTMLReferences()
     parser.feed(text)
     yield from parser.links
-    destination = r'(<[^>\n]+>|(?:[^\s()]+|\([^()]*\))+)(?:\s+[\"\'][^\n]*?[\"\'])?'
+    # Each repeated alternative consumes a distinct character or parenthesized segment.
+    # A nested + here makes unterminated destinations backtrack exponentially.
+    destination = r'(<[^>\n]+>|(?:[^\s()]|\([^()]*\))+)(?:\s+[\"\'][^\n]*?[\"\'])?'
     for match in re.finditer(r'\]\(' + destination + r'\)', text):
         yield text.count('\n', 0, match.start()) + 1, match[1].strip('<>')
     definitions = {}
@@ -97,6 +114,7 @@ def links(text):
 
 
 def current_documents(root):
+    """Select current documentation and indexes while retaining historical exclusions."""
     paths = set(root.glob('*.md')) - {root / 'CHANGELOG.md'}
     paths.update(root.glob('Documentation/*.md'))
     for directory in ('Documentation/Guides', 'Documentation/Development', '.github'):
@@ -109,6 +127,7 @@ def current_documents(root):
 
 
 def validate(root=ROOT):
+    """Return diagnostics for missing paths, missing anchors and repository escapes."""
     root = Path(root).resolve()
     errors, cache = [], {}
     documents = current_documents(root)
@@ -152,6 +171,7 @@ def validate(root=ROOT):
 
 
 def main():
+    """Run the offline validator and return a nonzero status for invalid links."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=ROOT)
     args = parser.parse_args()

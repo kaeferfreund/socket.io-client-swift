@@ -22,12 +22,12 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       # E2E tests start their localhost fixtures using Node from PATH. TLS tests
       # generate ephemeral private PKI with the runner's OpenSSL, not OS roots.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 26
       - name: Verify Swift 6.4 toolchain
@@ -51,7 +51,7 @@ jobs:
           coverage_path="$(swift test --show-codecov-path)"
           cp "$coverage_path" "$RUNNER_TEMP/swift-coverage.json"
           python3 scripts/report-swift-coverage.py "$coverage_path" "$RUNNER_TEMP/swift-coverage-summary.json"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: native-swift-test-log-${{ github.run_id }}-${{ github.run_attempt }}
@@ -66,7 +66,7 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       # The E2E suites need Node fixtures and real sockets; TSan runs the
@@ -98,7 +98,7 @@ jobs:
             exit 1
           fi
           echo "No Thread Sanitizer data race reports."
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: thread-sanitizer-log-${{ github.run_id }}-${{ github.run_attempt }}
@@ -110,7 +110,7 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       # A ratchet, not a clean build: the recorded per-platform baseline may
@@ -119,7 +119,7 @@ jobs:
       # Mutable classes are never stamped `@unchecked Sendable` to pass this.
       - name: Build with -strict-concurrency=complete and compare the baseline
         run: bash scripts/check-strict-concurrency.sh
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: strict-concurrency-log-${{ github.run_id }}-${{ github.run_attempt }}
@@ -131,7 +131,7 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Verify dependency removal and all package platform builds
@@ -142,10 +142,10 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 26
       - name: Check inventory evidence and fail-fast shell behavior
@@ -168,10 +168,10 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 26
       - name: Check malformed-input regressions using actual Swift parser
@@ -189,7 +189,7 @@ jobs:
           export NODE_PATH="$RUNNER_TEMP/parity-tools/node_modules"
           set -o pipefail
           bash scripts/test-parser-parity.sh "$RUNNER_TEMP/pinned-upstream" "$RUNNER_TEMP/decoder-results.json" 2>&1 | tee "$RUNNER_TEMP/decoder-parity.log"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: parser-parity-evidence-${{ github.run_id }}-${{ github.run_attempt }}
@@ -204,16 +204,16 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: socketio/socket.io
           ref: aaf2af36ec8ad05910f357a788e0e358bad32738
           path: upstream-reference
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # The pinned upstream Mocha/tsx/yargs dependency graph fails to load
           # under Node 26 (CommonJS require in an ESM-classified yargs file).
@@ -221,7 +221,7 @@ jobs:
           node-version: 24
       - name: Execute original Node suites (browser and WebTransport matrix excluded)
         run: bash scripts/test-upstream-clients.sh "$GITHUB_WORKSPACE/upstream-reference" "$RUNNER_TEMP/upstream-client-results"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: upstream-client-results-${{ github.run_id }}-${{ github.run_attempt }}
@@ -233,7 +233,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Test the offline documentation checker

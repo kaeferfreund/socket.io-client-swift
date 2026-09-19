@@ -23,6 +23,7 @@ by the concurrency-warning check. Do not archive or delete these as stale notes.
 | [Parity review](../JevParityReview-2026-09-19.md) | Dated independent parity review |
 | [Acknowledgement follow-up](../JevAckFollowup-2026-09-19.md) | Dated acknowledgement analysis |
 | [Decoder differential](DecoderDifferential.json) | Recorded parser comparison |
+| [Final native assertion mappings](../FinalParityAssertions-2026-09-19.md) | Restored historical assertion-audit report for `43bbe47`; counts and remaining-work statements describe that revision, not current release status |
 | [Final parity validation](FinalParityValidation-2026-09-19.json) | Recorded native/contract validation |
 | [Native coverage validation](NativeCoverageValidation-2026-09-19.json) | Recorded library coverage |
 | [Polling failure validation](PollingFailureValidation-2026-09-19.json) | Later polling/coverage follow-up |

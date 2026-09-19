@@ -1,5 +1,14 @@
 # Final 36 native assertion mappings
 
+[Documentation index](README.md) · [Evidence index](ReviewEvidence/README.md)
+
+> **Historical assertion-audit snapshot for `43bbe47`.** The test counts,
+> coverage figures and remaining-work statements below describe that revision,
+> not the current release or branch. This restored report remains at its original
+> path; its original body is preserved below. For the current supported scope,
+> read [PARITY.md](../PARITY.md); for release validation and later follow-ups,
+> read [Release 17](Release17.md#release-validation-and-follow-up-scope).
+
 Reference: official `socketio/socket.io` at
 `aaf2af36ec8ad05910f357a788e0e358bad32738` (client 4.8.3).
 Scope: supported polling/WebSocket behavior and both packet codecs, with the

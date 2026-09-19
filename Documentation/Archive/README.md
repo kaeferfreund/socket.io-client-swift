@@ -31,7 +31,12 @@ not `master`, so later cleanup does not erase access to the original records.
 | Former remaining-work list | [REMAINING-WORK.md](https://github.com/kaeferfreund/socket.io-client-swift/blob/7adf66498a086bdb7b5e75d032c9560b0b7aec64/REMAINING-WORK.md) |
 | Retired package-manager and framework/Xcode metadata | [Repository before cleanup](https://github.com/kaeferfreund/socket.io-client-swift/tree/7adf66498a086bdb7b5e75d032c9560b0b7aec64) |
 
-The current working tree does not restore these completed plans or obsolete build
-systems. Still-active test contracts, baselines, tests and license notices remain
-in their normal locations. Historical findings must be interpreted with their
-recorded revision and later follow-ups, not as current release requirements.
+The [final native assertion report](../FinalParityAssertions-2026-09-19.md) was
+subsequently restored at its original path and is listed in the
+[evidence index](../ReviewEvidence/README.md). It records the historical
+`43bbe47` assertion audit, not the current release status. Other removed reports
+and completed plans remain available through the pinned history links above;
+obsolete build systems remain removed. Still-active test contracts, baselines,
+tests and license notices remain in their normal locations. Historical findings
+must be interpreted with their recorded revision and later follow-ups, not as
+current release requirements.

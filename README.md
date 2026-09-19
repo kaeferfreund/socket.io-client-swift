@@ -45,8 +45,8 @@ implementation.
 
 | Why we continued the project | What changes here |
 | --- | --- |
-| **Development had stalled while production bugs remained** | [socketio/socket.io-client-swift](https://github.com/socketio/socket.io-client-swift) has not received a default-branch commit since October 2024. This fork continues development, pairs fixes with regression tests and keeps them in the library rather than in application-specific workarounds. |
-| **[daltoniam/Starscream](https://github.com/daltoniam/Starscream) was another inactive dependency with recurring problems** | Its default branch has not advanced since March 2024. We replaced the Starscream-based transport with Apple's native `URLSessionWebSocketTask`, alongside `URLSession` polling. No third-party Swift dependencies. |
+| **[socketio/socket.io-client-swift](https://github.com/socketio/socket.io-client-swift)**<br>Development had stalled while production bugs remained. | Its default branch has not advanced since October 2024. This fork continues development, pairs fixes with regression tests and keeps them in the library rather than in application-specific workarounds. |
+| **[daltoniam/Starscream](https://github.com/daltoniam/Starscream)**<br>Another inactive dependency with recurring problems. | Its default branch has not advanced since March 2024. We replaced the Starscream-based transport with Apple's native `URLSessionWebSocketTask`, alongside `URLSession` polling. No third-party Swift dependencies. |
 | **Web and native clients need consistent behavior** | Reconnection events, acknowledgement cleanup, buffering and delivery should not unexpectedly change with the client language. Supported behavior is checked against a pinned JavaScript reference, with remaining API and platform differences documented. |
 | **Important client features were missing** | Connection state recovery, per-connection dynamic authentication, ordered acknowledgement retries and cancellable async/await acknowledgements are implemented in this fork. |
 

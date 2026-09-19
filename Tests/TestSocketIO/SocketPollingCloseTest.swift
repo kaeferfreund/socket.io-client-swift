@@ -49,11 +49,19 @@ private final class PollingCloseFixture {
     }
 
     /// Replies to a held application POST; its URLSession completion drains the barrier.
-    func releasePost() {
+    func releasePost(statusCode: Int = 200, body: String = "ok") {
         lock.lock()
         let pending = heldPosts.isEmpty ? nil : heldPosts.removeFirst()
         lock.unlock()
-        pending?.reply("ok")
+        pending?.reply(body, statusCode: statusCode)
+    }
+
+    /// Fails only the selected in-flight request; subsequent sessions stay usable.
+    func failPost(_ error: Error) {
+        lock.lock()
+        let pending = heldPosts.isEmpty ? nil : heldPosts.removeFirst()
+        lock.unlock()
+        pending?.fail(error)
     }
 
     /// Captures a request and completes handshakes/close packets; other I/O stays held.
@@ -147,14 +155,23 @@ private final class PollingCloseProtocol: URLProtocol {
         return String(decoding: data, as: UTF8.self)
     }
 
-    /// Completes a held request at most once, ignoring release after cancellation.
-    func reply(_ body: String) {
+    func fail(_ error: Error) {
         stateLock.lock()
         let wasEnded = ended
         ended = true
         stateLock.unlock()
         guard !wasEnded else { return }
-        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+        client?.urlProtocol(self, didFailWithError: error)
+    }
+
+    /// Completes a held request at most once, ignoring release after cancellation.
+    func reply(_ body: String, statusCode: Int = 200) {
+        stateLock.lock()
+        let wasEnded = ended
+        ended = true
+        stateLock.unlock()
+        guard !wasEnded else { return }
+        let response = HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: "HTTP/1.1",
                                        headerFields: ["Content-Type": "text/plain; charset=UTF-8"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(body.utf8))
@@ -166,10 +183,21 @@ private final class PollingCloseProtocol: URLProtocol {
 /// be fulfilled from that queue while the test waits on the main queue.
 private final class PollingCloseClient: NSObject, SocketEngineClient {
     var onOpen: (() -> Void)?
+    var onClose: (() -> Void)?
+    var details = [SocketTransportError]()
+    var closeDetails = [SocketTransportError]()
     var closes = [String]()
     var errors = [String]()
     func engineDidOpen(reason: String) { onOpen?() }
-    func engineDidClose(reason: String) { closes.append(reason) }
+    func engineDidClose(reason: String) { closes.append(reason); onClose?() }
+    func engineDidClose(reason: String, error: SocketTransportError) {
+        closeDetails.append(error)
+        engineDidClose(reason: reason)
+    }
+    func engineDidError(reason: String, error: SocketTransportError) {
+        details.append(error)
+        engineDidError(reason: reason)
+    }
     func engineDidError(reason: String) { errors.append(reason) }
     func engineDidReceivePing() {}
     func engineDidReceivePong() {}
@@ -219,6 +247,85 @@ final class SocketPollingCloseTest: XCTestCase {
         engine.connect()
         wait(for: [opened], timeout: 5)
         engine.engineQueue.sync { client.onOpen = nil }
+    }
+
+    func testNetworkFailureDuringPostSettlesWritesOnceAndAllowsFreshSession() throws {
+        try checkFailedPost(networkError: true)
+    }
+
+    func testHTTPFailureDuringPostPreservesResponseAndAllowsFreshSession() throws {
+        try checkFailedPost(networkError: false)
+    }
+
+    private func checkFailedPost(networkError: Bool) throws {
+        connect()
+        let started = expectation(description: "first POST in flight")
+        let closed = expectation(description: "transport failed once")
+        let stopped = expectation(description: "old long poll cancelled")
+        fixture.observePosts { post in
+            XCTAssertEqual(post.body, "4first")
+            started.fulfill()
+        }
+        fixture.observeStops { method in if method == "GET" { stopped.fulfill() } }
+        var completions: [String] = []
+        engine.engineQueue.sync { client.onClose = { closed.fulfill() } }
+        engine.write("first", withType: .message, withData: []) { completions.append("first") }
+        wait(for: [started], timeout: 5)
+        engine.write("queued", withType: .message, withData: []) { completions.append("queued") }
+        engine.engineQueue.sync {
+            XCTAssertTrue(engine.waitingForPost)
+            XCTAssertEqual(engine.postWait.map { $0.msg }, ["4queued"])
+            XCTAssertEqual(completions, ["first"])
+        }
+        if networkError { fixture.failPost(URLError(.networkConnectionLost)) }
+        else { fixture.releasePost(statusCode: 503, body: "temporarily unavailable") }
+        wait(for: [closed, stopped], timeout: 5)
+        try engine.engineQueue.sync {
+            XCTAssertEqual(client.errors.count, 1)
+            XCTAssertEqual(client.closes, ["transport error"])
+            XCTAssertEqual(client.details.count, 1)
+            XCTAssertEqual(client.closeDetails.count, 1)
+            let detail = try XCTUnwrap(client.details.first)
+            XCTAssertTrue(client.closeDetails.first === detail)
+            XCTAssertEqual(detail.transport, "polling")
+            XCTAssertEqual(detail.operation, "write")
+            if networkError {
+                let underlying = try XCTUnwrap(detail.underlyingError as NSError?)
+                XCTAssertEqual(underlying.domain, NSURLErrorDomain)
+                XCTAssertEqual(underlying.code, URLError.networkConnectionLost.rawValue)
+                XCTAssertNil(detail.httpStatusCode)
+            } else {
+                XCTAssertEqual(detail.httpStatusCode, 503)
+                XCTAssertEqual(detail.responseText, "temporarily unavailable")
+                XCTAssertNil(detail.underlyingError)
+            }
+            XCTAssertTrue(engine.closed)
+            XCTAssertFalse(engine.waitingForPost)
+            XCTAssertFalse(engine.waitingForPoll)
+            XCTAssertTrue(engine.postWait.isEmpty)
+            XCTAssertNil(engine.session)
+            XCTAssertEqual(completions, ["first", "queued"])
+            client.onClose = nil
+        }
+        XCTAssertEqual(fixture.posts.map { $0.body }, ["4first"])
+        fixture.observeStops { _ in }
+        connect()
+        let freshPost = expectation(description: "fresh session sends")
+        fixture.observePosts { post in
+            XCTAssertEqual(post.sid, "session-2")
+            XCTAssertEqual(post.body, "4fresh")
+            freshPost.fulfill()
+        }
+        fixture.replyToPostsImmediately()
+        engine.write("fresh", withType: .message, withData: []) { completions.append("fresh") }
+        wait(for: [freshPost], timeout: 5)
+        engine.engineQueue.sync {
+            XCTAssertTrue(engine.connected)
+            XCTAssertEqual(completions, ["first", "queued", "fresh"])
+            XCTAssertEqual(client.errors.count, 1)
+            XCTAssertEqual(client.closes, ["transport error"])
+        }
+        XCTAssertEqual(fixture.posts.map { $0.body }, ["4first", "4fresh"])
     }
 
     /// The abandoned queue is batched by maxPayload exactly like a live flush,

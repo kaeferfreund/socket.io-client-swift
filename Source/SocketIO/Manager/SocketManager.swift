@@ -475,6 +475,18 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         }
     }
 
+    /// Delivers a manager-level JS event (`reconnect_attempt`, `reconnect_error`,
+    /// `reconnect_failed`, `reconnect`) to the sockets subscribed to this manager.
+    /// Swift has no manager event bus; JS sockets subscribe in `connect()` and
+    /// unsubscribe in `disconnect()`, which is what `active` tracks.
+    private func emitManagerEvent(_ event: SocketClientEvent, data: [Any]) {
+        forAll {socket in
+            guard socket.active else { return }
+
+            socket.handleClientEvent(event, data: data)
+        }
+    }
+
     /// Sends an event to the server on all namespaces in this manager.
     ///
     /// - parameter event: The event to send.
@@ -526,7 +538,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             // `open(fn)` callback, which schedules the next attempt (with a
             // longer backoff) and then emits `reconnect_error`.
             scheduleReconnectAttempt()
-            emitAll(clientEvent: .reconnectError, data: [reason])
+            emitManagerEvent(.reconnectError, data: [reason])
         }
     }
 
@@ -546,8 +558,13 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
         // JS `socket.ts onerror`: an engine error while not connected is a
         // `connect_error`; an established connection reports `.error` instead
-        // (a transport drop under a live connection is a runtime error).
+        // (a transport drop under a live connection is a runtime error). Only
+        // sockets subscribed to the manager hear it — JS `Socket.subEvents()`
+        // runs in `connect()` and a refused or disconnected socket has
+        // destroyed its subscriptions, so it must not be told about the engine.
         forAll { socket in
+            guard socket.active else { return }
+
             if socket.status == .connected {
                 socket.handleClientEvent(.error, data: [reason])
             } else {
@@ -588,7 +605,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         // the namespaces are re-joined and therefore always before the sockets'
         // `connect`.
         if let attempt = succeededAttempt {
-            emitAll(clientEvent: .reconnect, data: [attempt])
+            emitManagerEvent(.reconnect, data: [attempt])
         }
 
         if version.rawValue < 3 {
@@ -840,7 +857,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
                 socket.abortPendingConnect()
             }
 
-            emitAll(clientEvent: .reconnectFailed, data: [])
+            emitManagerEvent(.reconnectFailed, data: [])
 
             return
         }
@@ -871,9 +888,9 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
         DefaultSocketLogger.Logger.log("Trying to reconnect (attempt \(attempt))", type: SocketManager.logType)
 
-        // A manager-level event, so every socket of this manager hears it
-        // regardless of its state.
-        emitAll(clientEvent: .reconnectAttempt, data: [attempt])
+        // A manager-level event: every subscribed socket of this manager hears
+        // it, whatever its connection state.
+        emitManagerEvent(.reconnectAttempt, data: [attempt])
 
         // JS: "check again for the case socket closed in above events".
         guard reconnects && reconnecting && status != .disconnected else { return }

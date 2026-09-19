@@ -228,8 +228,14 @@ const httpServer = http.createServer(async (req, res) => {
   }
 });
 
+// PER_MESSAGE_DEFLATE=1 negotiates permessage-deflate on the WebSocket, as a
+// production server with `perMessageDeflate` enabled does; threshold 0 compresses
+// every frame, including the upgrade probe.
+const perMessageDeflate = process.env.PER_MESSAGE_DEFLATE === "1" ? { threshold: 0 } : false;
+
 const io = new Server(httpServer, {
   maxHttpBufferSize,
+  perMessageDeflate,
   allowRequest: (_req, callback) => {
     callback(null, !blockNewConnectionsPending && Date.now() >= blockNewConnectionsUntil);
   },

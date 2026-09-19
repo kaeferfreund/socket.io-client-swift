@@ -217,13 +217,17 @@ final class SocketNativeEngineTest: XCTestCase {
         XCTAssertEqual(transport.batches.last, [.text("3")])
     }
 
-    func testEstablishedReceiveFailureIsDisconnectNotConnectError() {
+    /// engine.io-client `_onError` → `error`, then `_onClose("transport error")`.
+    /// The engine reports the failure once and closes; the manager decides
+    /// whether a socket sees `.error` (connected) or `.connectError` (not).
+    /// This used to assert that the error was swallowed.
+    func testEstablishedReceiveFailureReportsTheErrorAndThenDisconnects() {
         let (engine, client, transport) = make(); open(engine, transport)
         transport.onEvent?(.closed(code: nil, reason: nil, error: EngineWebSocketError.closed))
         drain(engine)
         XCTAssertTrue(engine.closed)
-        XCTAssertEqual(client.closes.count, 1)
-        XCTAssertTrue(client.errors.isEmpty)
+        XCTAssertEqual(client.closes, ["transport error"])
+        XCTAssertEqual(client.errors.count, 1)
     }
 
     func testOpeningFailureStillSurfacesConnectionError() {

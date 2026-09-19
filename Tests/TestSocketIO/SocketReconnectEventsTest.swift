@@ -63,8 +63,9 @@ final class SocketReconnectEventsTest: XCTestCase {
     // MARK: connection.ts — "should fire reconnect_* events on manager"
 
     /// Swift has no manager-level event bus, so the manager's events are
-    /// emitted on every socket it owns — including one that was never
-    /// connected, exactly like a JS `manager.on("reconnect_attempt", ...)`.
+    /// emitted on every socket subscribed to it — JS `Socket.subEvents()` runs
+    /// in `connect()`, so both sockets connect here. A socket that never called
+    /// `connect()` (or that called `disconnect()`) hears nothing, as in JS.
     func testFiresReconnectEventsOnEverySocketOfTheManager() {
         let manager = makeManager(alwaysFail: true, .reconnectAttempts(2))
         let socket = manager.socket(forNamespace: "/")
@@ -86,6 +87,7 @@ final class SocketReconnectEventsTest: XCTestCase {
         other.on(clientEvent: .reconnectFailed) { _, _ in otherFailed.fulfill() }
 
         socket.connect()
+        other.connect()
 
         wait(for: [failed, otherFailed], timeout: 10)
 

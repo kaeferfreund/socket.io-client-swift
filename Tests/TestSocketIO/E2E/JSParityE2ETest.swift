@@ -779,11 +779,13 @@ final class JSParityE2ETest: XCTestCase {
         let terminal = expectation(description: "terminal error or disconnect")
         terminal.assertForOverFulfill = false
         var terminalReason: String?
+        var connectErrors = 0
         socket.on(clientEvent: .error) { data, _ in
             terminalReason = self.errorMessage(from: data)
             terminal.fulfill()
         }
         socket.on(clientEvent: .connectError) { data, _ in
+            connectErrors += 1
             terminalReason = self.errorMessage(from: data)
             terminal.fulfill()
         }
@@ -797,6 +799,7 @@ final class JSParityE2ETest: XCTestCase {
         settle(3)
 
         XCTAssertEqual(attempts, 0, "Reconnect attempts must not fire when reconnection is disabled")
+        XCTAssertGreaterThan(connectErrors, 0, "Opening failure must emit connect_error, not only disconnect")
         XCTAssertNotNil(terminalReason, "A terminal event must have arrived, or this proves nothing")
     }
 

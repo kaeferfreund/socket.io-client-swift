@@ -1907,7 +1907,7 @@
         "JS-032"
       ],
       "kind": "native-assertion-equivalent",
-      "assertions": "Real refused localhost port with reconnects false must report terminal failure, then zero retry attempts throughout an observation window longer than the configured retry interval. Native terminal error/disconnect representations are accepted only with a non-nil reason.",
+      "assertions": "Real refused localhost port with reconnects false must emit connectError and report terminal failure, then zero retry attempts throughout an observation window longer than the configured retry interval. Native terminal error/disconnect representations are accepted only with a non-nil reason.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",

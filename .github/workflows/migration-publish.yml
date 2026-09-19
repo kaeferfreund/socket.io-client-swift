@@ -1,0 +1,68 @@
+name: Materialize Socket.IO 4 Swift 6 migration
+on:
+  push:
+    branches: [feat/socketio4-swift6.4]
+    paths: [.github/workflows/migration-publish.yml]
+permissions:
+  contents: write
+jobs:
+  publish:
+    if: github.repository == 'kaeferfreund/socket.io-client-swift' && github.ref == 'refs/heads/feat/socketio4-swift6.4'
+    runs-on: xcode-27
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize exact source changes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          for name in ['.migration-source.json', '.migration-tests.json']:
+              for path, edits in json.loads(Path(name).read_text()).items():
+                  p = Path(path)
+                  if edits is None:
+                      p.unlink()
+                      continue
+                  lines = p.read_text().splitlines(True)
+                  for start, end, replacement in reversed(edits):
+                      lines[start:end] = [replacement]
+                  p.write_text(''.join(lines))
+          p = Path('Socket.IO-Client-Swift.xcodeproj/project.pbxproj')
+          s = p.read_text().replace('SWIFT_VERSION = 5.0;', 'SWIFT_VERSION = 6.0;')
+          p.write_text(''.join(line for line in s.splitlines(True) if 'SocketStringReader.swift' not in line))
+          for name in ['.migration-extra.py', '.migration-final.py']:
+              p = Path(name)
+              exec(compile(p.read_text(), name, 'exec'))
+          PY
+          git diff --check
+          swift --version | grep -E 'Swift version 6\.4'
+      - name: Check final library build
+        run: |
+          set -o pipefail
+          swift build 2>&1 | tee "$RUNNER_TEMP/migration-final-build.log"
+      - name: Commit actual files and remove temporary migration helpers
+        run: |
+          git rm .migration-source.json .migration-tests.json .migration-extra.py .migration-final.py
+          git rm .github/workflows/migration-probe.yml .github/workflows/migration-validate.yml .github/workflows/migration-publish.yml
+          git add -u
+          git add Documentation/SocketIO4Swift6Migration.md
+          git diff --cached --check
+          git config user.name 'Manuel'
+          git config user.email 'manuel.cargnel@rwth-aachen.de'
+          git commit -m 'feat!: require Socket.IO 4 and Swift 6.4 with Swift 6 concurrency'
+          git push origin HEAD:refs/heads/feat/socketio4-swift6.4
+          git rev-parse HEAD
+      - name: Capture exact candidate and build diagnostics
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/final-migration"
+          cp "$RUNNER_TEMP/migration-final-build.log" "$RUNNER_TEMP/final-migration/" 2>/dev/null || true
+          tar --exclude=.git --exclude=.build --exclude=node_modules -cf "$RUNNER_TEMP/final-migration/source.tar" .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: final-migration-source
+          path: ${{ runner.temp }}/final-migration/
+          retention-days: 1

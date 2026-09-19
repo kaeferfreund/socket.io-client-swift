@@ -312,7 +312,8 @@ final class JSParityE2ETest: XCTestCase {
     /// Two namespaces share one engine. Leaving one must not take the other
     /// down with it.
     func testDisconnectingOneNamespaceKeepsTheOtherConnected() {
-        let manager = makeManager()
+        let manager = ParityCloseObservingManager(socketURL: serverURL, config: [.log(false)])
+        self.manager = manager
         let foo = manager.socket(forNamespace: "/foo")
         let asd = manager.socket(forNamespace: "/asd")
 
@@ -336,10 +337,16 @@ final class JSParityE2ETest: XCTestCase {
 
         XCTAssertFalse(asdDisconnected, "Leaving one namespace must not close the shared engine")
         XCTAssertEqual(asd.status, .connected)
+        let closed = expectation(description: "last namespace closes the engine")
+        manager.onEngineClose = { reason in
+            XCTAssertEqual(reason, "io client disconnect")
+            closed.fulfill()
+        }
         asd.disconnect()
         XCTAssertTrue(asdDisconnected)
         XCTAssertEqual(manager.status, .disconnected)
-        XCTAssertNil(manager.engine)
+        wait(for: [closed], timeout: 5)
+        manager.engine?.engineQueue.sync { XCTAssertTrue(manager.engine?.closed == true) }
     }
 
     // MARK: connection.ts — "should work with acks"
@@ -1525,5 +1532,106 @@ extension JSParityE2ETest {
         socket.connect()
         wait(for: [done], timeout: 5)
         XCTAssertEqual(connects, 2)
+    }
+}
+
+extension JSParityE2ETest {
+    func testPreconnectVolatileAckIsDroppedButReliableAckCompletes() {
+        let socket = makeManager(.autoConnect(false)).defaultSocket
+        let received = expectation(description: "reliable server ID")
+        var volatileReplies = 0
+        socket.volatile.emit("server-socket-id", ack: { _, _ in volatileReplies += 1 })
+        socket.emit("server-socket-id", ack: { error, data in
+            XCTAssertNil(error)
+            XCTAssertEqual(data.first as? String, socket.sid)
+            received.fulfill()
+        })
+        socket.connect()
+        wait(for: [received], timeout: 5)
+        XCTAssertEqual(volatileReplies, 0)
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+    }
+
+    func testVolatileAckEventuallySucceedsOnTheRealWritableTransport() {
+        let socket = makeManager().defaultSocket
+        let received = expectation(description: "volatile server ID")
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        var settled = false
+        let tick = SocketUncheckedSendableBox({
+            guard !settled else { return }
+            socket.volatile.emit("server-socket-id", ack: { error, data in
+                XCTAssertNil(error)
+                XCTAssertEqual(data.first as? String, socket.sid)
+                if !settled {
+                    settled = true
+                    timer.cancel()
+                    received.fulfill()
+                }
+            })
+        })
+        timer.setEventHandler { tick.value() }
+        timer.schedule(deadline: .now(), repeating: .milliseconds(200))
+        timer.resume()
+        defer { timer.cancel() }
+        socket.connect()
+        wait(for: [received], timeout: 5)
+        XCTAssertEqual(socket.testRetryQueueCount, 0)
+    }
+}
+
+extension JSParityE2ETest {
+    func testOriginalIncomingCatchAllPayloadPrependOrderAndRemoval() {
+        let socket = makeManager().socket(forNamespace: "/abc")
+        let removed = socket.addAnyListener { _ in XCTFail("Removed listener fired") }
+        socket.removeAnyListener(id: removed)
+        XCTAssertEqual(socket.anyListenerCount, 0)
+        let received = expectation(description: "handshake through catch-all")
+        var order: [Int] = []
+        socket.addAnyListener { event in
+            order.append(2)
+            XCTAssertEqual(event.event, "handshake")
+            XCTAssertNotNil(event.items?.first as? [String: Any])
+            XCTAssertEqual(order, [0, 1, 2])
+            received.fulfill()
+        }
+        socket.prependAnyListener { _ in order.append(1) }
+        socket.prependAnyListener { _ in order.append(0) }
+        socket.connect()
+        wait(for: [received], timeout: 5)
+        XCTAssertEqual(order, [0, 1, 2])
+    }
+
+    func testOriginalOutgoingCatchAllPayloadAndPrependOrder() {
+        for emitBeforeConnect in [false, true] {
+            let socket = makeManager().socket(forNamespace: "/abc")
+            let sent = expectation(description: "outgoing catch-all")
+            var order: [Int] = []
+            socket.addAnyOutgoingListener { event in
+                order.append(2)
+                XCTAssertEqual(event.event, "my-event")
+                XCTAssertEqual(event.items?.first as? String, "123")
+                XCTAssertEqual(order, [0, 1, 2])
+                sent.fulfill()
+            }
+            socket.prependAnyOutgoingListener { _ in order.append(1) }
+            socket.prependAnyOutgoingListener { _ in order.append(0) }
+            if emitBeforeConnect {
+                socket.emit("my-event", "123")
+                XCTAssertTrue(order.isEmpty)
+            } else {
+                socket.once(clientEvent: .connect) { _, _ in socket.emit("my-event", "123") }
+            }
+            socket.connect()
+            wait(for: [sent], timeout: 5)
+            socket.disconnect()
+        }
+    }
+}
+
+private final class ParityCloseObservingManager: SocketManager {
+    var onEngineClose: ((String) -> Void)?
+    override func engineDidClose(reason: String) {
+        super.engineDidClose(reason: reason)
+        onEngineClose?(reason)
     }
 }

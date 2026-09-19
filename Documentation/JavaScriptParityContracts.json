@@ -1403,7 +1403,7 @@
         "JS-029"
       ],
       "kind": "native-assertion-equivalent",
-      "assertions": "Real /foo and /asd namespaces share a manager. Closing /foo does not disconnect /asd; closing the last namespace then disconnects the manager and releases its engine. Explicit status/engine checks replace the JS manager close event bus.",
+      "assertions": "Real /foo and /asd namespaces share a manager. Closing /foo does not disconnect /asd; closing the last namespace then disconnects the manager and closes its engine. A native engine-close observer and closed-state assertion replace the JS manager close event bus.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
@@ -1590,6 +1590,118 @@
         {
           "path": "Tests/TestSocketIO/JSParityUnitTest.swift",
           "symbol": "JSParityUnitTest.testConnectPacketWithoutPayloadFiresConnectError"
+        }
+      ]
+    },
+    {
+      "id": "JS-084",
+      "upstream_ids": [
+        "JS-084"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original volatile getId request before connection never receives its callback; the following reliable request is buffered and acknowledged by a real server after connect. Native fixture event is server-socket-id; dropped untimed acknowledgement is additionally not retained.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testPreconnectVolatileAckIsDroppedButReliableAckCompletes"
+        }
+      ]
+    },
+    {
+      "id": "JS-085",
+      "upstream_ids": [
+        "JS-085"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Controlled engine writability covers connected busy pipe and disconnected pipe: volatile getId never sends or acknowledges, while reliable getId reaches the engine and its server-id acknowledgement completes. Explicit writability replaces the timing-dependent JS first-write backpressure setup; no buffer/ack registration for the dropped packet.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketVolatileTest.swift",
+          "symbol": "SocketVolatileTest.testDroppedVolatileAcknowledgementCannotBlockReliableAcknowledgement"
+        }
+      ]
+    },
+    {
+      "id": "JS-086",
+      "upstream_ids": [
+        "JS-086"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Repeat volatile server-ID request every 200ms across connection establishment until the real transport accepts it and the server acknowledgement succeeds; stop interval and check no retry-queue entry. Native fixture event is server-socket-id.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testVolatileAckEventuallySucceedsOnTheRealWritableTransport"
+        }
+      ]
+    },
+    {
+      "id": "JS-087",
+      "upstream_ids": [
+        "JS-087"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real /abc handshake reaches incoming catch-all with event name handshake and an object argument; lifecycle events do not pollute this observation.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testOriginalIncomingCatchAllPayloadPrependOrderAndRemoval"
+        }
+      ]
+    },
+    {
+      "id": "JS-088",
+      "upstream_ids": [
+        "JS-088"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original ordinary listener followed by two prepended listeners on /abc; server handshake invokes them in exact LIFO-prepend order 0,1,2.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testOriginalIncomingCatchAllPayloadPrependOrderAndRemoval"
+        }
+      ]
+    },
+    {
+      "id": "JS-089",
+      "upstream_ids": [
+        "JS-089"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Register then remove the sole catch-all by its native UUID; count is zero, removed callback must never fire, and a replacement receives the real /abc handshake.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testOriginalIncomingCatchAllPayloadPrependOrderAndRemoval"
+        }
+      ]
+    },
+    {
+      "id": "JS-090",
+      "upstream_ids": [
+        "JS-090"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "After real /abc connection, emit original my-event with String 123; outgoing catch-all receives the exact name and argument. Also repeated for an emit buffered before connection.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testOriginalOutgoingCatchAllPayloadAndPrependOrder"
+        }
+      ]
+    },
+    {
+      "id": "JS-092",
+      "upstream_ids": [
+        "JS-092"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Ordinary outgoing listener plus two prepended listeners observe original pre-connect my-event(123) in exact 0,1,2 order only after connection; also checked for an emit inside connect callback.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testOriginalOutgoingCatchAllPayloadAndPrependOrder"
         }
       ]
     }

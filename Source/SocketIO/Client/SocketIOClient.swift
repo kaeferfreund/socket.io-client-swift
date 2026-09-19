@@ -817,6 +817,39 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         emit(data, ack: nil, binary: true, isAck: false, volatile: true, completion: completion)
     }
 
+    internal func emitVolatile(event: String, items: [SocketData],
+                               ack: @escaping (Error?, [Any]) -> Void) {
+        performOnHandleQueue { [weak self] in
+            guard let self = self, let manager = self.manager else { return }
+            guard !self.failIfReserved([event]) else {
+                ack(NSError(domain: "SocketIO.Emit", code: 1,
+                            userInfo: [NSLocalizedDescriptionKey: "Reserved event name: " + event]), [])
+                return
+            }
+            let writable = manager.engine?.writable ?? false
+            let timeout = self.ackTimeout ?? .infinity
+            // JS registers before deciding to drop. Keep its observable timeout,
+            // but do not retain an untimed callback for a packet never sent.
+            guard writable || timeout.isFinite else { return }
+            do {
+                let mapped = writable ? try SocketPacket.jsonSafeEmitData(
+                    [event] + items.map { try $0.socketRepresentation() }, allowBinary: true
+                ) : []
+                let id = self.allocateAckId()
+                self.ackHandlers.addTimedAck(id, on: manager.handleQueue, callback: { [weak self] error, data in
+                    if error != nil { self?.dropBufferedEmit(ack: id) }
+                    ack(error, data)
+                }, timeout: timeout, notifyOnDisconnect: timeout.isFinite)
+                // Use the writability decision above. No retry queue, nor a second
+                // drop decision after registering an untimed acknowledgement.
+                if writable { self.emit(mapped, ack: id) }
+            } catch {
+                self.handleClientEvent(.error, data: [event, items, error])
+                ack(error, [])
+            }
+        }
+    }
+
     func emit(_ unsafeData: [Any],
               ack: Int? = nil,
               binary: Bool = true,

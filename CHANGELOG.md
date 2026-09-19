@@ -1,3 +1,11 @@
+## Native transport parity follow-up (2026-09-19)
+
+- Add explicit, private-cookie `withCredentials`, WebSocket `forceBase64` and `addTrailingSlash` options.
+- Migration: server-cookie replay defaults to off and no longer uses the application-wide cookie jar. Explicit cookie/header configuration is preserved.
+- Carry bounded native HTTP and WebSocket error details through error/close notifications. Snapshot close codes before URLSession cancellation can erase them.
+- Add raw Engine.IO wire, cookie isolation/upgrade, Unicode, binary parser and error regressions. Make polling fixture observation passive and replace blocking waits in the async acknowledgement test.
+- Classify all 44 previously unmapped declarations: 29 have reviewed native regression contracts and 15 have explicit API/platform boundaries. Zero unmapped entries is not full upstream assertion parity.
+
 ## Unreleased: client parity follow-up
 
 - Fix same-turn incoming/outgoing multi-listener registration/removal and modern catch-all lifecycle filtering; preserve legacy `onAny`.

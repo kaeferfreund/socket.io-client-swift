@@ -1,52 +1,7 @@
 {
   "upstream_sha": "aaf2af36ec8ad05910f357a788e0e358bad32738",
   "scope": "Selected reviewed native client contracts, NOT a complete semantic-coverage percentage.",
-  "remaining_unmapped_ids": [
-    "JS-133",
-    "JS-137",
-    "JS-138",
-    "JS-139",
-    "JS-140",
-    "JS-141",
-    "JS-142",
-    "JS-143",
-    "JS-144",
-    "JS-145",
-    "JS-146",
-    "JS-147",
-    "JS-148",
-    "JS-158",
-    "JS-163",
-    "JS-164",
-    "JS-165",
-    "JS-168",
-    "JS-169",
-    "JS-170",
-    "JS-171",
-    "JS-172",
-    "JS-178",
-    "JS-179",
-    "JS-180",
-    "JS-181",
-    "JS-182",
-    "JS-183",
-    "JS-186",
-    "JS-194",
-    "JS-195",
-    "JS-196",
-    "JS-197",
-    "JS-201",
-    "JS-202",
-    "JS-220",
-    "JS-223",
-    "JS-240",
-    "JS-241",
-    "JS-242",
-    "JS-246",
-    "JS-247",
-    "JS-248",
-    "JS-257"
-  ],
+  "remaining_unmapped_ids": [],
   "contracts": [
     {
       "id": "JS-082",
@@ -378,6 +333,743 @@
           "symbol": "SocketQueueTurnParityTest.testReentrantDisconnectListenerCannotSweepSuccessorAck"
         }
       ]
+    },
+    {
+      "id": "remaining-js-133",
+      "kind": "transferable-wire-regression",
+      "upstream_ids": [
+        "JS-133"
+      ],
+      "assertions": [
+        "Forced base64 polling returns bytes 0...4; observer sees bAAECAwQ= in the actual POST body."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testForcedBase64Polling"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-137",
+      "kind": "transferable-wire-regression",
+      "upstream_ids": [
+        "JS-137",
+        "JS-144"
+      ],
+      "assertions": [
+        "Direct WebSocket and completed polling-to-WebSocket upgrade return bytes 0...4 and empty Data. Actual client frames are base64 text, not binary frames; handshake requests b64=1. Native Data replaces ArrayBuffer/Blob."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testForcedBase64WebSocket"
+        },
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testForcedBase64AfterActualTransportUpgrade"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-139",
+      "kind": "transferable-wire-regression",
+      "upstream_ids": [
+        "JS-139",
+        "JS-140"
+      ],
+      "assertions": [
+        "Native Data replaces Blob input/output. Bytes 0...4 and zero-length bytes survive the raw polling round trip in order; the engine API uses a separate text header."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testBinaryDataPolling"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-141",
+      "kind": "transferable-wire-regression",
+      "upstream_ids": [
+        "JS-141"
+      ],
+      "assertions": [
+        "Five payloads at the original 72/20/20/20/72-byte boundaries are echoed in order. Every actual polling POST is at most the 100-byte advertised maxPayload. Includes base64 expansion and record separators."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testBinaryMaxPayloadBatching"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-142",
+      "kind": "transferable-wire-regression",
+      "upstream_ids": [
+        "JS-142",
+        "JS-143"
+      ],
+      "assertions": [
+        "Native Data replaces Blob input/output. WebSocket echoes bytes 0...4 and empty bytes; observer confirms binary frames, independently of the Socket.IO parser."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testBinaryDataWebSocket"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-145",
+      "kind": "native-assertion-equivalent",
+      "upstream_ids": [
+        "JS-145"
+      ],
+      "assertions": [
+        "Raw localhost polling opens, then receives the unsolicited server greeting hi. Open precedes message delivery and the engine has a nonempty SID."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testConnectLocalhostPolling"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-146",
+      "kind": "native-assertion-equivalent",
+      "upstream_ids": [
+        "JS-146"
+      ],
+      "assertions": [
+        "Raw localhost WebSocket opens, then receives the unsolicited server greeting hi. Open precedes message delivery and the engine has a nonempty SID."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testConnectLocalhostWebSocket"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-147",
+      "kind": "native-assertion-equivalent",
+      "upstream_ids": [
+        "JS-147"
+      ],
+      "assertions": [
+        "The exact upstream string cash money followed by three euro symbols is echoed unchanged through raw polling."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testMultibyteUTF8Polling"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-148",
+      "kind": "native-assertion-equivalent",
+      "upstream_ids": [
+        "JS-148"
+      ],
+      "assertions": [
+        "The exact upstream Unicode scalar sequence U+10000 through U+10FFFF and private-use endpoints U+E000/U+F8FF is echoed unchanged, not merely a common emoji."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testUnicodeScalarBoundaries"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-165",
+      "kind": "native-URI-equivalent",
+      "upstream_ids": [
+        "JS-165"
+      ],
+      "assertions": [
+        "addTrailingSlash(false) emits /engine.io? on the wire, with no slash before the query. Custom paths are normalized independently of option order; the default retains the slash."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testNoTrailingSlashOnWire"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
+          "symbol": "SocketRemainingParityTest.testTrailingSlashIndependentOfConfigurationOrder"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-178",
+      "kind": "native-cookie-contract",
+      "upstream_ids": [
+        "JS-178"
+      ],
+      "assertions": [
+        "Server-set cookies are sent on subsequent polling POSTs and on the WebSocket upgrade only when enabled. The isolated jar survives reconnect and is not shared with another engine or the application jar."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testServerCookiesSentWhenEnabled"
+        },
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testCookiesSurvivePollingToWebSocketUpgrade"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
+          "symbol": "SocketRemainingParityTest.testEnabledCredentialsUsePrivateStoreAndSurviveReconnect"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-179",
+      "kind": "native-cookie-contract",
+      "upstream_ids": [
+        "JS-179"
+      ],
+      "assertions": [
+        "Disabled credentials do not resend server cookies in polling or the WebSocket upgrade, and do not read a pre-populated engine jar. Explicit application Cookie headers remain explicit."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testServerCookiesNotSentWhenDisabled"
+        },
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testDisabledCookiesStayDisabledDuringUpgrade"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
+          "symbol": "SocketRemainingParityTest.testDisabledCredentialsNeverReadStoredCookiesForWebSocket"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
+          "symbol": "SocketRemainingParityTest.testExplicitCookieHeaderRemainsExplicitWhenCredentialsDisabled"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-180",
+      "kind": "native-cookie-contract",
+      "upstream_ids": [
+        "JS-180"
+      ],
+      "assertions": [
+        "Foundation parses the upstream simple foo=bar cookie into the same name and value. The native cookie object and browser CORS semantics are not claimed to be identical to the Node CookieJar."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
+          "symbol": "SocketRemainingParityTest.testSimpleNativeCookieParsing"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-182",
+      "kind": "native-cookie-contract",
+      "upstream_ids": [
+        "JS-182"
+      ],
+      "assertions": [
+        "Foundation preserves the entire upstream cookie value bar=bar&foo=foo&John=Doe&Doe=John, including equals signs and ampersands."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
+          "symbol": "SocketRemainingParityTest.testCookieValueContainingEqualsAndAmpersands"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-194",
+      "kind": "native-error-contract",
+      "upstream_ids": [
+        "JS-194"
+      ],
+      "assertions": [
+        "A 101-byte payload against maxHttpBufferSize=100 produces polling write error HTTP 413 and a transport error close carrying structured detail."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testOversizePollingReports413AndCloseDetail"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-195",
+      "kind": "native-error-contract",
+      "upstream_ids": [
+        "JS-195"
+      ],
+      "assertions": [
+        "A 101-byte WebSocket payload against maxHttpBufferSize=100 closes with peer code 1009. A simultaneous receive error must not erase the peer close code or turn it into a generic error close."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testOversizeWebSocketReports1009AndCloseDetail"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
+          "symbol": "SocketRemainingParityTest.testCloseDetailIncludesPeerCodeEvenWithReceiveError"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-196",
+      "kind": "native-error-contract",
+      "upstream_ids": [
+        "JS-196"
+      ],
+      "assertions": [
+        "An actual stale-SID polling GET reports HTTP 400 and the exact Session ID unknown JSON body, followed by one detailed transport error close."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testUnknownSIDPollingReports400BodyAndCloseDetail"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-197",
+      "kind": "native-error-contract",
+      "upstream_ids": [
+        "JS-197"
+      ],
+      "assertions": [
+        "An actual stale-SID WebSocket handshake fails and closes with native transport detail. URLSession need not expose the HTTP rejection status; no fabricated XHR or CloseEvent object is claimed."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testUnknownSIDWebSocketReportsErrorAndCloseDetail"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-220",
+      "kind": "transferable-wire-regression",
+      "upstream_ids": [
+        "JS-220",
+        "JS-223"
+      ],
+      "assertions": [
+        "A custom extraHeaders value reaches both actual polling GET and POST requests. URLSession replaces browser/Node XMLHttpRequest; browser CORS/preflight is not implemented by this native test."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testExtraHeadersReachPollingGETAndPOST"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-240",
+      "kind": "native-data-regression",
+      "upstream_ids": [
+        "JS-240"
+      ],
+      "assertions": [
+        "Original two-zero-byte ArrayBuffer payload is represented by Data at namespace /, id 0. Exact header and attachment bytes also have an independent assertion; native encode/decode preserves the payload."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingBinaryParserTest.swift",
+          "symbol": "SocketRemainingBinaryParserTest.testArrayBufferEquivalentHasExactWireAndAttachment"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-242",
+      "kind": "native-data-regression",
+      "upstream_ids": [
+        "JS-242"
+      ],
+      "assertions": [
+        "Original typed-array bytes 0...4 survive Data encoding at namespace / and id 0. A sliced buffer excludes sentinel prefix/suffix bytes without modifying its source."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingBinaryParserTest.swift",
+          "symbol": "SocketRemainingBinaryParserTest.testTypedArrayEquivalentEncodesOnlySelectedBytes"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-246",
+      "kind": "native-data-regression",
+      "upstream_ids": [
+        "JS-246"
+      ],
+      "assertions": [
+        "Original two-zero-byte Blob payload is adapted to native Data at namespace / and id 0; empty and high-bit byte payloads also round-trip."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingBinaryParserTest.swift",
+          "symbol": "SocketRemainingBinaryParserTest.testBlobEquivalentPreservesEmptyAndNonemptyData"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-247",
+      "kind": "native-data-regression",
+      "upstream_ids": [
+        "JS-247"
+      ],
+      "assertions": [
+        "The original nested hi/why/binary/bye event at /deep with id 999 encodes and reconstructs unchanged using Data instead of Blob. Additional null/nested inputs remain intact."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingBinaryParserTest.swift",
+          "symbol": "SocketRemainingBinaryParserTest.testBlobEquivalentDeepInJSON"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-248",
+      "kind": "native-data-regression",
+      "upstream_ids": [
+        "JS-248"
+      ],
+      "assertions": [
+        "The original hi ack/why/binary/bye ack payload at /deep with id 999 encodes as a binary ACK and reconstructs unchanged using Data instead of Blob."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingBinaryParserTest.swift",
+          "symbol": "SocketRemainingBinaryParserTest.testBinaryAckBlobEquivalent"
+        }
+      ]
+    },
+    {
+      "id": "remaining-js-257",
+      "kind": "native-assertion-equivalent",
+      "upstream_ids": [
+        "JS-257"
+      ],
+      "assertions": [
+        "All seven public native SocketPacket.PacketType values correspond to protocol type numbers 0 through 6."
+      ],
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingBinaryParserTest.swift",
+          "symbol": "SocketRemainingBinaryParserTest.testPublicPacketTypesMatchWireNumbers"
+        }
+      ]
     }
-  ]
+  ],
+  "remaining_review": {
+    "baseline_sha": "c905f4f869bdd208ad04269a855e3ac2438abddd",
+    "original_unmapped_ids": [
+      "JS-133",
+      "JS-137",
+      "JS-138",
+      "JS-139",
+      "JS-140",
+      "JS-141",
+      "JS-142",
+      "JS-143",
+      "JS-144",
+      "JS-145",
+      "JS-146",
+      "JS-147",
+      "JS-148",
+      "JS-158",
+      "JS-163",
+      "JS-164",
+      "JS-165",
+      "JS-168",
+      "JS-169",
+      "JS-170",
+      "JS-171",
+      "JS-172",
+      "JS-178",
+      "JS-179",
+      "JS-180",
+      "JS-181",
+      "JS-182",
+      "JS-183",
+      "JS-186",
+      "JS-194",
+      "JS-195",
+      "JS-196",
+      "JS-197",
+      "JS-201",
+      "JS-202",
+      "JS-220",
+      "JS-223",
+      "JS-240",
+      "JS-241",
+      "JS-242",
+      "JS-246",
+      "JS-247",
+      "JS-248",
+      "JS-257"
+    ],
+    "dispositions": [
+      {
+        "id": "JS-133",
+        "status": "focused-regression",
+        "reason": "Forced base64 polling returns bytes 0...4; observer sees bAAECAwQ= in the actual POST body.",
+        "contract": "remaining-js-133"
+      },
+      {
+        "id": "JS-137",
+        "status": "focused-regression",
+        "reason": "Direct WebSocket and completed polling-to-WebSocket upgrade return bytes 0...4 and empty Data. Actual client frames are base64 text, not binary frames; handshake requests b64=1. Native Data replaces ArrayBuffer/Blob.",
+        "contract": "remaining-js-137"
+      },
+      {
+        "id": "JS-138",
+        "status": "platform-specific",
+        "reason": "Deleting JavaScript ArrayBuffer and receiving its browser fallback wrapper has no native runtime analogue. Swift always receives Data; the transferable base64 wire path is tested under JS-133."
+      },
+      {
+        "id": "JS-139",
+        "status": "focused-regression",
+        "reason": "Native Data replaces Blob input/output. Bytes 0...4 and zero-length bytes survive the raw polling round trip in order; the engine API uses a separate text header.",
+        "contract": "remaining-js-139"
+      },
+      {
+        "id": "JS-140",
+        "status": "focused-regression",
+        "reason": "Native Data replaces Blob input/output. Bytes 0...4 and zero-length bytes survive the raw polling round trip in order; the engine API uses a separate text header.",
+        "contract": "remaining-js-139"
+      },
+      {
+        "id": "JS-141",
+        "status": "focused-regression",
+        "reason": "Five payloads at the original 72/20/20/20/72-byte boundaries are echoed in order. Every actual polling POST is at most the 100-byte advertised maxPayload. Includes base64 expansion and record separators.",
+        "contract": "remaining-js-141"
+      },
+      {
+        "id": "JS-142",
+        "status": "focused-regression",
+        "reason": "Native Data replaces Blob input/output. WebSocket echoes bytes 0...4 and empty bytes; observer confirms binary frames, independently of the Socket.IO parser.",
+        "contract": "remaining-js-142"
+      },
+      {
+        "id": "JS-143",
+        "status": "focused-regression",
+        "reason": "Native Data replaces Blob input/output. WebSocket echoes bytes 0...4 and empty bytes; observer confirms binary frames, independently of the Socket.IO parser.",
+        "contract": "remaining-js-142"
+      },
+      {
+        "id": "JS-144",
+        "status": "focused-regression",
+        "reason": "Direct WebSocket and completed polling-to-WebSocket upgrade return bytes 0...4 and empty Data. Actual client frames are base64 text, not binary frames; handshake requests b64=1. Native Data replaces ArrayBuffer/Blob.",
+        "contract": "remaining-js-137"
+      },
+      {
+        "id": "JS-145",
+        "status": "focused-regression",
+        "reason": "Raw localhost polling opens, then receives the unsolicited server greeting hi. Open precedes message delivery and the engine has a nonempty SID.",
+        "contract": "remaining-js-145"
+      },
+      {
+        "id": "JS-146",
+        "status": "focused-regression",
+        "reason": "Raw localhost WebSocket opens, then receives the unsolicited server greeting hi. Open precedes message delivery and the engine has a nonempty SID.",
+        "contract": "remaining-js-146"
+      },
+      {
+        "id": "JS-147",
+        "status": "focused-regression",
+        "reason": "The exact upstream string cash money followed by three euro symbols is echoed unchanged through raw polling.",
+        "contract": "remaining-js-147"
+      },
+      {
+        "id": "JS-148",
+        "status": "focused-regression",
+        "reason": "The exact upstream Unicode scalar sequence U+10000 through U+10FFFF and private-use endpoints U+E000/U+F8FF is echoed unchanged, not merely a common emoji.",
+        "contract": "remaining-js-148"
+      },
+      {
+        "id": "JS-158",
+        "status": "api-difference",
+        "reason": "The standalone JS package exports a numeric protocol constant. Swift exposes a fused Engine.IO transport with SocketIOVersion and generated EIO query values, not the same module export. Native EIO 3/4 values have a separate unit regression."
+      },
+      {
+        "id": "JS-163",
+        "status": "api-difference",
+        "reason": "These use JS new Socket({host,port,secure}) option-object overloads, including unbracketed IPv6 hosts. Swift requires an explicit Foundation URL; absolute URL cases are covered separately. No implicit-host constructor or identical default-location inference is promised."
+      },
+      {
+        "id": "JS-164",
+        "status": "api-difference",
+        "reason": "These use JS new Socket({host,port,secure}) option-object overloads, including unbracketed IPv6 hosts. Swift requires an explicit Foundation URL; absolute URL cases are covered separately. No implicit-host constructor or identical default-location inference is promised."
+      },
+      {
+        "id": "JS-165",
+        "status": "focused-regression",
+        "reason": "addTrailingSlash(false) emits /engine.io? on the wire, with no slash before the query. Custom paths are normalized independently of option order; the default retains the slash.",
+        "contract": "remaining-js-165"
+      },
+      {
+        "id": "JS-168",
+        "status": "api-difference",
+        "reason": "These use JS new Socket({host,port,secure}) option-object overloads, including unbracketed IPv6 hosts. Swift requires an explicit Foundation URL; absolute URL cases are covered separately. No implicit-host constructor or identical default-location inference is promised."
+      },
+      {
+        "id": "JS-169",
+        "status": "api-difference",
+        "reason": "These use JS new Socket({host,port,secure}) option-object overloads, including unbracketed IPv6 hosts. Swift requires an explicit Foundation URL; absolute URL cases are covered separately. No implicit-host constructor or identical default-location inference is promised."
+      },
+      {
+        "id": "JS-170",
+        "status": "api-difference",
+        "reason": "These use JS new Socket({host,port,secure}) option-object overloads, including unbracketed IPv6 hosts. Swift requires an explicit Foundation URL; absolute URL cases are covered separately. No implicit-host constructor or identical default-location inference is promised."
+      },
+      {
+        "id": "JS-171",
+        "status": "api-difference",
+        "reason": "These use JS new Socket({host,port,secure}) option-object overloads, including unbracketed IPv6 hosts. Swift requires an explicit Foundation URL; absolute URL cases are covered separately. No implicit-host constructor or identical default-location inference is promised."
+      },
+      {
+        "id": "JS-172",
+        "status": "api-difference",
+        "reason": "The JS internal randomString helper promises eight characters and different consecutive values. Swift does not expose that helper or its exact length; wire cache-busting uses a separate native contract, not a fabricated compatible helper."
+      },
+      {
+        "id": "JS-178",
+        "status": "focused-regression",
+        "reason": "Server-set cookies are sent on subsequent polling POSTs and on the WebSocket upgrade only when enabled. The isolated jar survives reconnect and is not shared with another engine or the application jar.",
+        "contract": "remaining-js-178"
+      },
+      {
+        "id": "JS-179",
+        "status": "focused-regression",
+        "reason": "Disabled credentials do not resend server cookies in polling or the WebSocket upgrade, and do not read a pre-populated engine jar. Explicit application Cookie headers remain explicit.",
+        "contract": "remaining-js-179"
+      },
+      {
+        "id": "JS-180",
+        "status": "focused-regression",
+        "reason": "Foundation parses the upstream simple foo=bar cookie into the same name and value. The native cookie object and browser CORS semantics are not claimed to be identical to the Node CookieJar.",
+        "contract": "remaining-js-180"
+      },
+      {
+        "id": "JS-181",
+        "status": "api-difference",
+        "reason": "The Node cookie parser returns only name/value/expires and overwrites expiry in header iteration order. Foundation preserves domain/path/security and owns native expiration policy. The conflicting Max-Age/Expires sample is not declared object-for-object equivalent; native parsing and security scope have separate tests."
+      },
+      {
+        "id": "JS-182",
+        "status": "focused-regression",
+        "reason": "Foundation preserves the entire upstream cookie value bar=bar&foo=foo&John=Doe&Doe=John, including equals signs and ampersands.",
+        "contract": "remaining-js-182"
+      },
+      {
+        "id": "JS-183",
+        "status": "api-difference",
+        "reason": "The standalone JS parseuri helper exposes a parsed-component object and handles a corpus of shorthand inputs. Swift uses Foundation URL/URLComponents instead; no identical public parseuri result or input grammar is promised. Absolute transport URL validation remains separately tested."
+      },
+      {
+        "id": "JS-186",
+        "status": "api-difference",
+        "reason": "JS can be configured with transports: [] and reports No transports available. Swift has fixed native transports and rejects contradictory forcePolling/forceWebsockets options; the empty transport-list API is not representable. A fail-before-network native configuration test remains."
+      },
+      {
+        "id": "JS-194",
+        "status": "focused-regression",
+        "reason": "A 101-byte payload against maxHttpBufferSize=100 produces polling write error HTTP 413 and a transport error close carrying structured detail.",
+        "contract": "remaining-js-194"
+      },
+      {
+        "id": "JS-195",
+        "status": "focused-regression",
+        "reason": "A 101-byte WebSocket payload against maxHttpBufferSize=100 closes with peer code 1009. A simultaneous receive error must not erase the peer close code or turn it into a generic error close.",
+        "contract": "remaining-js-195"
+      },
+      {
+        "id": "JS-196",
+        "status": "focused-regression",
+        "reason": "An actual stale-SID polling GET reports HTTP 400 and the exact Session ID unknown JSON body, followed by one detailed transport error close.",
+        "contract": "remaining-js-196"
+      },
+      {
+        "id": "JS-197",
+        "status": "focused-regression",
+        "reason": "An actual stale-SID WebSocket handshake fails and closes with native transport detail. URLSession need not expose the HTTP rejection status; no fabricated XHR or CloseEvent object is claimed.",
+        "contract": "remaining-js-197"
+      },
+      {
+        "id": "JS-201",
+        "status": "api-difference",
+        "reason": "JavaScript exports public Transport/Polling/WebSocket constructors. Swift provides SocketEngine and internal native transport protocols instead; adding artificial JS constructor exports is outside the native API contract."
+      },
+      {
+        "id": "JS-202",
+        "status": "api-difference",
+        "reason": "JavaScript exports public Transport/Polling/WebSocket constructors. Swift provides SocketEngine and internal native transport protocols instead; adding artificial JS constructor exports is outside the native API contract."
+      },
+      {
+        "id": "JS-220",
+        "status": "focused-regression",
+        "reason": "A custom extraHeaders value reaches both actual polling GET and POST requests. URLSession replaces browser/Node XMLHttpRequest; browser CORS/preflight is not implemented by this native test.",
+        "contract": "remaining-js-220"
+      },
+      {
+        "id": "JS-223",
+        "status": "focused-regression",
+        "reason": "A custom extraHeaders value reaches both actual polling GET and POST requests. URLSession replaces browser/Node XMLHttpRequest; browser CORS/preflight is not implemented by this native test.",
+        "contract": "remaining-js-220"
+      },
+      {
+        "id": "JS-240",
+        "status": "focused-regression",
+        "reason": "Original two-zero-byte ArrayBuffer payload is represented by Data at namespace /, id 0. Exact header and attachment bytes also have an independent assertion; native encode/decode preserves the payload.",
+        "contract": "remaining-js-240"
+      },
+      {
+        "id": "JS-241",
+        "status": "platform-specific",
+        "reason": "Object.create(null) and prototype lookup are JavaScript-specific. Swift dictionaries have no JavaScript prototype. A native special-key/binary dictionary regression exists, but is not labelled a literal null-prototype test port."
+      },
+      {
+        "id": "JS-242",
+        "status": "focused-regression",
+        "reason": "Original typed-array bytes 0...4 survive Data encoding at namespace / and id 0. A sliced buffer excludes sentinel prefix/suffix bytes without modifying its source.",
+        "contract": "remaining-js-242"
+      },
+      {
+        "id": "JS-246",
+        "status": "focused-regression",
+        "reason": "Original two-zero-byte Blob payload is adapted to native Data at namespace / and id 0; empty and high-bit byte payloads also round-trip.",
+        "contract": "remaining-js-246"
+      },
+      {
+        "id": "JS-247",
+        "status": "focused-regression",
+        "reason": "The original nested hi/why/binary/bye event at /deep with id 999 encodes and reconstructs unchanged using Data instead of Blob. Additional null/nested inputs remain intact.",
+        "contract": "remaining-js-247"
+      },
+      {
+        "id": "JS-248",
+        "status": "focused-regression",
+        "reason": "The original hi ack/why/binary/bye ack payload at /deep with id 999 encodes as a binary ACK and reconstructs unchanged using Data instead of Blob.",
+        "contract": "remaining-js-248"
+      },
+      {
+        "id": "JS-257",
+        "status": "focused-regression",
+        "reason": "All seven public native SocketPacket.PacketType values correspond to protocol type numbers 0 through 6.",
+        "contract": "remaining-js-257"
+      }
+    ],
+    "meaning": "All prior unmapped rows now have an explicit native regression or API/platform boundary. This is classification completeness, NOT full assertion parity."
+  }
 }

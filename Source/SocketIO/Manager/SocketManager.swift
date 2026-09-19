@@ -549,7 +549,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         }
     }
 
-    public func engineDidClose(reason: String, error: SocketTransportError) {
+    open func engineDidClose(reason: String, error: SocketTransportError) {
         handleQueue.async { self._engineDidClose(reason: reason, error: error) }
     }
 
@@ -602,7 +602,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         }
     }
 
-    public func engineDidError(reason: String, error: SocketTransportError) {
+    open func engineDidError(reason: String, error: SocketTransportError) {
         handleQueue.async { self._engineDidError(reason: reason, error: error) }
     }
 

@@ -1,5 +1,25 @@
 # Socket.IO-Client-Swift
 
+### Native transport parity follow-up
+
+`withCredentials(true)` enables an isolated engine-owned jar for server cookies.
+**Migration:** automatic server cookies are now opt-in (default `false`); the
+application's shared cookie store is not used. Explicit `.cookies(...)` and
+`Cookie` headers remain explicit. The private jar survives reconnects and
+polling-to-WebSocket upgrades; create a new manager for a new cookie identity.
+
+`.forceBase64(true)` enables Engine.IO base64 text over WebSocket, including
+upgrades. `.addTrailingSlash(false)` requests the configured path without an
+appended slash. Defaults are `false` and `true`, respectively.
+
+Transport errors and disconnects keep their reason at `data[0]` and may append a
+`SocketTransportError` at `data[1]` (HTTP status/body or WebSocket code/reason).
+Custom reason-only Engine.IO delegates retain a fallback. Subclasses handling
+manager engine callbacks should also account for the new typed overloads.
+See [remaining-client review](Documentation/RemainingClientParity.md) for exact
+test mappings, native adaptations, migration details and known boundaries.
+
+
 [![Swift validation](https://github.com/kaeferfreund/socket.io-client-swift/actions/workflows/swift.yml/badge.svg?branch=master)](https://github.com/kaeferfreund/socket.io-client-swift/actions/workflows/swift.yml)
 
 A Swift Socket.IO client for iOS, macOS, tvOS and watchOS. This fork uses Apple's

@@ -241,19 +241,21 @@ extension SocketNativeTLSConfigurationTest {
     func testClientCertificateChallengesUseIdentityAtBothDelegateLevelsAndRejectOtherOrigins() throws {
         let credential = try NativeTLSFixtures.clientCredential()
         let delegate = DoubleCompletingAuthDelegate()
-        let proxy = SocketSessionDelegateProxy(tlsConfiguration: .systemDefault, forwardingDelegate: delegate,
-            clientCertificate: credential, credentialOrigin: URL(string: "https://localhost:8443"))
         let session = URLSession(configuration: .ephemeral)
         defer { session.invalidateAndCancel() }
         let task = session.dataTask(with: URL(string: "https://localhost:8443")!)
-        for (host, port, proto, failures, accepted) in [
-            ("localhost", 8443, "https", 0, true),
-            ("LOCALHOST", 8443, "wss", 0, true),
-            ("other.test", 8443, "https", 0, false),
-            ("localhost", 443, "https", 0, false),
-            ("localhost", 8443, "http", 0, false),
-            ("localhost", 8443, "https", 1, false)
+        // WSS authenticates through HTTPS. URLProtectionSpace describes the
+        // HTTP handshake, not the WebSocket URL scheme.
+        for (originScheme, host, port, proto, failures, accepted) in [
+            ("https", "localhost", 8443, "https", 0, true),
+            ("wss", "LOCALHOST", 8443, "https", 0, true),
+            ("https", "other.test", 8443, "https", 0, false),
+            ("https", "localhost", 443, "https", 0, false),
+            ("https", "localhost", 8443, "http", 0, false),
+            ("https", "localhost", 8443, "https", 1, false)
         ] {
+            let proxy = SocketSessionDelegateProxy(tlsConfiguration: .systemDefault, forwardingDelegate: delegate,
+                clientCertificate: credential, credentialOrigin: URL(string: "\(originScheme)://localhost:8443"))
             let space = URLProtectionSpace(host: host, port: port, protocol: proto, realm: nil,
                                            authenticationMethod: NSURLAuthenticationMethodClientCertificate)
             let challenge = URLAuthenticationChallenge(protectionSpace: space, proposedCredential: nil,

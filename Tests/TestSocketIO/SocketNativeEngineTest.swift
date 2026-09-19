@@ -906,7 +906,7 @@ extension SocketNativeEngineTest {
             let (engine, client, transport) = make([.forceWebsockets(true), .requestTimeout(value)])
             XCTAssertTrue(engine.closed)
             XCTAssertEqual(transport.connects, 0)
-            XCTAssertEqual(client.errors, ["requestTimeout must be a positive finite number of seconds"])
+            XCTAssertEqual(client.errors, ["Invalid socket configuration: requestTimeout must be a positive finite number of seconds"])
         }
     }
 

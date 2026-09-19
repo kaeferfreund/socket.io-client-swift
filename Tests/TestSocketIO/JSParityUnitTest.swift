@@ -38,7 +38,7 @@ final class JSParityUnitTest: XCTestCase {
 
         socket.handlePacket(SocketPacket(type: .connect, nsp: "/", placeholders: 0, id: -1, data: []))
 
-        waitForExpectations(timeout: 1)
+        wait(for: [gotError, gotConnect], timeout: 1)
         XCTAssertEqual(errorMessage, SocketIOClient.v2ServerConnectErrorMessage)
         XCTAssertNotEqual(socket.status, .connected)
     }

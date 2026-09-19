@@ -103,7 +103,7 @@ final class SocketSendBufferTest: XCTestCase {
 
         socket.emitAck(7, with: ["ok"])
 
-        waitForExpectations(timeout: 1)
+        wait(for: [reported], timeout: 1)
         XCTAssertTrue(engine.sentPackets.isEmpty)
 
         connect()

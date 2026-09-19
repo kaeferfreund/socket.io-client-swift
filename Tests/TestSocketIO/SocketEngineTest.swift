@@ -19,7 +19,7 @@ class SocketEngineTest: XCTestCase {
         }
 
         engine.parsePollingMessage("42[\"blankTest\"]")
-        waitForExpectations(timeout: 3, handler: nil)
+        wait(for: [expect], timeout: 3)
     }
 
     func testTwoPacketsInOnePollTest() {
@@ -39,7 +39,7 @@ class SocketEngineTest: XCTestCase {
         }
 
         engine.parsePollingMessage("42[\"blankTest\"]\u{1e}42[\"stringTest\",\"hello\"]")
-        waitForExpectations(timeout: 3, handler: nil)
+        wait(for: [finalExpectation], timeout: 3)
     }
 
     func testEngineDoesErrorOnUnknownTransport() {
@@ -58,7 +58,7 @@ class SocketEngineTest: XCTestCase {
         engine.engineQueue.sync {
             engine.parseEngineMessage("{\"code\": 0, \"message\": \"Unknown transport\"}")
         }
-        waitForExpectations(timeout: 3, handler: nil)
+        wait(for: [finalExpectation], timeout: 3)
     }
 
     /// engine.io-parser/test/index.ts — "should fail to decode a malformed
@@ -77,7 +77,7 @@ class SocketEngineTest: XCTestCase {
         engine.engineQueue.sync {
             engine.parseEngineMessage("afafafda")
         }
-        waitForExpectations(timeout: 3, handler: nil)
+        wait(for: [finalExpectation], timeout: 3)
         engine.engineQueue.sync {
             XCTAssertTrue(engine.closed)
             XCTAssertFalse(engine.connected)
@@ -108,7 +108,7 @@ class SocketEngineTest: XCTestCase {
         let stringMessage = "42[\"stringTest\",\"lïne one\\nlīne \\rtwo𦅙𦅛\"]"
 
         engine.parsePollingMessage("\(stringMessage)")
-        waitForExpectations(timeout: 3, handler: nil)
+        wait(for: [expect], timeout: 3)
     }
 
     func testEncodeURLProperly() {
@@ -143,7 +143,7 @@ class SocketEngineTest: XCTestCase {
         engine.parseEngineMessage(packetString)
         engine.parseEngineMessage(b64String)
 
-        waitForExpectations(timeout: 3, handler: nil)
+        wait(for: [expect], timeout: 3)
     }
 
     func testSettingExtraHeadersBeforeConnectSetsEngineExtraHeaders() {
@@ -522,7 +522,7 @@ class SocketEngineTest: XCTestCase {
             never.fulfill()
         }
 
-        waitForExpectations(timeout: 0.5, handler: nil)
+        wait(for: [never], timeout: 0.5)
     }
 
     var manager: SocketManager!

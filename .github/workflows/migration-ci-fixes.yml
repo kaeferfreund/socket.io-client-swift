@@ -1,0 +1,48 @@
+name: Apply Swift 6 CI compatibility fixes
+on:
+  push:
+    branches: [feat/socketio4-swift6.4]
+    paths: [.github/workflows/migration-ci-fixes.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == 'kaeferfreund/socket.io-client-swift' && github.ref == 'refs/heads/feat/socketio4-swift6.4'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Align deployment targets and XCTest waiting
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          edits = {
+              'Package.swift': [('.watchOS(.v8)', '.watchOS(.v9)')],
+              'Socket.IO-Client-Swift.podspec': [("s.watchos.deployment_target = '8.0'", "s.watchos.deployment_target = '9.0'")],
+              'Socket.IO-Client-Swift.xcodeproj/project.pbxproj': [('WATCHOS_DEPLOYMENT_TARGET = 8.0;', 'WATCHOS_DEPLOYMENT_TARGET = 9.0;')],
+              'README.md': [('| watchOS | 8 |', '| watchOS | 9 |')],
+              'Documentation/SocketIO4Swift6Migration.md': [(
+                  'Deployment targets remain iOS/tvOS 15, macOS 12 and watchOS 8. The new SDK warns\nthat watchOS 8 is deprecated; the manifest has not silently raised that floor.',
+                  'Deployment targets remain iOS/tvOS 15 and macOS 12. The watchOS minimum is\nraised from 8 to 9 consistently in the package, Xcode project and podspec because\nXcode 27 rejects a watchOS 8 deployment target.')]
+          }
+          for name, replacements in edits.items():
+              p = Path(name)
+              text = p.read_text()
+              for before, after in replacements:
+                  assert before in text, name
+                  text = text.replace(before, after)
+              p.write_text(text)
+          p = Path('Tests/TestSocketIO/SocketParseErrorTest.swift')
+          text = p.read_text()
+          for expectation in ['disconnected', 'disconnected', 'handled', 'settled']:
+              before = 'waitForExpectations(timeout: 3, handler: nil)'
+              assert before in text
+              text = text.replace(before, 'wait(for: [' + expectation + '], timeout: 3)', 1)
+          p.write_text(text)
+          PY
+          git diff --check
+          git add Package.swift Socket.IO-Client-Swift.podspec Socket.IO-Client-Swift.xcodeproj/project.pbxproj README.md Documentation/SocketIO4Swift6Migration.md Tests/TestSocketIO/SocketParseErrorTest.swift
+          git config user.name 'Manuel'
+          git config user.email 'manuel.cargnel@rwth-aachen.de'
+          git commit -m 'fix: align watchOS minimum with Xcode 27 and migrate XCTest waits'
+          git push origin HEAD:refs/heads/feat/socketio4-swift6.4
+          git rev-parse HEAD

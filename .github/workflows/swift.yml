@@ -1,6 +1,8 @@
 name: Swift
 
 on:
+  push:
+    branches: [fix/client-parity-followup]
   workflow_dispatch:
 
 permissions:

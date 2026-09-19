@@ -147,10 +147,11 @@ final class SocketRetrySafetyTest: XCTestCase {
     }
 
     func testIdentityResetCancelsRetryTimerAndCompletesUnsentOperation() {
-        make([.retries(3)])
+        make([.retries(3), .ackTimeout(3600)])
         socket.setTestStatus(.disconnected)
         let completed = expectation(description: "unsent local operation cancelled")
         socket.emit("unsent", completion: { completed.fulfill() })
+        XCTAssertEqual(socket.testRetryQueueCount, 1, "exercise cleanup, not configuration rejection")
         socket.clearRecoveryState()
         wait(for: [completed], timeout: 3)
         drain()

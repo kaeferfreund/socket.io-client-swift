@@ -964,9 +964,23 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
                              userInfo: [NSLocalizedDescriptionKey: "Reserved event name"]), [])
             return true
         }
-        // An unacknowledged fire-and-forget emit must not block the queue
-        // indefinitely when the manager specifies a default acknowledgement timeout.
         let timeout = attemptTimeout ?? (manager as? SocketManager)?.ackTimeout
+        // Implicit acknowledgements need a finite deadline: without a server ack,
+        // an unlimited wait would block every subsequent retry-queue entry.
+        // Explicit acknowledgement APIs retain their existing no-timeout contract.
+        if userAck == nil {
+            guard let timeout = timeout, timeout.isFinite, timeout >= 0 else {
+                let error = NSError(domain: "SocketIO.Emit", code: 2, userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Retried emits without an acknowledgement callback require a finite, non-negative ackTimeout"
+                ])
+                DefaultSocketLogger.Logger.error(error.localizedDescription, type: logType)
+                if let completion = completion { manager?.handleQueue.async(execute: completion) }
+                handleClientEvent(.error, data: [data[0], Array(data.dropFirst()), error])
+                // Consume the rejected emit so the caller cannot buffer or send it.
+                return true
+            }
+        }
         let writeCompletion: (() -> Void)? = completion.map { callback in
             let queue = manager?.handleQueue
             let once = SocketOnce<Void> { _ in queue?.async(execute: callback) }

@@ -169,7 +169,7 @@ final class JSParityRetryE2ETest: XCTestCase {
     /// The queue drains (force) before the `connect` event, so an emit made
     /// inside a connect handler is queued once and sent once.
     func testRetryDoesNotEmitAPacketTwiceInTheConnectHandler() {
-        let socket = makeManager(.retries(3)).defaultSocket
+        let socket = makeManager(.retries(3), .ackTimeout(10)).defaultSocket
 
         var outgoing = [String]()
         socket.addAnyOutgoingListener { event in outgoing.append(event.event) }

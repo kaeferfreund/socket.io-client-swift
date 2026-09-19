@@ -41,10 +41,13 @@ jobs:
           git show 37e8b039f3db1d30beee320b4d97610711f3718f:.github/workflows/swift.yml > .github/workflows/swift.yml
           git apply --check "$RUNNER_TEMP/implementation.patch"
           git apply "$RUNNER_TEMP/implementation.patch"
+          git apply --check .github/parity-staging/correction.patch
+          git apply .github/parity-staging/correction.patch
           cp .github/workflows/swift.yml "$RUNNER_TEMP/permanent-swift.yml"
           cd Tests/TestSocketIO/E2E/Fixtures
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           npm ci --ignore-scripts --no-audit --no-fund
+          cp package-lock.json "$RUNNER_TEMP/fixture-package-lock.json"
       - name: Prove new regressions fail on the unmodified production baseline
         shell: bash
         run: |
@@ -99,10 +102,8 @@ jobs:
           test "$GITHUB_REPOSITORY" = kaeferfreund/socket.io-client-swift
           test "$GITHUB_REF" = refs/heads/fix/client-parity-followup
           test "$(git ls-remote origin refs/heads/fix/client-parity-followup | cut -f1)" = "$GITHUB_SHA"
-          # Workflow restoration is performed separately through the authorized
-          # connector, never by this contents-only automation token.
           cp "$RUNNER_TEMP/bootstrap.yml" .github/workflows/swift.yml
-          git rm .github/parity-staging/part0.xz .github/parity-staging/part1.xz .github/parity-staging/part2.xz
+          git rm -r .github/parity-staging
           git add Source Tests Documentation scripts README.md CHANGELOG.md .gitignore
           git -c core.whitespace=cr-at-eol diff --cached --check
           git config user.name 'github-actions[bot]'
@@ -125,3 +126,4 @@ jobs:
             ${{ runner.temp }}/tested-source-hashes.json
             ${{ runner.temp }}/published-head.txt
             ${{ runner.temp }}/permanent-swift.yml
+            ${{ runner.temp }}/fixture-package-lock.json

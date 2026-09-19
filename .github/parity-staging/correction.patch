@@ -1,0 +1,191 @@
+diff --git a/Source/SocketIO/Client/SocketIOClient.swift b/Source/SocketIO/Client/SocketIOClient.swift
+index 50f921e..18cd570 100644
+--- a/Source/SocketIO/Client/SocketIOClient.swift
++++ b/Source/SocketIO/Client/SocketIOClient.swift
+@@ -1717,14 +1717,6 @@ public extension SocketIOClient {
+ }
+ 
+ extension SocketIOClient {
+-    /// Internal — called from `SocketTimedEmitter`. Allocates an ack id,
+-    /// registers the timed ack BEFORE running the emit funnel, then routes
+-    /// through the funnel.
+-    ///
+-    /// Registration-before-funnel ordering is critical: if the funnel's
+-    /// connected guard fires `.error` and early-returns, the timer is already
+-    /// scheduled and will fire `cb(.timeout, [])` after `timeout` seconds —
+-    /// matching JS `_registerAckCallback` semantics.
+     // Queue-confined mutations must be visible to the next operation in the
+     // same callback. Never sync-dispatch: callers already on the owning queue
+     // run inline; off-queue callers retain the existing asynchronous behavior.
+@@ -1734,6 +1726,14 @@ extension SocketIOClient {
+         else { manager.handleQueue.async(execute: work) }
+     }
+ 
++    /// Internal — called from `SocketTimedEmitter`. Allocates an ack id,
++    /// registers the timed ack BEFORE running the emit funnel, then routes
++    /// through the funnel.
++    ///
++    /// Registration-before-funnel ordering is critical: if the funnel's
++    /// connected guard fires `.error` and early-returns, the timer is already
++    /// scheduled and will fire `cb(.timeout, [])` after `timeout` seconds —
++    /// matching JS `_registerAckCallback` semantics.
+     func emitTimed(event: String,
+                    items: [SocketData],
+                    timeout: Double,
+diff --git a/Tests/TestSocketIO/E2E/TestServerProcess.swift b/Tests/TestSocketIO/E2E/TestServerProcess.swift
+index 16bd09b..f38a9ca 100644
+--- a/Tests/TestSocketIO/E2E/TestServerProcess.swift
++++ b/Tests/TestSocketIO/E2E/TestServerProcess.swift
+@@ -117,17 +117,13 @@ final class TestServerProcess {
+         req.httpBody = body
+         req.timeoutInterval = 5
+ 
+-        let sem = DispatchSemaphore(value: 0)
+-        var status = -1
+-        var data = Data()
+-        let task = URLSession.shared.dataTask(with: req) { d, resp, _ in
+-            if let http = resp as? HTTPURLResponse { status = http.statusCode }
+-            if let d = d { data = d }
+-            sem.signal()
++        let response = FixtureAdminResponse()
++        let task = URLSession.shared.dataTask(with: req) { data, http, error in
++            response.complete(data: data, response: http, error: error)
+         }
+         task.resume()
+-        _ = sem.wait(timeout: .now() + 5)
+-        return (status, data)
++        defer { task.cancel() }
++        return try response.wait(timeout: 5)
+     }
+ }
+ 
+@@ -216,3 +212,35 @@ private final class FixtureProcessOutput {
+         stderr.fileHandleForReading.readabilityHandler = nil
+     }
+ }
++
++/// URLSession may finish after the waiting thread times out. All result access
++/// is locked, so a late completion cannot race a returned stack variable.
++private final class FixtureAdminResponse: @unchecked Sendable {
++    private let lock = NSLock()
++    private let semaphore = DispatchSemaphore(value: 0)
++    private var result: Result<(Int, Data), Swift.Error>?
++
++    func complete(data: Data?, response: URLResponse?, error: Swift.Error?) {
++        lock.lock()
++        guard result == nil else { lock.unlock(); return }
++        if let error = error {
++            result = .failure(error)
++        } else if let response = response as? HTTPURLResponse {
++            result = .success((response.statusCode, data ?? Data()))
++        } else {
++            result = .failure(URLError(.badServerResponse))
++        }
++        lock.unlock()
++        semaphore.signal()
++    }
++
++    func wait(timeout: TimeInterval) throws -> (Int, Data) {
++        guard semaphore.wait(timeout: .now() + timeout) == .success else {
++            throw URLError(.timedOut)
++        }
++        lock.lock()
++        defer { lock.unlock() }
++        guard let result = result else { throw URLError(.badServerResponse) }
++        return try result.get()
++    }
++}
+diff --git a/Tests/TestSocketIO/E2E/TestServerProcessTest.swift b/Tests/TestSocketIO/E2E/TestServerProcessTest.swift
+index b4e036d..77173e5 100644
+--- a/Tests/TestSocketIO/E2E/TestServerProcessTest.swift
++++ b/Tests/TestSocketIO/E2E/TestServerProcessTest.swift
+@@ -46,8 +46,10 @@ final class TestServerProcessTest: XCTestCase {
+         process.stdout.write('x'.repeat(200000) + '\\n');
+         process.stderr.write('y'.repeat(200000));
+         process.stdout.write('READY port=1234 sec');
+-        setTimeout(() => process.stdout.write('ret=abcdef\\n'), 20);
+-        setInterval(() => { process.stdout.write('z'.repeat(10000)); process.stderr.write('q'.repeat(10000)); }, 10);
++        setTimeout(() => {
++          process.stdout.write('ret=abcdef\\n');
++          setInterval(() => { process.stdout.write('z'.repeat(10000)); process.stderr.write('q'.repeat(10000)); }, 10);
++        }, 20);
+         """)
+         server = try TestServerProcess.start(serverScript: path, startupTimeout: 5)
+         XCTAssertEqual(server?.port, 1234)
+@@ -66,4 +68,28 @@ final class TestServerProcessTest: XCTestCase {
+         server?.stop()
+         XCTAssertLessThan(Date().timeIntervalSince(start), 4)
+     }
++
++    func testAdminRequestReturnsStatusBodyAndAuthentication() throws {
++        let path = try script("""
++        const http = require('node:http');
++        const server = http.createServer((req, res) => {
++          res.writeHead(202); res.end(req.headers['x-admin-secret']);
++        });
++        server.listen(0, '127.0.0.1', () => console.log(`READY port=${server.address().port} secret=abcdef`));
++        """)
++        server = try TestServerProcess.start(serverScript: path)
++        let (status, data) = try XCTUnwrap(server).admin("/echo", method: "GET")
++        XCTAssertEqual(status, 202)
++        XCTAssertEqual(String(decoding: data, as: UTF8.self), "abcdef")
++    }
++
++    func testAdminTransportFailureIsReported() throws {
++        let path = try script("""
++        const server = require('node:http').createServer((req, res) => req.destroy());
++        server.listen(0, '127.0.0.1', () => console.log(`READY port=${server.address().port} secret=abcdef`));
++        """)
++        server = try TestServerProcess.start(serverScript: path)
++        XCTAssertThrowsError(try XCTUnwrap(server).admin("/close"))
++    }
++
+ }
+diff --git a/Tests/TestSocketIO/SocketEngineURLParityTest.swift b/Tests/TestSocketIO/SocketEngineURLParityTest.swift
+index bd57fb4..eb1aa9c 100644
+--- a/Tests/TestSocketIO/SocketEngineURLParityTest.swift
++++ b/Tests/TestSocketIO/SocketEngineURLParityTest.swift
+@@ -4,11 +4,19 @@ import XCTest
+ /// Native absolute-URL equivalents of engine.io-client URI construction.
+ /// Relative/browser location inference is deliberately not claimed here.
+ final class SocketEngineURLParityTest: XCTestCase {
++    // SocketEngine keeps its client weakly; retain the owner while rebuilding URLs.
++    private var manager: SocketManager?
++
++    override func tearDown() {
++        manager = nil
++        super.tearDown()
++    }
+     private func engine(_ url: String, _ options: SocketIOClientOption...) -> SocketEngine {
+         let url = URL(string: url)!
+         var config: SocketIOClientConfiguration = [.log(false), .autoConnect(false)]
+         for option in options { config.insert(option) }
+         let manager = SocketManager(socketURL: url, config: config)
++        self.manager = manager
+         return SocketEngine(client: manager, url: url, config: config)
+     }
+ 
+@@ -23,8 +31,8 @@ final class SocketEngineURLParityTest: XCTestCase {
+         XCTAssertEqual(websocket.host, host, file: file, line: line)
+         XCTAssertEqual(polling.port, port, file: file, line: line)
+         XCTAssertEqual(websocket.port, port, file: file, line: line)
+-        XCTAssertEqual(polling.path, "/socket.io/", file: file, line: line)
+-        XCTAssertEqual(websocket.path, "/socket.io/", file: file, line: line)
++        XCTAssertEqual(polling.path, "/engine.io/", file: file, line: line)
++        XCTAssertEqual(websocket.path, "/engine.io/", file: file, line: line)
+         XCTAssertEqual(polling.query, "transport=polling&b64=1&EIO=4", file: file, line: line)
+         XCTAssertEqual(websocket.query, "transport=websocket&EIO=4", file: file, line: line)
+     }
+diff --git a/Tests/TestSocketIO/SocketQueueTurnParityTest.swift b/Tests/TestSocketIO/SocketQueueTurnParityTest.swift
+index 3cf8675..9c50c12 100644
+--- a/Tests/TestSocketIO/SocketQueueTurnParityTest.swift
++++ b/Tests/TestSocketIO/SocketQueueTurnParityTest.swift
+@@ -155,7 +155,7 @@ final class SocketQueueTurnParityTest: XCTestCase {
+             socket.handleEvent("application", data: [], isInternalMessage: false)
+             socket.didDisconnect(reason: "test")
+             XCTAssertEqual(modern, ["application"])
+-            XCTAssertEqual(legacy, ["connect", "application", "disconnect"])
++            XCTAssertEqual(legacy, ["statusChange", "connect", "application", "statusChange", "disconnect"])
+         }
+     }
+ 

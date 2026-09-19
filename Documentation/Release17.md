@@ -103,6 +103,10 @@ distribution operation; the Git-backed podspec alone does not publish a pod.
   all seven jobs pass, including 801 Swift tests and the strict checker against
   the actual log. All 195 applicable runtime declarations are covered by complete
   native assertion mappings; library line coverage is 93.97%.
+- [69adced coverage follow-up CI](https://github.com/kaeferfreund/socket.io-client-swift/actions/runs/35443462303):
+  all seven jobs passed, including 844 Swift tests with zero failures. Latest
+  validated library-only line coverage is **98.57% (6,605/6,701 lines)**; see
+  [coverage evidence](ReviewEvidence/PollingFailureValidation-2026-09-19.json).
 
 
 These earlier runs do not certify later release-preparation commits.

@@ -212,7 +212,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 26
+          # The pinned upstream Mocha/tsx/yargs dependency graph fails to load
+          # under Node 26 (CommonJS require in an ESM-classified yargs file).
+          # Keep the reference-suite runtime on the validated Node 24 line.
+          node-version: 24
       - name: Execute original Node suites (browser and WebTransport matrix excluded)
         run: bash scripts/test-upstream-clients.sh "$GITHUB_WORKSPACE/upstream-reference" "$RUNNER_TEMP/upstream-client-results"
       - uses: actions/upload-artifact@v7

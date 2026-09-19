@@ -1,0 +1,69 @@
+name: Validate Socket.IO 4 Swift 6 migration
+on:
+  push:
+    branches: [feat/socketio4-swift6.4]
+    paths: ['.migration-*', '.github/workflows/migration-validate.yml']
+permissions:
+  contents: read
+concurrency:
+  group: socketio4-swift64-validation
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - name: Apply isolated migration
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          for name in ['.migration-source.json', '.migration-tests.json']:
+              for path, edits in json.loads(Path(name).read_text()).items():
+                  p = Path(path)
+                  if edits is None:
+                      p.unlink()
+                      continue
+                  lines = p.read_text().splitlines(True)
+                  for start, end, replacement in reversed(edits):
+                      lines[start:end] = [replacement]
+                  p.write_text(''.join(lines))
+          p = Path('Socket.IO-Client-Swift.xcodeproj/project.pbxproj')
+          s = p.read_text().replace('SWIFT_VERSION = 5.0;', 'SWIFT_VERSION = 6.0;')
+          p.write_text(''.join(line for line in s.splitlines(True) if 'SocketStringReader.swift' not in line))
+          extra = Path('.migration-extra.py')
+          if extra.exists():
+              exec(compile(extra.read_text(), str(extra), 'exec'))
+          PY
+          git diff --check
+          swift --version
+          swift --version | grep -E 'Swift version 6\.4'
+      - name: Build in Swift 6 language mode
+        run: |
+          set -o pipefail
+          swift build 2>&1 | tee migration-build.log
+      - name: Run complete regression suite
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee migration-tests.log
+      - name: Save diagnostics and exact candidate
+        if: always()
+        run: |
+          mkdir -p migration-results
+          cp migration-*.log migration-results/ 2>/dev/null || true
+          git diff > migration-results/candidate.patch
+          tar --exclude=.git --exclude=.build --exclude=node_modules --exclude=migration-results -cf migration-results/candidate.tar .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: migration-validation
+          path: migration-results/
+          retention-days: 1

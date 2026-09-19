@@ -1,0 +1,30 @@
+name: Finalize remaining parity evidence
+on:
+  push:
+    branches: ["fix/remaining-client-parity"]
+    paths: [".github/workflows/remaining-parity-publish.yml", "scripts/classify-remaining-parity.py", "scripts/finish-remaining-metadata.py"]
+permissions:
+  contents: write
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve every reviewed declaration and validate the evidence gate
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/fix/remaining-client-parity
+          python3 scripts/classify-remaining-parity.py
+          python3 scripts/finish-remaining-metadata.py
+          python3 scripts/test-review-regressions.py
+          python3 scripts/check-parity-contracts.py
+          git diff --check
+      - name: Publish and remove all one-time tooling
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/fix/remaining-client-parity | cut -f1)" = "$GITHUB_SHA"
+          rm scripts/classify-remaining-parity.py scripts/finish-remaining-metadata.py .github/workflows/remaining-parity-publish.yml
+          git add Documentation README.md CHANGELOG.md Source scripts .github
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'test: resolve all remaining inventory rows with explicit native contracts and boundaries'
+          git push origin HEAD:refs/heads/fix/remaining-client-parity

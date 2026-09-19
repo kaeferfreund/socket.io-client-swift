@@ -124,7 +124,6 @@ internal extension DispatchQueue {
         asyncAfter(deadline: deadline) { work.run() }
     }
 
-    func socketAsync(execute work: DispatchWorkItem) { async(execute: work) }
     func socketAsyncAfter(deadline: DispatchTime, execute work: DispatchWorkItem) {
         asyncAfter(deadline: deadline, execute: work)
     }

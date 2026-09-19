@@ -282,12 +282,11 @@ final class SocketClearAcksOnCloseTest: XCTestCase {
     /// inside a main-actor job cannot drain the main queue the manager runs on.
     @MainActor
     func testAsyncEmitWithAckThrowsDisconnectedOnATransportDropThatReconnects() async {
-        var config: SocketIOClientConfiguration = [.log(false), .reconnects(true), .reconnectWait(0), .ackTimeout(10)]
+        let config: SocketIOClientConfiguration = [.log(false), .reconnects(true), .reconnectWait(0), .ackTimeout(10)]
         manager = SocketManager(socketURL: URL(string: "http://localhost/")!, config: config)
         engine = ClearAcksTestEngine(client: manager, url: manager.socketURL, options: nil)
         manager.engine = engine
         socket = manager.defaultSocket
-        config.removeAll()
 
         let connected = expectation(description: "initial connect")
         connected.assertForOverFulfill = false

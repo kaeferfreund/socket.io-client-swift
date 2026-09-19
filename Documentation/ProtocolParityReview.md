@@ -1,5 +1,7 @@
 # Swift Socket.IO: protocol parity and safety review
 
+**Current follow-up:** [ClientParityFollowup.md](ClientParityFollowup.md) supersedes the historical listener, acknowledgement, query and CI limitations below. The remaining release gates stay explicit.
+
 **Review date:** 2026-09-18. **PR:** #18, `fix/coderabbit-findings-audit` against `master`.
 
 ## Decision
@@ -421,8 +423,7 @@ unchanged; that file gained the two new `encodeCases`/`encodeDifferences` keys.
   bare form is bounded by `SocketManager.ackTimeout` when configured (JS
   `flags.timeout ?? _opts.ackTimeout`); without one a disconnect throws
   `SocketAckError.disconnected` rather than never resolving, because a Swift
-  continuation must be resumed exactly once. JS leaves such a promise pending
-  forever — a deliberate, documented deviation.
+  continuation must be resumed exactly once. The earlier claim that JS leaves this promise pending forever was incorrect: JS `emitWithAck` sets `withError`, and `_clearAcks()` rejects it on disconnect. The follow-up covers the automatic-reconnect route too.
 - **`onAnyOutgoing` and binary.** The listener already received the caller's
   `Data` rather than the attachment placeholder; that is now asserted, flat and
   nested.

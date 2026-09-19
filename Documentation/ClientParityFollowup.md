@@ -16,7 +16,7 @@ Reference: official `socketio/socket.io` at `aaf2af36ec8ad05910f357a788e0e358bad
 
 `JavaScriptParityContracts.json` gives exact XCTest symbols and assertions for selected reviewed contracts. CI requires these symbols to exist **and to appear as passed executions** in the current Swift log. It also compares every CSV declaration identity with a newly generated AST inventory of the pinned JS checkout. Checker self-tests reject fake symbols, absent execution evidence and unreviewed backlog changes.
 
-The original Node client suites are executed in a separate job. Server packages are compiled only to provide their fixtures. The browser matrix and separate Engine.IO WebTransport suite are not executed by this job; these are not silently described as a complete upstream platform run.
+The original Node client suites are executed in a separate Node 24 job (matching the pinned upstream CI), including the Engine.IO default, Fetch and built-in WebSocket modes. Server packages are compiled only to provide their fixtures. The browser matrix and separate Engine.IO WebTransport suite are not executed by this job; these are not silently described as a complete upstream platform run.
 
 `swift test --enable-code-coverage` exports LLVM coverage. The summary counts only `Source/SocketIO`, not tests. Execution coverage and scenario parity remain separate metrics.
 

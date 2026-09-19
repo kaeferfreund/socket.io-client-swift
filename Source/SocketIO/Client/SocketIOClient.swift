@@ -100,7 +100,12 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// because the manager will auto-reconnect and re-issue CONNECT. Distinct
     /// from `socket.status.active` which reports whether the current status
     /// enum is a live state.
-    public private(set) var active: Bool = false
+    public private(set) var active: Bool = false {
+        didSet {
+            guard active != oldValue else { return }
+            (manager as? SocketManager)?.updateSubscriptionOrder(for: self, active: active)
+        }
+    }
 
     /// The id of this socket.io connect. This is different from the sid of the engine.io connection.
     public private(set) var sid: String?

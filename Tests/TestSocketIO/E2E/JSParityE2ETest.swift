@@ -292,7 +292,14 @@ final class JSParityE2ETest: XCTestCase {
         wait(for: [connected], timeout: 5)
 
         let firstId = try XCTUnwrap(socket.sid)
+        var attempts = 0
+        var reconnects = 0
+        socket.on(clientEvent: .reconnect) { _, _ in
+            reconnects += 1
+            XCTAssertNotEqual(socket.sid, firstId)
+        }
         socket.on(clientEvent: .reconnectAttempt) { _, _ in
+            attempts += 1
             XCTAssertTrue(socket.sid?.isEmpty ?? true)
         }
 
@@ -303,6 +310,8 @@ final class JSParityE2ETest: XCTestCase {
         socket.on(clientEvent: .connect) { _, _ in reconnected.fulfill() }
         wait(for: [reconnected], timeout: 15)
 
+        XCTAssertGreaterThan(attempts, 0)
+        XCTAssertEqual(reconnects, 1)
         XCTAssertGreaterThan(connects, 1)
         XCTAssertNotEqual(socket.sid, firstId, "A new session must not reuse the old id")
     }
@@ -444,32 +453,36 @@ final class JSParityE2ETest: XCTestCase {
 
     /// Looking up a connected, active socket must not send another CONNECT.
     /// A post-lookup server round trip precedes the raw-frame count assertion.
-    func testFetchingTheSameNamespaceTwiceSendsOneConnectFrame() throws {
-        let manager = makeManager(.autoConnect(true))
-        let socket = manager.defaultSocket
-        // autoConnect starts I/O asynchronously; install the handler before
-        // yielding the main handle queue instead of calling connect twice.
-        let connected = expectation(description: "auto-connected cached socket")
-        socket.once(clientEvent: .connect) { _, _ in connected.fulfill() }
-        wait(for: [connected], timeout: 5)
-        XCTAssertEqual(socket.status, .connected)
-        XCTAssertTrue(socket.active)
-        let again = manager.socket(forNamespace: "/")
-        XCTAssertTrue(socket === again, "The manager has to hand back the cached socket")
-        XCTAssertEqual(try serverSocketId(for: again), socket.sid)
-        XCTAssertEqual(try connectFrameCount(), 1)
+    func testFetchingTheSameNamespaceTwiceSendsOneConnectFrame() {
+        let recorded = ParityPacketRecordingManager(socketURL: serverURL, config: [.autoConnect(true)])
+        manager = recorded
+        let socket = recorded.defaultSocket
+        let again = recorded.socket(forNamespace: "/")
+        XCTAssertTrue(socket === again)
+        let disconnected = expectation(description: "cached socket closes once")
+        socket.once(clientEvent: .connect) { _, _ in
+            socket.disconnect()
+            disconnected.fulfill()
+        }
+        wait(for: [disconnected], timeout: 5)
+        XCTAssertEqual(recorded.createdPackets, ["0", "1"])
     }
 
     // MARK: connection.ts — "should not reopen an already active socket"
 
-    func testTwoNamespacesSendOneConnectFrameEach() throws {
-        let manager = makeManager()
-
-        connect(manager.socket(forNamespace: "/"))
-        connect(manager.socket(forNamespace: "/foo"))
-        settle(1)
-
-        XCTAssertEqual(try connectFrameCount(), 2)
+    func testTwoNamespacesSendOneConnectFrameEach() {
+        let recorded = ParityPacketRecordingManager(socketURL: serverURL, config: [.autoConnect(true)])
+        manager = recorded
+        let root = recorded.defaultSocket
+        let foo = recorded.socket(forNamespace: "/foo")
+        let disconnected = expectation(description: "both namespaces leave")
+        root.once(clientEvent: .connect) { _, _ in
+            root.disconnect()
+            foo.disconnect()
+            disconnected.fulfill()
+        }
+        wait(for: [disconnected], timeout: 5)
+        XCTAssertEqual(recorded.createdPackets, ["0", "0/foo,", "1", "1/foo,"])
     }
 
     // MARK: socket.ts — "should have an accessible socket id equal to the server-side socket id (custom namespace)"
@@ -490,7 +503,7 @@ final class JSParityE2ETest: XCTestCase {
     // MARK: socket.ts — "doesn't fire an error event if we force disconnect in opening state"
 
     func testNoErrorWhenDisconnectingWhileStillOpening() {
-        let manager = makeManager()
+        let manager = makeManager(.connectTimeout(0.1))
         let socket = manager.socket(forNamespace: "/")
 
         var errors = [[Any]]()
@@ -633,17 +646,18 @@ final class JSParityE2ETest: XCTestCase {
 
     func testConnectWhileDisconnectingAnotherSocket() {
         let manager = makeManager()
-        let foo = connect(manager.socket(forNamespace: "/foo"))
-
+        let foo = manager.socket(forNamespace: "/foo")
         let asd = manager.socket(forNamespace: "/asd")
-        let asdConnected = expectation(description: "/asd connected")
-        asdConnected.assertForOverFulfill = false
-        asd.on(clientEvent: .connect) { _, _ in asdConnected.fulfill() }
-        asd.connect()
-        foo.disconnect()
-        wait(for: [asdConnected], timeout: 5)
-
+        let joined = expectation(description: "second namespace joins")
+        asd.once(clientEvent: .connect) { _, _ in joined.fulfill() }
+        foo.once(clientEvent: .connect) { _, _ in
+            asd.connect()
+            foo.disconnect()
+        }
+        foo.connect()
+        wait(for: [joined], timeout: 5)
         XCTAssertEqual(asd.status, .connected)
+        XCTAssertEqual(foo.status, .disconnected)
     }
 
     // MARK: connection.ts — "should stop reconnecting on a socket and keep to reconnect on another"
@@ -729,14 +743,82 @@ final class JSParityE2ETest: XCTestCase {
         XCTAssertEqual(queryValue, "&=?a")
     }
 
+    func testNamespaceConnectPacketsFollowSubscriptionRatherThanCreationOrder() {
+        let recorded = ParityPacketRecordingManager(socketURL: serverURL)
+        manager = recorded
+        let foo = recorded.socket(forNamespace: "/foo")
+        let asd = recorded.socket(forNamespace: "/asd")
+        let joined = expectation(description: "both subscribed namespaces join")
+        joined.expectedFulfillmentCount = 2
+        foo.once(clientEvent: .connect) { _, _ in joined.fulfill() }
+        asd.once(clientEvent: .connect) { _, _ in joined.fulfill() }
+        asd.connect()
+        foo.connect()
+        wait(for: [joined], timeout: 5)
+        XCTAssertEqual(recorded.createdPackets, ["0/asd,", "0/foo,"])
+    }
+
+    func testOriginalBinaryReceptionUsesDataOnBothTransports() {
+        for transport: SocketIOClientOption in [.forcePolling(true), .forceWebsockets(true)] {
+            let socket = makeManager(transport).defaultSocket
+            let received = expectation(description: "doge binary received")
+            socket.on("doge") { data, _ in
+                XCTAssertEqual(data.first as? Data, Data("asdfasdf".utf8))
+                received.fulfill()
+            }
+            socket.connect()
+            socket.emit("doge")
+            wait(for: [received], timeout: 5)
+            socket.disconnect()
+        }
+    }
+
+    func testOriginalBinarySendIsDecodedAsBinaryByTheServer() {
+        for transport: SocketIOClientOption in [.forcePolling(true), .forceWebsockets(true)] {
+            let socket = makeManager(transport).defaultSocket
+            let received = expectation(description: "server recognizes binary")
+            socket.on("buffack") { _, _ in received.fulfill() }
+            socket.connect()
+            socket.emit("buffa", Data([106, 199, 95, 106, 199, 95]))
+            wait(for: [received], timeout: 5)
+            socket.disconnect()
+        }
+    }
+
+    func testOriginalMixedJSONAndBinarySendPreservesEveryField() {
+        for transport: SocketIOClientOption in [.forcePolling(true), .forceWebsockets(true)] {
+            let socket = makeManager(transport).defaultSocket
+            let received = expectation(description: "server validates mixed payload")
+            socket.on("jsonbuff-ack") { _, _ in received.fulfill() }
+            socket.connect()
+            socket.emit("jsonbuff", ["hello": "lol", "message": Data([134, 140, 29]), "goodbye": "gotcha"] as [String: Any])
+            wait(for: [received], timeout: 5)
+            socket.disconnect()
+        }
+    }
+
+    func testOpeningFailureEmitsConnectError() {
+        manager = SocketManager(socketURL: URL(string: "http://127.0.0.1:9823")!,
+                                config: [.connectTimeout(0.1)])
+        let socket = manager.defaultSocket
+        let failed = expectation(description: "connect_error on refused endpoint")
+        socket.once(clientEvent: .connectError) { _, _ in
+            socket.disconnect()
+            failed.fulfill()
+        }
+        socket.connect()
+        wait(for: [failed], timeout: 5)
+    }
+
     // MARK: connection.ts — "should send events with ArrayBuffers in the correct order"
 
     func testBinaryEventsArriveInOrder() {
-        let socket = connect(makeManager().socket(forNamespace: "/"))
+        let socket = makeManager().defaultSocket
+        socket.connect()
 
         let acked = expectation(description: "abuff2-ack")
         socket.on("abuff2-ack") { _, _ in acked.fulfill() }
-        socket.emit("abuff1", Data("abuff1".utf8))
+        socket.emit("abuff1", Data([105, 187, 159, 127]))
         socket.emit("abuff2", "please arrive second")
         wait(for: [acked], timeout: 5)
     }
@@ -1290,7 +1372,7 @@ final class JSParityE2ETest: XCTestCase {
 
     func testQueryOptionAcceptsAnObjectOnTheDefaultNamespace() throws {
         let socket = makeManager(.connectParams(["e": "f"])).socket(forNamespace: "/")
-        connect(socket)
+        socket.connect()
 
         XCTAssertEqual(try handshakeQuery(for: socket)["e"] as? String, "f")
     }
@@ -1303,7 +1385,7 @@ final class JSParityE2ETest: XCTestCase {
         manager = SocketManager(socketURL: URL(string: "http://127.0.0.1:\(server.port)/?c=d")!,
                                 config: [.log(false)])
         let socket = manager.socket(forNamespace: "/")
-        connect(socket)
+        socket.connect()
 
         XCTAssertEqual(try handshakeQuery(for: socket)["c"] as? String, "d")
     }

@@ -61,7 +61,11 @@ final class JSParityRetryE2ETest: XCTestCase {
     /// thing at the observable layer: strict FIFO order of the outgoing
     /// packets, one in-flight head, and an empty queue after all acks.
     func testRetryPreservesTheOrderOfThePackets() {
-        let socket = makeManager(.retries(1), .ackTimeout(2)).defaultSocket
+        let recorded = ParityPacketRecordingManager(
+            socketURL: URL(string: "http://127.0.0.1:\(server.port)")!,
+            config: [.retries(1), .ackTimeout(2)])
+        manager = recorded
+        let socket = recorded.defaultSocket
 
         var outgoing = [String]()
         socket.addAnyOutgoingListener { event in
@@ -106,6 +110,9 @@ final class JSParityRetryE2ETest: XCTestCase {
         XCTAssertEqual(outgoing, ["echo 1", "echo 2", "echo 3"],
                        "the queue must send strictly in order, one head packet at a time")
         XCTAssertEqual(socket.testRetryQueueCount, 0)
+        socket.disconnect()
+        XCTAssertEqual(recorded.createdPackets,
+                       ["0", "20[\"echo\",1]", "21[\"echo\",2]", "22[\"echo\",3]", "1"])
     }
 
     // MARK: retry.ts — "should fail when the server does not acknowledge the packet"

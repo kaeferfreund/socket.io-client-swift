@@ -2054,6 +2054,272 @@
           "symbol": "JSParityE2ETest.testAsyncTimedEchoRejectsWhenDisconnectedImmediatelyAfterSending"
         }
       ]
+    },
+    {
+      "id": "JS-027",
+      "upstream_ids": [
+        "JS-027"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real /foo connect callback starts /asd and disconnects /foo in that same callback; await /asd connect and assert it is connected while /foo is disconnected. Native explicit connect replaces implicit JS manager autoConnect.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testConnectWhileDisconnectingAnotherSocket"
+        }
+      ]
+    },
+    {
+      "id": "JS-039",
+      "upstream_ids": [
+        "JS-039"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Start connect and emit doge before joining; actual server returns binary bytes for asdfasdf. Assert Data type and exact bytes, separately on polling and WebSocket. Foundation.Data is the native binary representation replacing ArrayBuffer.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testOriginalBinaryReceptionUsesDataOnBothTransports"
+        }
+      ]
+    },
+    {
+      "id": "JS-040",
+      "upstream_ids": [
+        "JS-040"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Emit buffa while connecting with the exact bytes decoded from original base64 asdfasdf. Await buffack, emitted only if the real server received a Buffer; run on polling and WebSocket. Data replaces ArrayBuffer, with identical bytes.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testOriginalBinarySendIsDecodedAsBinaryByTheServer"
+        }
+      ]
+    },
+    {
+      "id": "JS-041",
+      "upstream_ids": [
+        "JS-041"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Emit jsonbuff before connect with hello=lol, goodbye=gotcha and the original permissively decoded howdy bytes [134,140,29]. Real server checks both strings and Buffer type before emitting jsonbuff-ack. Run polling and WebSocket; native Data replaces ArrayBuffer.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testOriginalMixedJSONAndBinarySendPreservesEveryField"
+        }
+      ]
+    },
+    {
+      "id": "JS-042",
+      "upstream_ids": [
+        "JS-042"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Start connect and emit original abuff1 binary [105,187,159,127], then abuff2 with please arrive second. Real server only emits abuff2-ack when abuff1 arrived first as binary. Native Data replaces ArrayBuffer; no artificial connection barrier.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testBinaryEventsArriveInOrder"
+        }
+      ]
+    },
+    {
+      "id": "JS-047",
+      "upstream_ids": [
+        "JS-047"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "AutoConnect manager: fetch same active root namespace twice before handshake completion and assert identity. On connect, disconnect and assert exact packet-create sequence [0,1] through a recording subclass of the real SocketEngine. Only explicit native root DISCONNECT spelling 1/, is canonicalized to equivalent 1.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testFetchingTheSameNamespaceTwiceSendsOneConnectFrame"
+        }
+      ]
+    },
+    {
+      "id": "JS-048",
+      "upstream_ids": [
+        "JS-048"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "AutoConnect manager opens root and /foo, then disconnects both from root connect callback. Assert exact real engine packet-create sequence [0,0/foo,,1,1/foo,], including no duplicate CONNECTs and subscription order. Native explicit root DISCONNECT syntax alone is canonicalized.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testTwoNamespacesSendOneConnectFrameEach"
+        }
+      ]
+    },
+    {
+      "id": "JS-062",
+      "upstream_ids": [
+        "JS-062"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Begin real connect with timeout 100 ms, immediately disconnect, and observe 1.5 seconds (longer than original 300 ms). Assert neither error nor connectError occurred; native socket error events expose manager opening errors.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testNoErrorWhenDisconnectingWhileStillOpening"
+        }
+      ]
+    },
+    {
+      "id": "JS-063",
+      "upstream_ids": [
+        "JS-063"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Connect real refused localhost:9823 with 100 ms opening timeout, require connectError, then disconnect in that callback. Native explicit connect replaces autoConnect.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testOpeningFailureEmitsConnectError"
+        }
+      ]
+    },
+    {
+      "id": "JS-064",
+      "upstream_ids": [
+        "JS-064"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real polling-only transport with opening timeout zero must emit connectError with exact timeout message. Native String error payload replaces JS Error.message; reconnect is disabled to isolate the first failure.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testConnectErrorOnOpenTimeoutPolling"
+        }
+      ]
+    },
+    {
+      "id": "JS-065",
+      "upstream_ids": [
+        "JS-065"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real WebSocket-only transport with opening timeout zero must emit connectError with exact timeout message. Native String error payload replaces JS Error.message; reconnect is disabled to isolate the first failure.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testConnectErrorOnOpenTimeoutWebsocket"
+        }
+      ]
+    },
+    {
+      "id": "JS-066",
+      "upstream_ids": [
+        "JS-066"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real established transport drop: collect connectError events and require none through disconnect, successful reconnect and a following server ACK barrier. Also assert exact lifecycle order. Server-side transport termination replaces JS engine.close; native runtime error diagnostics are separate from connectError.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testNoErrorEventWhenAnEstablishedConnectionDrops"
+        }
+      ]
+    },
+    {
+      "id": "JS-067",
+      "upstream_ids": [
+        "JS-067"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real established socket ID captured, transport terminated, require reconnectAttempt observing cleared ID, reconnect observing an ID different from the old value, and subsequent namespace connect with a fresh ID. Require that attempt and reconnect callbacks actually ran. Native socket lifecycle emitter exposes manager events.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testSocketIdChangesOnReconnection"
+        }
+      ]
+    },
+    {
+      "id": "JS-070",
+      "upstream_ids": [
+        "JS-070"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Configure query object e=f, start real connect and immediately request getHandshake by ACK before connect completes; assert handshake.query.e is f. Native connectParams and legacy ACK callback replace JS query and emit callback.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testQueryOptionAcceptsAnObjectOnTheDefaultNamespace"
+        }
+      ]
+    },
+    {
+      "id": "JS-071",
+      "upstream_ids": [
+        "JS-071"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "URL query c=d on root, start real connect and immediately request getHandshake by ACK; assert handshake.query.c equals d. No pre-emit connect barrier.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testQueryOptionAcceptsAQueryStringOnTheDefaultNamespace"
+        }
+      ]
+    },
+    {
+      "id": "JS-072",
+      "upstream_ids": [
+        "JS-072"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real /abc namespace with connectParams a=b receives unsolicited handshake event and asserts query.a is b. Native explicit namespace selection replaces JS namespace in URL.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testQueryOptionAcceptsAnObjectOnACustomNamespace"
+        }
+      ]
+    },
+    {
+      "id": "JS-073",
+      "upstream_ids": [
+        "JS-073"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real /abc namespace with URL query b=c&d=e receives handshake and asserts both exact query values. Namespace is selected explicitly, URL retains the query.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testQueryOptionAcceptsAQueryStringOnACustomNamespace"
+        }
+      ]
+    },
+    {
+      "id": "JS-074",
+      "upstream_ids": [
+        "JS-074"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real /abc handshake receives exact query key &a and value &=?a without URL delimiter corruption; asserts decoded value equals original. Native connectParams replaces JS query object.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testQueryParametersAreProperlyEncoded"
+        }
+      ]
+    },
+    {
+      "id": "JS-055",
+      "upstream_ids": [
+        "JS-055"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original retry budget one and emits echo 1,2,3 before connect: immediate queue lengths 1,2,3; ACK-time lengths 2,1,0; final nil error and integer 3; complete ordered ACK values. Real engine packet-create recorder additionally asserts CONNECT, ACK IDs 0/1/2 with exact echo payloads, then DISCONNECT. Native positive deadline scaled to two seconds; only explicit root disconnect namespace is canonicalized.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityRetryE2ETest.swift",
+          "symbol": "JSParityRetryE2ETest.testRetryPreservesTheOrderOfThePackets"
+        }
+      ]
     }
   ],
   "remaining_review": {

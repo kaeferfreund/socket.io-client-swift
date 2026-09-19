@@ -356,6 +356,18 @@ io.on("connection", (socket) => {
     if (typeof cb === "function") { cb(new Date()); }
   });
 
+  // Original connection.ts binary scenarios; acknowledge only if the server
+  // decoded native binary data and all surrounding JSON fields survived.
+  socket.on("doge", () => socket.emit("doge", Buffer.from("asdfasdf", "utf8")));
+  socket.on("buffa", (value) => {
+    if (Buffer.isBuffer(value)) socket.emit("buffack");
+  });
+  socket.on("jsonbuff", (value) => {
+    if (value?.hello === "lol" && Buffer.isBuffer(value.message) && value.goodbye === "gotcha") {
+      socket.emit("jsonbuff-ack");
+    }
+  });
+
   // JS parity: expect receiving buffers in order (connection.ts
   // "should send events with ArrayBuffers in the correct order"). The flag is
   // per-socket, like the JS support server where it lives in the connection

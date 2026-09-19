@@ -1,10 +1,9 @@
-# 17.0.0 release preparation
+# Socket.IO-Client-Swift 17.0.0
 
-Status: **unreleased; publication blocked**. The requested stable release is
-authorized once validation passes. No `v17.0.0` tag or public release has been
-created. The podspec and framework now declare 17.0.0; the podspec uses the
-immutable `v17.0.0` tag that will be created on the validated release commit.
-Until then, development consumers must pin a commit explicitly.
+Stable release dated 2026-09-19, distributed through Swift Package Manager using
+the immutable [`v17.0.0` tag](https://github.com/kaeferfreund/socket.io-client-swift/releases/tag/v17.0.0).
+The framework and retained podspec metadata also declare 17.0.0.
+CocoaPods registry publication is not part of this release.
 
 ## Additional parity corrections
 
@@ -18,7 +17,7 @@ The shared codec decodes packet framing independently of transport CLOSE handlin
 A parser failure replaces the native engine on reconnect; low-level delegates can
 observe completed/failed Engine.IO upgrades separately from the HTTP handshake.
 
-## Draft release notes
+## Release notes
 
 Socket.IO-Client-Swift 17 targets Socket.IO 4 servers using Engine.IO 4 over
 HTTP long-polling and WebSocket. It requires Swift 6.4 / Xcode 27, with Swift 6
@@ -68,32 +67,32 @@ runtime declarations retain explicit API/platform/unsupported-feature reasons.
 This scoped assertion audit is complete; it is not proof of all possible client
 behavior or a device/release certificate. See [PARITY.md](../PARITY.md).
 
-## Publication gates
+## Release validation and follow-up scope
 
-- [x] Complete the supported original-test assertion audit and validate all 195
-  mappings against the successful 801-test native log; see [final audit](FinalParityAssertions-2026-09-19.md).
-- [ ] Finish the paired lifecycle traces and rerun
-  `python3 scripts/check-parity-contracts.py --strict --swift-log <current-log>`
-  against the complete successful Swift log for the release commit. Do not
-  weaken this gate or convert missing supported behavior to exclusions.
-- [ ] All seven CI jobs pass on the release commit: native suite, TSan, strict
-  concurrency, four Apple SDK framework builds, pinned upstream suites,
-  parser differential and wire proofs.
-- [x] Encoder gate R2 closed with documented deviations (2026-09-19); R3 and
-  the scheduling half of R4 deferred to after 17.0.0 as architecture work
-  without a demonstrated defect; see [ProtocolParityReview.md](ProtocolParityReview.md).
-- [ ] Record the outstanding TimeMonkey/Bun upgrade and Apple-device runtime
-  checks from [REMAINING-WORK.md](../REMAINING-WORK.md).
-- [ ] Validate independent Swift Package, framework and CocoaPods consumers
-  against the final immutable release tag before publishing the GitHub release.
+Publication requires all seven CI jobs to pass on the exact release commit:
+844 native tests and the strict parity checker against their actual log, Thread
+Sanitizer, strict concurrency, four Apple SDK framework builds, pinned upstream
+Node suites, parser differential checks and wire proofs. CI also builds and runs
+an independent Swift Package consumer; when dispatched against the release tag,
+it resolves version 17.0.0 from GitHub instead of using a local package path.
+The release page records the final commit and CI run links.
 
-Once the pre-tag gates pass, merge the reviewed follow-up, rerun CI on the exact
-release commit, and create `v17.0.0` on that commit. Validate tagged consumers and
-publish these notes after updating this status with the actual results. Do not
-move an existing published tag. CocoaPods registry publication is a separate
-distribution operation; the Git-backed podspec alone does not publish a pod.
+All 195 applicable upstream runtime declarations have complete native assertion
+mappings. The strict checker remains mandatory; exclusions and contract mappings
+are unchanged for publication. Broader paired JS/Swift lifecycle traces remain
+follow-up work and are not claimed complete.
 
-## Evidence so far
+Encoder gate R2 is closed with documented deviations. R3 and the scheduling
+half of R4 remain deferred architecture work without a demonstrated defect; see
+[ProtocolParityReview.md](ProtocolParityReview.md).
+
+Physical iOS/watchOS runtime checks remain outstanding and
+are not certified by this release. The supported installation method is SPM;
+independent CocoaPods and framework application integration remain unverified,
+although all four SDK framework builds are checked in CI. See
+[REMAINING-WORK.md](../REMAINING-WORK.md) for the follow-up backlog.
+
+## Pre-release evidence
 
 - [e06d5be CI](https://github.com/kaeferfreund/socket.io-client-swift/actions/runs/35433419941):
   all jobs passed, including 715 Swift tests and zero strict-concurrency warnings.
@@ -109,4 +108,4 @@ distribution operation; the Git-backed podspec alone does not publish a pod.
   [coverage evidence](ReviewEvidence/PollingFailureValidation-2026-09-19.json).
 
 
-These earlier runs do not certify later release-preparation commits.
+These earlier runs do not certify the final release commit; its CI evidence is linked on the release page.

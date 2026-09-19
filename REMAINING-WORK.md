@@ -71,17 +71,16 @@ Stream-Codec bleiben ausdrücklich ausgeschlossen.
 
 ## Weiterhin echte manuelle oder Release-Aufgaben
 
-- Gerätetest mit TimeMonkey/Bun: geprüften Commit pinnen, erzwungenes WebSocket
-  entfernen und stabilen Polling→WebSocket-Upgrade auf dem Gerät bestätigen.
-  Der alte Thread enthält keinen bestätigten Abschluss dieses Tests.
 - iOS/watchOS-Hardware: Hintergrund/Vordergrund, Suspend, Netzverlust/-rückkehr,
   WLAN↔Mobilfunk, IPv6 und Proxy-Umgebungen. macOS-CI ersetzt diese Nachweise nicht.
-- Unabhängige Consumer-Integration als Swift Package, Framework und CocoaPod
-  gegen einen unveränderlichen Release-Tag.
-- Release-Version/Tag festlegen, Podspec-Source von `master` auf den Tag ändern,
-  Distributionen validieren und Adopter-Hinweise auf den veröffentlichten Stand
-  aktualisieren. Version 17.0.0 und unveränderliche Podspec-Tag-Referenz sind vorbereitet;
-  Veröffentlichung ist vom Nutzer nach bestandener Freigabe autorisiert.
-  Der strikte Paritätscheck und manuelle Nachweise sind noch offen.
+- SPM-Consumer wird separat in CI gebaut und ausgeführt; beim CI-Lauf auf dem
+  Release-Tag wird die exakte Version von GitHub bezogen. Unabhängige Framework-
+  und CocoaPods-App-Integration bleibt offen; SPM ist der unterstützte Installationsweg.
+- 17.0.0 wird auf ausdrücklichen Nutzerwunsch aus dem aktuellen Stand veröffentlicht.
+  Versionen, unveränderliche Tag-Referenz und Installationshinweise sind aktualisiert.
+  Alle sieben CI-Jobs und der strikte Paritätscheck müssen auf dem Release-Commit
+  bestehen. Die Release-Seite dokumentiert die finalen Läufe. Die oben genannten
+  manuellen Geräteprüfungen und breiteren Ablaufvergleiche bleiben Folgearbeit;
+  die Veröffentlichung behauptet keinen Abschluss dieser Nachweise.
 - Council-Review war im alten Thread ausdrücklich zurückgestellt. Die historischen
   Anweisungen starten hier kein neues kostenpflichtiges Multi-Modell-Review.

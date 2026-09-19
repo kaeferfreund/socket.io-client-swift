@@ -33,10 +33,12 @@ Socket.IO 4.x / Engine.IO 4 only. See the subsequent
 * `SocketEngine.ws`, `SocketEngineSpec.ws` and the Starscream event delegate
   entry point have been removed. The native transport is deliberately internal.
 * `.security(...)` now takes `SocketTLSConfiguration`, not CertificatePinning.
-* `.useCustomEngine(...)` is deprecated; both values select the sole native path.
-* `.compress`, `.selfSigned(true)` and `.enableSOCKSProxy(true)` fail connection
-  validation with an explicit error, before any request. No proxy request silently
-  becomes a direct connection. False legacy booleans remain accepted.
+* `.useCustomEngine`, `.compress`, `.selfSigned` and `.enableSOCKSProxy` are
+  removed, together with their engine properties and the obsolete `websocket`
+  property. Use `wsConnected`/`polling` for transport state and explicit TLS trust
+  anchors for private certificates.
+* Dictionary keys for removed options (including `customEngine`) fail connection
+  validation for every value, including `false`, before any request.
 * WebSocket send completions run once per complete packet after all local sends
   finish, or once on failure/cancellation. They are NOT server acknowledgements.
   A partially sent packet is never transparently replayed.
@@ -90,10 +92,10 @@ JavaScript parser. See the
 ## Distribution and release
 
 SPM, CocoaPods and Xcode/Carthage definitions contain no Starscream dependency.
-The podspec points to this fork's development branch with prerelease version
-17.0.0-native.1. No release tag has been created. Before publishing, select and
-create an immutable tag, change the podspec source to that tag, and revalidate.
-Consumers testing this PR should pin its commit rather than a moving branch.
+Version 17.0.0 is prepared in the podspec and framework metadata. The podspec
+references the immutable `v17.0.0` tag, which has not yet been created.
+Publication remains blocked by the checks in [Release17.md](Release17.md).
+Development consumers should explicitly pin the reviewed commit until release.
 
 ## Validation
 

@@ -8,7 +8,6 @@ struct QuietLogger {
     func log(_ text: String, type: String) {}
     func error(_ text: String, type: String) {}
 }
-extension Array { func toJSON() throws -> Data { try JSONSerialization.data(withJSONObject: self) } }
 final class Parser: SocketManagerSpec, SocketDataBufferable, SocketParsable {
     let parserOptions = SocketParserOptions()
     var waitingPackets = [SocketPacket]()

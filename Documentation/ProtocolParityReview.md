@@ -121,7 +121,7 @@ The separate malformed-input smoke harness processes **20,000 deterministic gene
 
 The legacy `emitWithAck(...).timingOut(...)` and async timeout overload do not participate in the modern ordered retry queue. The legacy API intentionally retains magic-string timeout and different disconnect behavior. JavaScript Promise acknowledgement behavior must not be declared covered solely because a Swift async overload exists.
 
-The native fork rejects `.compress`, `.selfSigned(true)` and `.enableSOCKSProxy(true)` and uses explicit `SocketTLSConfiguration` policies. It does not implement WebTransport, JS `io()` manager caching, all URL inference, custom JSON revivers or all JS transport selection options. These are visible API/feature boundaries. Swift's explicit manager/queue ownership is not the same API as the browser/Node single-event-loop client.
+The native fork removes `.compress`, `.selfSigned`, `.enableSOCKSProxy` and `.useCustomEngine`, rejects their dictionary keys, and uses explicit `SocketTLSConfiguration` policies. It does not implement WebTransport, JS `io()` manager caching, all URL inference, custom JSON revivers or all JS transport selection options. These are visible API/feature boundaries. Swift's explicit manager/queue ownership is not the same API as the browser/Node single-event-loop client.
 
 ## 5. Outstanding release gates and recommended simplifications
 
@@ -144,10 +144,14 @@ Acceptance: blocked consumer, never-connected socket, never-acked retry head, re
 
 ### R2. Replace the silent outgoing JSON fallback, high priority
 
-**Status (2026-09-19): OPEN.** Round 2 removed the fallback from emit paths; the
-follow-up adds cycle detection and finite traversal budgets. The historical
-source observation below predates those changes. Full encoder/release acceptance
-is still pending; see section 8.2 for the current implementation and tests.
+**Status (2026-09-19): CLOSED with documented deviations.** Round 2 removed the
+fallback from emit paths; the follow-up added cycle detection and finite
+traversal budgets, and the encode differential (1,000 packets read back by the
+pinned JavaScript decoder, zero differences) is a CI job. The remaining
+differences to `JSON.stringify` — finite depth/node/byte budgets, sorted object
+keys, `\/` slash escaping and extended-year `Date` formatting — were reviewed on
+2026-09-19 and accepted as documented deviations rather than defects; see
+section 8.2. The historical source observation below predates those changes.
 
 **Confirmed source behavior.** `SocketPacket.completeMessage` still returns an empty-array packet when JSON serialization fails. An unsupported custom `SocketData` representation or non-finite number can thus change the intended operation into a different wire packet rather than producing a typed encoding failure. The outgoing binary shredder recursively traverses graphs; the review has not established bounded behavior for deep or cyclic Foundation object graphs.
 
@@ -157,11 +161,25 @@ Acceptance: NaN/infinity, unsupported objects, cyclic NSMutableArray/NSDictionar
 
 ### R3. Unify lifecycle and acknowledgement contracts instead of maintaining parallel paths
 
+**Status (2026-09-19): DEFERRED to after 17.0.0.** This is architecture work
+without a demonstrated defect: the acknowledgement paths share ordered retry
+delivery and are covered by `SocketClearAcksOnCloseTest`, `SocketRetrySafetyTest`
+and the ported JS scenarios; the reconnect-event migration it asks for was
+decided and shipped as a documented breaking change (section 8.1). It is not a
+publication gate for 17.0.0.
+
 There are multiple acknowledgement APIs/registries and multiple buffering paths. This increases the number of cancellation, identity-reset and reconnect combinations that must remain consistent. Introduce one internal acknowledgement record with explicit timeout/disconnect/retry policy, keep public compatibility adapters at the edge, and express connection/namespace transitions as a small documented state machine.
 
 Decide separately whether the public reconnect-event API should migrate to JavaScript semantics. A silent event rename would break existing consumers. Provide an explicit compatibility/version strategy, then run a differential trace suite for disconnect, retry, middleware refusal, successful recovery, identity change and reconnect exhaustion. The current code review is not permission to silently change TimeMonkey's event handling.
 
 ### R4. Finish test traceability and deterministic scheduling
+
+**Status (2026-09-19): traceability CLOSED, scheduling DEFERRED to after
+17.0.0.** Every applicable upstream runtime declaration now has a gated
+assertion contract that CI checks against the real test log (section 8 and
+`FinalParityAssertions-2026-09-19.md`). Injectable schedulers and a nonblocking
+fixture-process harness remain desirable test-infrastructure work without a
+demonstrated production defect; they are not a publication gate for 17.0.0.
 
 Treat the 297 upstream runtime declarations as a worklist, not as a count to equal by adding unrelated Swift tests. Each applicable row needs an exact assertion mapping and its transport/protocol parameterization. Missing positive async/query/binary-listener cases should be ported before claiming full client-level coverage.
 
@@ -406,6 +424,19 @@ packet. JS `JSON.stringify` never does that: it produces the value or throws.
   dictionaries in the same sorted order, so attachment numbering is stable too.
   JSON object order carries no meaning, and the reproducibility is what makes
   the exact wire strings testable.
+  Validated against the pinned `socket.io-parser` encoder on 2026-09-19: JS
+  writes array-index-like keys first in ascending numeric order (`"2"` before
+  `"10"`), then every other key — including `"-1"`, `"01"` and `"1.5"` — in
+  insertion order. Because plain `[String: Any]` input carries no insertion
+  order at all, no encoder change can reproduce that for the current API;
+  a JS-identical wire string would need an ordered input type (for example
+  `KeyValuePairs`) plus a custom JSON writer. **Decision (2026-09-19): keep
+  sorted keys and document the difference.** Decoders on both sides treat the
+  orders as equal, which the encode differential proves.
+- **Escaped slashes.** `JSONSerialization` writes `/` as `\/`; `JSON.stringify`
+  leaves it unescaped. Both decode to the same string. Number formatting for
+  very large or very small doubles (JS `1e+21`) is also not guaranteed to be
+  byte-identical. Same decision as above: documented, not changed.
 - **Bounded Foundation normalization (2026-09-19 follow-up).** Foundation
   arrays/dictionaries are traversed by identity through CoreFoundation before
   recursive bridging. Ancestor cycles throw `cyclicPayload`; shared acyclic
@@ -416,8 +447,9 @@ packet. JS `JSON.stringify` never does that: it produces the value or throws.
   retention or total process memory. Hand-built packets are normalized before
   JSONSerialization too; error logging never describes the rejected graph.
   `SocketPacketEncoderTest` covers cycles, shared containers, public error/ack
-  delivery and limit boundaries. Gate **R2 stays open** for full encoder parity
-  and broader release validation; removing the silent fallback was not closure.
+  delivery and limit boundaries. Gate **R2 is closed with documented
+  deviations** (decision 2026-09-19); the deviations are the budgets above,
+  the key order and slash escaping below, and extended-year dates.
 - **Extended years.** `Date.toISOString()` writes years outside 0000–9999 in an
   expanded `±YYYYYY` form; the Swift formatter does not.
 
@@ -679,6 +711,7 @@ CI jobs.
 
 The 57 unmapped `engine.io-client` rows and the 7 `socket.io-parser` encoder
 rows were untouched in round 3. The package now uses Swift 6 language mode.
-Gates **R2** (full encoder parity and release acceptance), **R3** (one internal acknowledgement record and
-a documented state machine) and **R4** (injectable schedulers, full
-traceability) remain open.
+Gate **R2** is closed with documented deviations; **R3** (one internal
+acknowledgement record and a documented state machine) and the scheduling half
+of **R4** (injectable schedulers) are deferred to after 17.0.0 as architecture
+work without a demonstrated defect. See the status lines under each gate.

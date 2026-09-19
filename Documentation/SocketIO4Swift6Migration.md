@@ -32,6 +32,21 @@ identify a 3.x server from its handshake; 3.x simply is not a supported target.
 Missing CONNECT `sid` and malformed legacy CONNECT_ERROR packets are rejected.
 Connection State Recovery requires a configured Socket.IO 4.6+ server.
 
+## Removed native compatibility options
+
+Remove `.useCustomEngine`, `.compress`, `.selfSigned` and `.enableSOCKSProxy`.
+URLSession is the only backend; compression controls and custom SOCKS routing
+are not exposed. Private certificates use `.security(.customTrust(...))` with
+explicit trust anchors. Dictionary keys for these options, including the
+`customEngine` alias, produce a configuration error even when set to `false`.
+The unused engine `compress`, `useCustomEngine`, `enableSOCKSProxy` and
+`websocket` properties are removed; use `polling`/`wsConnected` for transport state.
+
+Unsupported upstream tests remain listed with reviewed exclusion reasons in
+[the parity inventory](JavaScriptTestInventory.csv). They count as resolved scope
+exclusions, not executed Swift tests. Native deflate interoperability tests and
+regressions rejecting old protocols/configuration keys remain in the suite.
+
 ## Concurrency and asynchronous callbacks
 
 The serial `handleQueue` ownership contract remains. The public manager, client

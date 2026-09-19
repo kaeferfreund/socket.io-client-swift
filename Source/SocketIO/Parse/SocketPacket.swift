@@ -370,18 +370,8 @@ public enum SocketPacketError : Error, LocalizedError, CustomStringConvertible {
 
 extension SocketPacket {
     private static func findType(_ binCount: Int, ack: Bool) -> PacketType {
-        switch binCount {
-        case 0 where !ack:
-            return .event
-        case 0 where ack:
-            return .ack
-        case _ where !ack:
-            return .binaryEvent
-        case _ where ack:
-            return .binaryAck
-        default:
-            return .error
-        }
+        if binCount == 0 { return ack ? .ack : .event }
+        return ack ? .binaryAck : .binaryEvent
     }
 
     /// Maximum outgoing object-graph depth, matching the decoder's default.

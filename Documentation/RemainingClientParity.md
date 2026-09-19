@@ -1,5 +1,7 @@
 # Remaining native-client parity review
 
+Historical initial classification. Current mappings and verification: [final assertion audit](FinalParityAssertions-2026-09-19.md).
+
 Baseline: `master` at `c905f4f869bdd208ad04269a855e3ac2438abddd`.
 Official reference: `socketio/socket.io` at `aaf2af36ec8ad05910f357a788e0e358bad32738`.
 Scope: client, client transport and codecs only. The Node server is a fixture, not a port target.

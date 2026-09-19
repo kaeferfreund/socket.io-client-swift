@@ -6,17 +6,25 @@ private final class NativeEngineClient: NSObject, SocketEngineClient {
     var errors = [String]()
     var closes = [String]()
     var opens = 0
+    var upgradeEvents = [String]()
+    var upgradeFailures = [SocketTransportError]()
+    var onOpen: (() -> Void)?
+    var onClose: (() -> Void)?
     var headers = [[String: String]]()
     var messages = [String]()
     var binary = [Data]()
     func engineDidError(reason: String) { errors.append(reason) }
-    func engineDidClose(reason: String) { closes.append(reason) }
-    func engineDidOpen(reason: String) { opens += 1 }
+    func engineDidClose(reason: String) { closes.append(reason); upgradeEvents.append("close"); onClose?() }
+    func engineDidOpen(reason: String) { opens += 1; onOpen?() }
     func engineDidReceivePing() {}
     func engineDidReceivePong() {}
     func engineDidSendPong() {}
     func parseEngineMessage(_ msg: String) { messages.append(msg) }
     func parseEngineBinaryData(_ data: Data) { binary.append(data) }
+    func engineDidCompleteUpgrade() { upgradeEvents.append("upgrade") }
+    func engineDidFailUpgrade(error: SocketTransportError) {
+        upgradeEvents.append("upgradeError"); upgradeFailures.append(error)
+    }
     func engineDidWebsocketUpgrade(headers: [String: String]) { self.headers.append(headers) }
 }
 
@@ -69,6 +77,88 @@ final class SocketNativeEngineTest: XCTestCase {
         transport.onEvent?(.message(.text(handshake))); drain(engine)
     }
 
+    func testCurrentPollingSessionInvalidationReportsErrorAndClosesOnce() throws {
+        let client = NativeEngineClient()
+        let engine = NativePollingTestEngine(client: client, url: url, config: [.forcePolling(true)])
+        engine.connect(); drain(engine)
+        try engine.engineQueue.sync {
+            let session = try XCTUnwrap(engine.session)
+            let proxy = try XCTUnwrap(session.delegate as? SocketSessionDelegateProxy)
+            proxy.urlSession(session, didBecomeInvalidWithError: URLError(.networkConnectionLost))
+            XCTAssertEqual(client.errors.count, 1)
+            XCTAssertEqual(client.closes, ["transport error"])
+            proxy.urlSession(session, didBecomeInvalidWithError: URLError(.networkConnectionLost))
+            XCTAssertEqual(client.errors.count, 1)
+        }
+        drain(engine)
+    }
+
+    func testStoppingPollingFromCallerQueueRetiresSession() {
+        let client = NativeEngineClient()
+        let engine = NativePollingTestEngine(client: client, url: url, config: [.forcePolling(true)])
+        engine.connect(); drain(engine)
+        engine.engineQueue.sync { XCTAssertNotNil(engine.session) }
+        engine.stopPolling(); drain(engine)
+        engine.engineQueue.sync {
+            XCTAssertNil(engine.session)
+            XCTAssertTrue(engine.invalidated)
+            XCTAssertFalse(engine.waitingForPoll)
+            XCTAssertFalse(engine.waitingForPost)
+        }
+        engine.disconnect(reason: "test"); drain(engine)
+    }
+
+    func testMalformedOpenPacketsFailOnceWithoutOpening() {
+        for packet in ["0not-json", "0{}", "0{\"sid\":\"\"}", "0{\"sid\":42}"] {
+            let (engine, client, transport) = make()
+            transport.onEvent?(.opened(protocol: nil)); drain(engine)
+            transport.onEvent?(.message(.text(packet))); drain(engine)
+            engine.engineQueue.sync {
+                XCTAssertTrue(engine.closed, packet)
+                XCTAssertEqual(client.opens, 0, packet)
+                XCTAssertEqual(client.errors.count, 1, packet)
+            }
+        }
+    }
+
+    func testMissingUpgradeListOpensAndBinaryAfterCloseIsIgnored() {
+        let (engine, client, transport) = make()
+        transport.onEvent?(.opened(protocol: nil)); drain(engine)
+        transport.onEvent?(.message(.text("0{\"sid\":\"x\",\"pingInterval\":25000,\"pingTimeout\":20000}")))
+        drain(engine)
+        engine.engineQueue.sync { XCTAssertEqual(client.opens, 1) }
+        engine.disconnect(reason: "test"); drain(engine)
+        engine.engineQueue.sync {
+            engine.parseEngineData(Data([1, 2]))
+            XCTAssertTrue(client.binary.isEmpty)
+        }
+    }
+
+    func testConnectingConnectedEngineClosesOldConnectionAndStartsFreshTransport() {
+        let (engine, client, transport) = make()
+        open(engine, transport)
+        engine.connect(); drain(engine)
+        engine.engineQueue.sync {
+            XCTAssertEqual(client.closes, ["transport close"])
+            XCTAssertEqual(transport.connects, 2)
+            XCTAssertFalse(engine.connected)
+            XCTAssertEqual(engine.sid, "")
+        }
+        open(engine, transport)
+        engine.engineQueue.sync { XCTAssertEqual(client.opens, 2) }
+        engine.disconnect(reason: "test"); drain(engine)
+    }
+
+    func testWebSocketWriteWithoutTransportStillCompletesExactlyOnce() {
+        let client = NativeEngineClient()
+        let engine = SocketEngine(client: client, url: url, config: [])
+        let completed = expectation(description: "unsent completion")
+        engine.sendWebSocketMessage("message", withType: .message, withData: []) { completed.fulfill() }
+        wait(for: [completed], timeout: 1)
+        drain(engine)
+        engine.engineQueue.sync { XCTAssertTrue(client.messages.isEmpty) }
+    }
+
     func testApplicationTrafficCannotRefreshTheServerHeartbeatDeadline() {
         let (engine, client, transport) = make()
         var now = DispatchTime.now()
@@ -87,9 +177,13 @@ final class SocketNativeEngineTest: XCTestCase {
     func testOnlyPingResetsTheDeadlineAndExpiredChecksCloseOnce() {
         let (engine, client, transport) = make()
         var now = DispatchTime.now()
-        engine.engineQueue.sync { engine.heartbeatNow = { now } }
+        engine.engineQueue.sync {
+            engine.heartbeatNow = { now }
+            XCTAssertFalse(engine.hasPingExpired)
+        }
         open(engine, transport)
         engine.engineQueue.sync {
+            XCTAssertFalse(engine.hasPingExpired)
             now = now + .seconds(30)
             engine.parseEngineMessage("2")
             now = now + .seconds(30)
@@ -97,6 +191,8 @@ final class SocketNativeEngineTest: XCTestCase {
             now = now + .seconds(16)
             XCTAssertTrue(engine.hasPingExpired)
             XCTAssertTrue(engine.hasPingExpired)
+            XCTAssertTrue(engine.hasPingExpired)
+            XCTAssertTrue(client.closes.isEmpty, "Timeout closure is deferred")
         }
         drain(engine)
         engine.engineQueue.sync { XCTAssertEqual(client.closes, ["ping timeout"]) }
@@ -314,19 +410,32 @@ final class SocketNativeEngineTest: XCTestCase {
         engine.webSocketTransportFactory = { _ in candidate }
         engine.engineQueue.sync { engine.parseEngineMessage(upgradeHandshake) }
         candidate.onEvent?(.opened(protocol: nil)); drain(engine)
+        engine.engineQueue.sync { engine.waitingForPoll = true }
+        candidate.onEvent?(.message(.text("3probe"))); drain(engine)
+        XCTAssertTrue(engine.fastUpgrade)
         engine.write("buffered", withType: .message, withData: []); drain(engine)
+        var binaryCompletion = 0
+        engine.send(Data([0, 1, 2, 3, 4])) { binaryCompletion += 1 }; drain(engine)
         engine.disconnect(reason: "io client disconnect"); drain(engine)
         XCTAssertFalse(engine.closed)
         XCTAssertTrue(engine.connected)
         XCTAssertTrue(client.closes.isEmpty)
-        engine.write("late", withType: .message, withData: []); drain(engine)
-        candidate.onEvent?(.message(.text("3probe"))); drain(engine)
-        engine.engineQueue.sync { engine.doFastUpgrade() }
+        let held = engine.probeWait.count
+        var refused = 0
+        engine.write("hi", withType: .message, withData: []) { refused += 1 }
+        engine.send(Data([9])) { refused += 1 }; drain(engine)
+        XCTAssertEqual(refused, 2)
+        XCTAssertEqual(engine.probeWait.count, held)
+        engine.engineQueue.sync { engine.waitingForPoll = false; engine.doFastUpgrade() }
         drain(engine)
         XCTAssertFalse(engine.polling)
         XCTAssertEqual(candidate.batches.flatMap { $0 },
-                       [.text("2probe"), .text("5"), .text("4buffered"), .text("1")])
+                       [.text("2probe"), .text("5"), .text("4buffered"), .binary(Data([0, 1, 2, 3, 4])), .text("1")])
         XCTAssertEqual(client.closes, ["io client disconnect"])
+        XCTAssertEqual(client.upgradeEvents, ["upgrade", "close"])
+        XCTAssertTrue(engine.probeWait.isEmpty)
+        XCTAssertTrue(engine.postWait.isEmpty)
+        XCTAssertEqual(binaryCompletion, 1)
         XCTAssertTrue(client.errors.isEmpty)
     }
 
@@ -347,7 +456,32 @@ final class SocketNativeEngineTest: XCTestCase {
         XCTAssertTrue(engine.closed)
         XCTAssertTrue(engine.pollingWrites.contains("4held"))
         XCTAssertEqual(client.closes, ["io client disconnect"])
+        XCTAssertEqual(client.upgradeEvents, ["upgradeError", "close"])
         XCTAssertTrue(client.errors.isEmpty)
+    }
+
+    func testActivePollingFailureReportsUpgradeErrorBeforeDeferredClose() {
+        let client = NativeEngineClient()
+        let engine = NativePollingTestEngine(client: client, url: url, config: [])
+        let candidate = NativeEngineTransport()
+        engine.webSocketTransportFactory = { _ in candidate }
+        engine.engineQueue.sync { engine.parseEngineMessage(upgradeHandshake) }
+        candidate.onEvent?(.opened(protocol: nil)); drain(engine)
+        engine.engineQueue.sync { engine.waitingForPoll = true }
+        candidate.onEvent?(.message(.text("3probe"))); drain(engine)
+        XCTAssertTrue(engine.fastUpgrade)
+        engine.disconnect(reason: "io client disconnect"); drain(engine)
+        XCTAssertTrue(client.closes.isEmpty)
+        engine.didError(reason: "upgrade error"); drain(engine)
+        XCTAssertEqual(client.upgradeEvents, ["upgradeError", "close"])
+        XCTAssertEqual(client.errors, ["upgrade error"])
+        XCTAssertEqual(client.closes, ["transport error"])
+        XCTAssertTrue(engine.closed)
+        XCTAssertTrue(engine.probeWait.isEmpty)
+        XCTAssertEqual(candidate.aborts, 1)
+        // A late candidate failure must not emit another upgradeError or close.
+        candidate.onEvent?(.closed(code: nil, reason: nil, error: EngineWebSocketError.closed)); drain(engine)
+        XCTAssertEqual(client.upgradeEvents, ["upgradeError", "close"])
     }
 
     /// engine.io-client `_onError`: the native failure is reported (`error`)
@@ -487,9 +621,6 @@ final class SocketNativeEngineTest: XCTestCase {
 
     func testUnsupportedOptionsFailBeforeOpeningTransport() {
         let invalid: [SocketIOClientConfiguration] = [
-            [.forceWebsockets(true), .selfSigned(true)],
-            [.forceWebsockets(true), .enableSOCKSProxy(true)],
-            [.forceWebsockets(true), .compress],
             [.forceWebsockets(true), .webSocketOptions(.init(maximumMessageSize: 0))],
             [.forceWebsockets(true), .forcePolling(true)],
             [.forceWebsockets(true), .security(.certificatePinning([]))]
@@ -504,7 +635,7 @@ final class SocketNativeEngineTest: XCTestCase {
     }
 
     func testInvalidDictionarySecurityNeverDisappears() {
-        for key in ["security", "secure", "selfSigned", "sessionDelegate", "enableSOCKSProxy", "webSocketOptions"] {
+        for key in ["security", "secure", "sessionDelegate", "webSocketOptions"] {
             let config = ["forceWebsockets": true, key: "invalid legacy object"] as [String: Any]
             let (engine, client, transport) = make(config.toSocketConfiguration())
             XCTAssertTrue(engine.closed, key)
@@ -513,11 +644,18 @@ final class SocketNativeEngineTest: XCTestCase {
         }
     }
 
-    func testFalseLegacyProxyAndBackendOptionsUseNativeTransport() {
-        let (engine, client, transport) = make([.forceWebsockets(true), .enableSOCKSProxy(false), .useCustomEngine(false)])
-        XCTAssertEqual(transport.connects, 1)
-        XCTAssertTrue(client.errors.isEmpty)
-        engine.disconnect(reason: "test"); drain(engine)
+    /// Removed options must never silently enable a connection with different semantics.
+    func testRemovedDictionaryOptionsFailBeforeOpeningTransport() {
+        for key in ["version", "compress", "selfSigned", "enableSOCKSProxy", "useCustomEngine", "customEngine"] {
+            for value: Any in [true, false, "obsolete"] {
+                let config = ["forceWebsockets": true, key: value] as [String: Any]
+                let (engine, client, transport) = make(config.toSocketConfiguration())
+                XCTAssertTrue(engine.closed, key)
+                XCTAssertEqual(transport.connects, 0, key)
+                XCTAssertEqual(client.errors.count, 1, key)
+                XCTAssertEqual(client.closes.count, 1, key)
+            }
+        }
     }
 
     func testRequestPreservesHeadersCookiePrecedencePathAndParameters() {
@@ -604,5 +742,156 @@ private final class PollingRetirementDelegate: NSObject, URLSessionDelegate, @un
     func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
         XCTAssertNil(error)
         onInvalidation()
+    }
+}
+
+/// Stateless session-local HTTP fixture: host selects accepted/rejected polling.
+private final class TransportSelectionProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let url = request.url!
+        let rejected = url.host == "reject.polling.test"
+        if !rejected && url.query?.contains("sid=") == true { return } // held poll
+        let response = HTTPURLResponse(url: url, statusCode: rejected ? 403 : 200,
+                                       httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        let body = rejected ? "denied" : "0{\"sid\":\"poll\",\"upgrades\":[],\"pingInterval\":25000,\"pingTimeout\":20000}"
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+extension SocketNativeEngineTest {
+    private func selectionEngine(host: String, transports: [SocketTransport]) -> (SocketEngine, NativeEngineClient, NativeEngineTransport) {
+        let client = NativeEngineClient()
+        let engine = SocketEngine(client: client, url: URL(string: "http://" + host)!,
+                                  config: [.transports(transports), .tryAllTransports(true)])
+        engine.pollingSessionConfigurationFactory = {
+            let config = URLSessionConfiguration.ephemeral
+            config.protocolClasses = [TransportSelectionProtocol.self]
+            return config
+        }
+        let transport = NativeEngineTransport()
+        engine.webSocketTransportFactory = { _ in transport }
+        return (engine, client, transport)
+    }
+
+    func testRejectedPollingFallsBackToWebSocketWithoutIntermediateError() {
+        let (engine, client, transport) = selectionEngine(host: "reject.polling.test", transports: [.polling, .websocket])
+        let fallback = expectation(description: "fallback websocket created")
+        engine.webSocketTransportFactory = { _ in fallback.fulfill(); return transport }
+        engine.connect()
+        wait(for: [fallback], timeout: 3)
+        drain(engine)
+        open(engine, transport)
+        engine.engineQueue.sync {
+            XCTAssertEqual(client.opens, 1)
+            XCTAssertTrue(client.errors.isEmpty)
+            XCTAssertTrue(client.closes.isEmpty)
+            XCTAssertFalse(engine.polling)
+        }
+        engine.disconnect(reason: "test"); drain(engine)
+    }
+
+    func testRejectedWebSocketFallsBackToPollingWithoutIntermediateError() {
+        let (engine, client, transport) = selectionEngine(host: "accept.polling.test", transports: [.websocket, .polling])
+        let opened = expectation(description: "polling opened")
+        client.onOpen = { opened.fulfill() }
+        engine.connect(); drain(engine)
+        transport.onEvent?(.closed(code: nil, reason: nil, error: URLError(.cannotConnectToHost)))
+        wait(for: [opened], timeout: 3)
+        engine.engineQueue.sync {
+            XCTAssertTrue(engine.polling)
+            XCTAssertEqual(client.opens, 1)
+            XCTAssertTrue(client.errors.isEmpty)
+            XCTAssertTrue(client.closes.isEmpty)
+        }
+        engine.disconnect(reason: "test"); drain(engine)
+    }
+
+    func testExhaustedTransportsReportOneFinalFailure() {
+        let (engine, client, transport) = selectionEngine(host: "reject.polling.test", transports: [.websocket, .polling])
+        let closed = expectation(description: "all transports failed")
+        client.onClose = { closed.fulfill() }
+        engine.connect(); drain(engine)
+        transport.onEvent?(.closed(code: nil, reason: nil, error: URLError(.cannotConnectToHost)))
+        wait(for: [closed], timeout: 3)
+        engine.engineQueue.sync {
+            XCTAssertEqual(client.opens, 0)
+            XCTAssertEqual(client.errors.count, 1)
+            XCTAssertEqual(client.closes, ["transport error"])
+        }
+    }
+
+    func testRememberUpgradeStartsNextEngineWithSuccessfulWebSocket() {
+        let (first, _, firstTransport) = make()
+        open(first, firstTransport)
+        first.disconnect(reason: "test"); drain(first)
+        let (second, _, secondTransport) = make([.rememberUpgrade(true)])
+        second.engineQueue.sync {
+            XCTAssertEqual(secondTransport.connects, 1)
+            XCTAssertFalse(second.polling)
+        }
+        second.disconnect(reason: "test"); drain(second)
+    }
+}
+
+extension SocketNativeEngineTest {
+    func testFallbackDisabledStopsAtFirstFailure() {
+        let (engine, client, transport) = selectionEngine(host: "reject.polling.test", transports: [.polling, .websocket])
+        engine.setConfigs([.tryAllTransports(false)])
+        let closed = expectation(description: "first failure is final")
+        client.onClose = { closed.fulfill() }
+        engine.connect()
+        wait(for: [closed], timeout: 3)
+        engine.engineQueue.sync {
+            XCTAssertEqual(transport.connects, 0)
+            XCTAssertEqual(client.errors.count, 1)
+            XCTAssertEqual(client.closes.count, 1)
+        }
+    }
+
+    func testPollingOnlyFiltersWebSocketUpgradeAndPreservesCallerTransportList() {
+        let options: [SocketTransport] = [.polling]
+        let client = NativeEngineClient()
+        let engine = NativePollingTestEngine(client: client, url: url, config: [.transports(options)])
+        let transport = NativeEngineTransport()
+        engine.webSocketTransportFactory = { _ in transport }
+        engine.engineQueue.sync {
+            engine.parseEngineMessage(upgradeHandshake)
+            XCTAssertTrue(engine.connected)
+            XCTAssertTrue(engine.polling)
+            XCTAssertEqual(transport.connects, 0)
+            XCTAssertEqual(options, [.polling])
+            XCTAssertEqual(engine.transports, options)
+        }
+        engine.disconnect(reason: "test"); drain(engine)
+    }
+
+    func testEmptyTransportListFailsWithoutNetwork() {
+        let (engine, client, transport) = make([.transports([])])
+        engine.engineQueue.sync {
+            XCTAssertEqual(client.errors, ["Invalid socket configuration: No transports available"])
+            XCTAssertEqual(transport.connects, 0)
+            XCTAssertTrue(engine.closed)
+        }
+    }
+
+    func testRememberUpgradeDisabledStillStartsWithPolling() {
+        let (first, _, firstTransport) = make()
+        open(first, firstTransport)
+        first.disconnect(reason: "test"); drain(first)
+        let (second, client, transport) = selectionEngine(host: "accept.polling.test", transports: [.polling, .websocket])
+        let opened = expectation(description: "default remains polling")
+        client.onOpen = { opened.fulfill() }
+        second.connect()
+        wait(for: [opened], timeout: 3)
+        second.engineQueue.sync {
+            XCTAssertTrue(second.polling)
+            XCTAssertEqual(transport.connects, 0)
+        }
+        second.disconnect(reason: "test"); drain(second)
     }
 }

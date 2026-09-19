@@ -73,6 +73,13 @@ import Foundation
     ///
     /// - parameter headers: The http headers.
     func engineDidWebsocketUpgrade(headers: [String: String])
+
+    /// Engine.IO upgrade completed, after the probe and polling pause have settled.
+    /// Unlike the HTTP handshake callback above, this confirms the active transport changed.
+    @objc optional func engineDidCompleteUpgrade()
+
+    /// An optional upgrade failed. A healthy polling transport may continue.
+    @objc optional func engineDidFailUpgrade(error: SocketTransportError)
 }
 
 /// Structured native counterpart of Engine.IO's TransportError/CloseEvent.

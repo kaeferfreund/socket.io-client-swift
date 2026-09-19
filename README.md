@@ -1,5 +1,10 @@
 # Socket.IO-Client-Swift
 
+Version **17.0.0 is being prepared and is not published yet**. See the
+[release notes and outstanding publication gates](Documentation/Release17.md).
+WebTransport and its stream codec are explicitly unsupported; the target
+transports are HTTP long-polling and WebSocket.
+
 ### Native transport parity follow-up
 
 `withCredentials(true)` enables an isolated engine-owned jar for server cookies.
@@ -179,7 +184,8 @@ do not enable both. `.path("/socket.io/")` configures the HTTP endpoint, while
 
 `.autoConnect` defaults to `false`, so the explicit `connect()` above is enough.
 `.autoConnect(true)` starts connection work during manager initialization for the
-default namespace. Other namespaces still require their own `connect()`.
+default namespace and automatically connects newly created namespaces. With
+`.autoConnect(false)`, each namespace requires its own `connect()`.
 
 Automatic reconnection is enabled by default for recoverable connection loss.
 The event stream matches the JavaScript client: the drop reports `.disconnect`
@@ -284,7 +290,7 @@ the old credentials or enqueue new old-user work during the switch.
 
 ## Breaking changes in 17.0.0
 
-This major prerelease moves behaviour that used to be Swift-specific onto the
+This upcoming major release moves behaviour that used to be Swift-specific onto the
 JavaScript client's contract. Everything below changes an observable API; see
 [the changelog](CHANGELOG.md) for the reasoning and
 [the parity review](Documentation/ProtocolParityReview.md) for the ported tests.
@@ -327,10 +333,13 @@ See [TLS configuration examples](Documentation/NativeWebSocketTransport.md#tls).
 | --- | --- |
 | `.security(CertificatePinning)` | Migrate to `SocketTLSConfiguration`. |
 | `SocketEngine.ws` / `SocketEngineSpec.ws` | Removed; the transport is internal. |
-| `.useCustomEngine(...)` | Deprecated, has no effect; remove it. |
-| `.compress` | Unsupported, produces a connection configuration error. |
-| `.selfSigned(true)` | Unsupported; configure explicit custom trust anchors instead. |
-| `.enableSOCKSProxy(true)` | Unsupported, produces a configuration error instead of silently connecting directly. |
+| `.useCustomEngine(...)` | Removed; URLSession is the only backend. |
+| `.compress` | Removed; native compression controls are not exposed. |
+| `.selfSigned(...)` | Removed; configure explicit custom trust anchors instead. |
+| `.enableSOCKSProxy(...)` | Removed; custom SOCKS routing is not supported. |
+
+Dictionary entries for removed options (including `customEngine`) are rejected
+for every value, including `false`, before any network request.
 
 External `.sessionDelegate` callbacks cannot override the configured server-trust
 policy. Native compression controls, SOCKS routing and WebTransport are not
@@ -470,8 +479,8 @@ known differences and outstanding work.
 [Native migration guide](Documentation/NativeWebSocketTransport.md) ·
 [Changelog](CHANGELOG.md) · [CodeRabbit audit](Documentation/CodeRabbitAudit.md)
 
-The generated `docs/` HTML and older upstream examples describe the historical
-16.x API. Use this checkout's Swift source and migration notes for current
+The obsolete generated 16.x API reference and historical migration guides have
+been removed. Use this checkout's Swift source and migration notes for current
 transport and security APIs.
 
 Based on [socketio/socket.io-client-swift](https://github.com/socketio/socket.io-client-swift).

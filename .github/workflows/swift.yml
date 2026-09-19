@@ -44,11 +44,11 @@ jobs:
           swift test --enable-code-coverage 2>&1 | tee "$RUNNER_TEMP/native-swift-tests.log"
       - name: Verify reviewed contracts actually passed and export library coverage
         run: |
-          python3 scripts/check-parity-contracts.py --swift-log "$RUNNER_TEMP/native-swift-tests.log"
+          python3 scripts/check-parity-contracts.py --strict --swift-log "$RUNNER_TEMP/native-swift-tests.log"
           coverage_path="$(swift test --show-codecov-path)"
           cp "$coverage_path" "$RUNNER_TEMP/swift-coverage.json"
           python3 scripts/report-swift-coverage.py "$coverage_path" "$RUNNER_TEMP/swift-coverage-summary.json"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: native-swift-test-log-${{ github.run_id }}-${{ github.run_attempt }}
@@ -95,7 +95,7 @@ jobs:
             exit 1
           fi
           echo "No Thread Sanitizer data race reports."
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: thread-sanitizer-log-${{ github.run_id }}-${{ github.run_attempt }}
@@ -116,7 +116,7 @@ jobs:
       # Mutable classes are never stamped `@unchecked Sendable` to pass this.
       - name: Build with -strict-concurrency=complete and compare the baseline
         run: bash scripts/check-strict-concurrency.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: strict-concurrency-log-${{ github.run_id }}-${{ github.run_attempt }}
@@ -136,7 +136,7 @@ jobs:
 
   protocol-proofs:
     name: Protocol proofs (wire-level, no Swift toolchain)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
@@ -186,7 +186,7 @@ jobs:
           export NODE_PATH="$RUNNER_TEMP/parity-tools/node_modules"
           set -o pipefail
           bash scripts/test-parser-parity.sh "$RUNNER_TEMP/pinned-upstream" "$RUNNER_TEMP/decoder-results.json" 2>&1 | tee "$RUNNER_TEMP/decoder-parity.log"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: parser-parity-evidence-${{ github.run_id }}-${{ github.run_attempt }}
@@ -198,7 +198,7 @@ jobs:
 
   upstream-clients:
     name: Pinned upstream Node client suites and declaration inventory
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -212,10 +212,13 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
+          # The pinned upstream Mocha/tsx/yargs dependency graph fails to load
+          # under Node 26 (CommonJS require in an ESM-classified yargs file).
+          # Keep the reference-suite runtime on the validated Node 24 line.
           node-version: 24
       - name: Execute original Node suites (browser and WebTransport matrix excluded)
         run: bash scripts/test-upstream-clients.sh "$GITHUB_WORKSPACE/upstream-reference" "$RUNNER_TEMP/upstream-client-results"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: upstream-client-results-${{ github.run_id }}-${{ github.run_attempt }}

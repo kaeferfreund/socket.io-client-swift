@@ -25,14 +25,7 @@
 import Foundation
 
 enum JSONError : Error {
-    case notArray
     case notNSDictionary
-}
-
-extension Array {
-    func toJSON() throws -> Data {
-        return try JSONSerialization.data(withJSONObject: self, options: JSONSerialization.WritingOptions(rawValue: 0))
-    }
 }
 
 extension CharacterSet {
@@ -50,10 +43,14 @@ extension Dictionary where Key == String, Value == Any {
             return .webSocketOptions(options)
         case let ("bufferLimits", limits as SocketBufferLimits):
             return .bufferLimits(limits)
+        case let ("ackTimeout", timeout as Double):
+            return .ackTimeout(timeout)
+        case let ("retries", count as Int):
+            return .retries(count)
+        case ("ackTimeout", _), ("retries", _):
+            return .invalidConfiguration("Invalid acknowledgement option: " + key)
         case let ("connectTimeout", timeout as Double):
             return .connectTimeout(timeout)
-        case let ("useCustomEngine", enable as Bool), let ("customEngine", enable as Bool):
-            return .useCustomEngine(enable)
         case let ("autoConnect", autoConnect as Bool):
             return .autoConnect(autoConnect)
         case let ("connectParams", params as [String: Any]):
@@ -70,6 +67,18 @@ extension Dictionary where Key == String, Value == Any {
             return .extraHeaders(headers)
         case let ("forceNew", force as Bool):
             return .forceNew(force)
+        case let ("transports", values as [String]):
+            let transports = values.compactMap(SocketTransport.init(rawValue:))
+            guard transports.count == values.count else {
+                return .invalidConfiguration("Only polling and websocket transports are supported")
+            }
+            return .transports(transports)
+        case let ("tryAllTransports", enabled as Bool):
+            return .tryAllTransports(enabled)
+        case let ("rememberUpgrade", enabled as Bool):
+            return .rememberUpgrade(enabled)
+        case ("transports", _), ("tryAllTransports", _), ("rememberUpgrade", _):
+            return .invalidConfiguration("Invalid transport selection option: " + key)
         case let ("forcePolling", force as Bool):
             return .forcePolling(force)
         case let ("forceWebsockets", force as Bool):
@@ -100,14 +109,11 @@ extension Dictionary where Key == String, Value == Any {
             return .timestampParam(timestampParam)
         case let ("security", security as SocketTLSConfiguration):
             return .security(security)
-        case let ("selfSigned", selfSigned as Bool):
-            return .selfSigned(selfSigned)
         case let ("sessionDelegate", delegate as URLSessionDelegate):
             return .sessionDelegate(delegate)
-        case let ("compress", compress as Bool):
-            return compress ? .compress : nil
-        case let ("enableSOCKSProxy", enable as Bool):
-            return .enableSOCKSProxy(enable)
+        case ("compress", _), ("selfSigned", _), ("enableSOCKSProxy", _),
+             ("useCustomEngine", _), ("customEngine", _):
+            return .invalidConfiguration("The " + key + " option was removed. Use native URLSession transport and explicit SocketTLSConfiguration trust policies.")
         case ("version", _):
             return .invalidConfiguration("The version option was removed. Only Socket.IO 4.x (Engine.IO 4) is supported; remove version from configuration.")
         case ("withCredentials", _), ("forceBase64", _), ("addTrailingSlash", _):
@@ -116,9 +122,7 @@ extension Dictionary where Key == String, Value == Any {
             return .invalidConfiguration("invalid value for parserOptions; expected SocketParserOptions")
         case ("bufferLimits", _):
             return .invalidConfiguration("invalid value for bufferLimits; expected SocketBufferLimits")
-        case ("security", _), ("secure", _), ("selfSigned", _), ("sessionDelegate", _),
-             ("enableSOCKSProxy", _), ("compress", _), ("webSocketOptions", _),
-             ("useCustomEngine", _), ("customEngine", _):
+        case ("security", _), ("secure", _), ("sessionDelegate", _), ("webSocketOptions", _):
             return .invalidConfiguration("invalid value for " + key + "; legacy security objects must migrate to SocketTLSConfiguration")
         case _:
             return nil
@@ -139,15 +143,6 @@ extension Dictionary where Key == String, Value == Any {
 }
 
 extension String {
-    func toArray() throws -> [Any] {
-        guard let stringData = data(using: .utf16, allowLossyConversion: false) else { return [] }
-        guard let array = try JSONSerialization.jsonObject(with: stringData, options: .mutableContainers) as? [Any] else {
-             throw JSONError.notArray
-        }
-
-        return array
-    }
-
     func toDictionary() throws -> [String: Any] {
         guard let binData = data(using: .utf16, allowLossyConversion: false) else { return [:] }
         guard let json = try JSONSerialization.jsonObject(with: binData, options: .allowFragments) as? [String: Any] else {

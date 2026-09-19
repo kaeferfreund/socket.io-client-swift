@@ -467,7 +467,6 @@ struct ThrowingData: SocketData {
 class TestEngine: SocketEngineSpec {
     weak var client: SocketEngineClient?
     private(set) var closed = false
-    private(set) var compress = false
     private(set) var connected = false
     var connectParams: [String: Any]? = nil
     private(set) var cookies: [HTTPCookie]? = nil
@@ -482,7 +481,6 @@ class TestEngine: SocketEngineSpec {
     private(set) var socketPath = ""
     private(set) var urlPolling = URL(string: "http://localhost/")!
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
-    private(set) var websocket = false
 
 
     internal var onConnect: (() -> ())?

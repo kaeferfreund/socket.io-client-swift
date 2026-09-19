@@ -23,6 +23,45 @@ final class SocketProtocolSafetyTest: XCTestCase {
         }
     }
 
+    func testOriginalParsingErrorsPreserveNativeErrorCategories() {
+        let manager = parser()
+        let invalidPayloads = ["442[\"some\",\"data\"", "0/admin,\"invalid\"", "0[]",
+                               "1/admin,{}", "2/admin,\"invalid", "2/admin,{}",
+                               "2[{\"toString\":\"foo\"}]", "2[true,\"foo\"]",
+                               "2[null,\"bar\"]", "2[\"connect\"]", "2[\"disconnect\",\"123\"]"]
+        for input in invalidPayloads {
+            XCTAssertThrowsError(try manager.parseString(input), input) { error in
+                XCTAssertEqual(error as? SocketParsableError, .invalidDataArray)
+            }
+        }
+        for input in ["5", "51", "50-", "5a-", "51.23-"] {
+            XCTAssertThrowsError(try manager.parseString(input), input) { error in
+                XCTAssertEqual(error as? SocketParsableError, .invalidPacket)
+            }
+        }
+        XCTAssertThrowsError(try manager.parseString("999")) { error in
+            XCTAssertEqual(error as? SocketParsableError, .invalidPacketType)
+        }
+        // Decoder.add(999) is not a representable call to native parseString:
+        // the compiler requires String; binary input has its own Data API.
+    }
+
+    func testOriginalPacketValidityPayloadCases() throws {
+        let manager = parser()
+        let valid = try manager.parseString("0")
+        XCTAssertEqual(valid.type, .connect)
+        XCTAssertEqual(valid.nsp, "/")
+        XCTAssertTrue(valid.data.isEmpty)
+        for wire in ["0/admin,\"invalid\"", "0[]", "1/admin,{}",
+                     "2/admin,\"invalid\"", "2/admin,{}", "2{\"toString\":\"foo\"}",
+                     "2[true,\"foo\"]", "2[null,\"bar\"]", "2[\"connect\"]",
+                     "2[\"disconnect\",\"123\"]"] {
+            XCTAssertThrowsError(try manager.parseString(wire), wire) { error in
+                XCTAssertEqual(error as? SocketParsableError, .invalidDataArray)
+            }
+        }
+    }
+
     /// JS `Decoder.decodeString` only parses a payload `if (str.charAt(++i))`, so
     /// these decode with `data === undefined`. `onevent` (`packet.data || []`)
     /// then emits nothing and `onack` logs "bad ack" — neither is a parse error.
@@ -229,5 +268,71 @@ extension SocketProtocolSafetyTest {
         for text in ["4", "41", "4true", "4null", "4[]", "4/admin,"] {
             XCTAssertThrowsError(try manager.parseString(text), text)
         }
+    }
+}
+
+extension SocketProtocolSafetyTest {
+    /// Exact malformed sequences from the pinned buffer.js/parser.js. Native
+    /// decoding reports a terminal parse error instead of throwing from add().
+    func testOriginalMalformedBinarySequencesCloseOnceWithoutDeliveringAnEvent() {
+        let sequences: [(String?, Bool, String?)] = [
+            ("51-[\"hello\",{\"_placeholder\":true,\"num\":\"splice\"}]", true, nil),
+            ("51-[\"hello\",{\"_placeholder\":true,\"num\":1}]", true, nil),
+            (nil, true, nil),
+            ("51-[\"hello\",{\"_placeholder\":true,\"num\":0}]", false, "2[\"hello\"]"),
+            ("5", false, nil)
+        ]
+        for (header, binary, text) in sequences {
+            let manager = parser()
+            let engine = ReviewParseEngine(client: manager, url: manager.socketURL, options: nil)
+            manager.engine = engine
+            manager.setTestStatus(.connected)
+            let socket = manager.defaultSocket
+            socket.setTestStatus(.connected)
+            var deliveries = 0
+            socket.on("hello") { _, _ in deliveries += 1 }
+            if let header { manager.parseEngineMessage(header) }
+            if binary { manager.parseEngineBinaryData(Data("world".utf8)) }
+            if let text { manager.parseEngineMessage(text) }
+            drainHandleQueue(of: manager)
+            XCTAssertEqual(engine.reasons, ["parse error"])
+            XCTAssertEqual(deliveries, 0)
+            XCTAssertTrue(manager.waitingPackets.isEmpty)
+        }
+    }
+
+    func testOriginalAttachmentLimitRejectsThreeWhenOnlyTwoAreAllowed() {
+        let manager = parser(SocketParserOptions(maximumAttachments: 2))
+        XCTAssertThrowsError(try manager.parseString(
+            "53-[\"hello\",{\"_placeholder\":true,\"num\":0},{\"_placeholder\":true,\"num\":1},{\"_placeholder\":true,\"num\":2}]"))
+        XCTAssertTrue(manager.waitingPackets.isEmpty)
+    }
+
+    func testReconnectDiscardsAnUnfinishedBinaryPacketAndDecodesTheNextTextEvent() {
+        let manager = parser()
+        let engine = ReviewParseEngine(client: manager, url: manager.socketURL, options: nil)
+        manager.engine = engine
+        manager.setTestStatus(.connected)
+        let socket = manager.defaultSocket
+        socket.setTestStatus(.connected)
+        var deliveries = 0
+        socket.on("hello") { data, _ in
+            XCTAssertTrue(data.isEmpty)
+            deliveries += 1
+        }
+        manager.parseEngineMessage("51-[\"hello\"]")
+        drainHandleQueue(of: manager)
+        XCTAssertEqual(manager.waitingPackets.count, 1)
+        XCTAssertEqual(deliveries, 0)
+        manager.setTestStatus(.notConnected)
+        manager.connect()
+        manager.setTestStatus(.connected)
+        socket.setTestStatus(.connected)
+        manager.parseEngineMessage("2[\"hello\"]")
+        drainHandleQueue(of: manager)
+        XCTAssertEqual(deliveries, 1)
+        XCTAssertTrue(manager.waitingPackets.isEmpty)
+        XCTAssertTrue(engine.reasons.isEmpty)
+        manager.disconnect()
     }
 }

@@ -9,7 +9,10 @@ final class SocketRemainingBinaryParserTest: XCTestCase {
         XCTAssertEqual(packet.type, ack ? .binaryAck : .binaryEvent)
         let manager = SocketManager(socketURL: URL(string: "http://localhost")!, config: [.log(false)])
         var decoded = try XCTUnwrap(manager.parseSocketMessage(packet.encodedPacketString()))
-        for attachment in packet.binary { _ = decoded.addData(attachment) }
+        for (index, attachment) in packet.binary.enumerated() {
+            XCTAssertEqual(decoded.addData(attachment), index == packet.binary.count - 1)
+        }
+        XCTAssertEqual(decoded.type, ack ? .binaryAck : .binaryEvent)
         XCTAssertFalse(decoded.reconstructionFailed)
         XCTAssertEqual(decoded.id, id); XCTAssertEqual(decoded.nsp, namespace)
         XCTAssertTrue((decoded.data as NSArray).isEqual(to: items))

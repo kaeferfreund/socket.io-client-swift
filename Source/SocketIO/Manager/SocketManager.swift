@@ -128,6 +128,22 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     /// The sockets in this manager indexed by namespace.
     public var nsps = [String: SocketIOClient]()
 
+    // JS manager listeners run in subscription order, not dictionary order.
+    // Namespace construction alone does not subscribe when autoConnect is off.
+    private var subscriptionOrder = [String]()
+
+    func updateSubscriptionOrder(for socket: SocketIOClient, active: Bool) {
+        if let current = nsps[socket.nsp], current !== socket { return }
+        subscriptionOrder.removeAll { $0 == socket.nsp }
+        if active { subscriptionOrder.append(socket.nsp) }
+    }
+
+    private var orderedSockets: [SocketIOClient] {
+        let subscribed = subscriptionOrder.compactMap { nsps[$0] }
+        let names = Set(subscriptionOrder)
+        return subscribed + nsps.values.filter { !names.contains($0.nsp) }
+    }
+
     /// If `true`, this client will try and reconnect on any disconnects.
     public var reconnects = true
 
@@ -222,8 +238,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         handleQueue.setSpecific(key: handleQueueKey, value: 1)
 
         if autoConnect {
-            defaultSocket.connect()  // sets defaultSocket.status = .connecting (so _engineDidOpen will CONNECT it)
-            connect()                 // opens engine; _engineDidOpen sends CONNECT for defaultSocket
+            _ = defaultSocket // socket(forNamespace:) subscribes and opens the engine.
         }
     }
 
@@ -269,7 +284,10 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             return
         }
 
-        if engine == nil || forceNew {
+        // A native parser failure retires the complete transport engine. Custom
+        // SocketEngineSpec implementations retain control of their own lifecycle;
+        // silently replacing one with the built-in engine would discard it.
+        if engine == nil || forceNew || (parserFailed && engine is SocketEngine) {
             addEngine()
         }
 
@@ -465,6 +483,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     /// Client namespace cleanup preserves the JS-compatible cache. The active flag
     /// distinguishes explicit client disconnect from a reconnectable namespace timeout.
     internal func disconnectSocket(_ socket: SocketIOClient, removeFromManager: Bool) {
+        if removeFromManager { subscriptionOrder.removeAll { $0 == socket.nsp } }
         if removeFromManager, nsps[socket.nsp] === socket {
             nsps.removeValue(forKey: socket.nsp)
         }
@@ -670,7 +689,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         // driving it until an explicit `connect()`. Without this the client
         // re-CONNECTs a namespace the server already rejected, on every single
         // reconnect.
-        for socket in nsps.values where socket.status == .connecting && socket.active {
+        for socket in orderedSockets where socket.status == .connecting && socket.active {
 
 
             // Resolve the auth payload, then call `writeConnectPacket` directly
@@ -718,7 +737,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     }
 
     private func forAll(do: (SocketIOClient) throws -> ()) rethrows {
-        for (_, socket) in nsps {
+        for socket in orderedSockets {
             try `do`(socket)
         }
     }
@@ -1142,6 +1161,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         let client = SocketIOClient(manager: self, nsp: nsp)
 
         nsps[nsp] = client
+        if autoConnect { client.connect() }
 
         return client
     }

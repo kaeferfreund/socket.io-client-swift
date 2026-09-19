@@ -141,7 +141,7 @@ extension SocketEnginePollable {
     /// Encodes explicit wire packets without draining the application queue.
     /// Used by normal batches and the close-only request for a retiring session.
     func createRequestForPost(with messages: [String]) -> URLRequest {
-        let postStr = messages.joined(separator: "\u{1e}")
+        let postStr = SocketEnginePacketCodec.join(messages)
         DefaultSocketLogger.Logger.log("Created POST string: \(postStr)", type: "SocketEnginePolling")
         let postData = Data(postStr.utf8)
         var req = URLRequest(url: urlPollingWithSid)
@@ -325,11 +325,15 @@ extension SocketEnginePollable {
     }
 
     func parsePollingMessage(_ str: String) {
-        guard !str.isEmpty else { return }
         DefaultSocketLogger.Logger.log("Got poll message: \(str)", type: "SocketEnginePolling")
-        for record in str.components(separatedBy: "\u{1e}") {
-            guard !closed else { break }
-            parseEngineMessage(record)
+        // Concrete engines share the standalone codec while keeping lifecycle
+        // dispatch separate. Protocol conformers retain their packet callback.
+        if let engine = self as? SocketEngine { engine.dispatchPollingPayload(str) }
+        else {
+            for record in str.components(separatedBy: "\u{1e}") {
+                guard !closed else { break }
+                parseEngineMessage(record)
+            }
         }
     }
 
@@ -348,7 +352,7 @@ extension SocketEnginePollable {
     func performPollingWrite(_ message: String, withType type: SocketEnginePacketType, withData datas: [Data], completion: (() -> ())?) {
         DefaultSocketLogger.Logger.log("Sending poll: \(message) as type: \(type.rawValue)", type: "SocketEnginePolling")
 
-        postWait.append((String(type.rawValue) + message, completion))
+        postWait.append((SocketEnginePacketCodec.encodeText(message, type: type), completion))
 
         for data in datas {
             if case let .right(bin) = createBinaryDataForSend(using: data) {

@@ -60,10 +60,6 @@ private struct SocketAck : Hashable {
         ack.hash(into: &hasher)
     }
 
-    fileprivate static func <(lhs: SocketAck, rhs: SocketAck) -> Bool {
-        return lhs.ack < rhs.ack
-    }
-
     fileprivate static func ==(lhs: SocketAck, rhs: SocketAck) -> Bool {
         return lhs.ack == rhs.ack
     }

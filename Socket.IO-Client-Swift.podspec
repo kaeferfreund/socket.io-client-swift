@@ -1,7 +1,7 @@
 Pod::Spec.new do |s|
   s.name         = "Socket.IO-Client-Swift"
   s.module_name  = "SocketIO"
-  s.version      = "17.0.0-native.1"
+  s.version      = "17.0.0"
   s.summary      = "Socket.IO-client for iOS and OS X"
   s.description  = <<-DESC
                    Socket.IO-client for iOS and OS X.
@@ -18,8 +18,7 @@ Pod::Spec.new do |s|
   s.requires_arc = true
   s.source = {
     :git => "https://github.com/kaeferfreund/socket.io-client-swift.git",
-    # Development prerelease. Use an immutable tag before publishing.
-    :branch => 'master'
+    :tag => "v#{s.version}"
   }
 
   s.swift_version = "6.0"

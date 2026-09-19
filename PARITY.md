@@ -5,10 +5,25 @@ Reference: official `socketio/socket.io` commit
 The checked-out client package declares 4.8.3; the commit, not a moving version
 label, identifies the reviewed implementation.
 
-**Full behavioral equivalence and complete upstream-test porting are not established.**
+**All 195 applicable runtime declarations now have complete native assertion
+mappings and passed execution evidence (801 Swift tests, zero failures). This is
+scoped test parity, not proof of every possible JavaScript behavior.**
 The previous 116-row matrix covered only socket.io-client, omitted Engine.IO and
 both parsers, and contained stale/generic test pointers and inconsistent totals.
 It must not be used as a coverage percentage.
+
+For this port, parity means matching the supported JavaScript behavior plus
+explicitly reviewed exclusions for features the native API does not offer.
+`unsupported-feature`, `api-difference` and `platform-specific` rows with a
+reason are resolved scope boundaries; they are not passed Swift executions.
+The 36 unsupported-feature rows are explicitly listed in
+`JavaScriptParityContracts.json` under `excluded_unsupported_features`:
+compression controls (4), custom per-transport constructors (2), and
+WebTransport/stream framing (30). The validator rejects new unsupported rows
+without a matching reviewed exclusion. `--strict` excludes these reviewed
+boundaries but still fails for supported behavior without certified contracts.
+Transport selection, fallback and remembered upgrades are implemented and now
+have complete original-scenario assertions, including real transport failures.
 
 | Upstream scope | Static runtime test declarations |
 | --- | ---: |
@@ -27,11 +42,15 @@ See [the full inventory](Documentation/JavaScriptTestInventory.csv),
 [the recorded decoder comparison](Documentation/ReviewEvidence/DecoderDifferential.json).
 Inventory labels distinguish focused regressions, candidate old pointers,
 unmapped rows, API differences and unsupported features. A candidate is not a
-proof that all assertions of an upstream test have been ported. The round-2 pass
-(2026-09-18) closed every `mapping-gap` row. The 2026-09-19 cycle-safety follow-up
-adds the remaining circular-object regression: 67 rows are focused regressions,
-with zero `mapping-gap` and zero `known-divergence` rows. These inventory labels
-do not remove the deliberate encoding bounds or close release gate R2.
+proof that all assertions of an upstream test have been ported. The current
+inventory contains 195 focused regressions with complete native assertion contracts,
+28 API differences, 38 platform differences and 36 unsupported-feature entries.
+There are no candidate or unmapped declarations. The final 36 were checked
+against each original setup, data, order and negative assertion; see
+[the final audit](Documentation/FinalParityAssertions-2026-09-19.md).
+CI now requires the strict completeness check **and** passed executions of the
+mapped tests in the current run. A static mapping is not a test-run certificate.
+These labels do not remove the deliberate encoding bounds; release gate R2 is closed with those bounds recorded as documented deviations.
 
 The local decoder comparison exercised 5,000 generated valid text/binary vectors
 against the actual pinned JavaScript decoder and current Swift decoder, with zero
@@ -56,9 +75,11 @@ not implemented. Reconnect-event semantics now match the JavaScript manager
 `reconnect_failed` exist) — a breaking change in 17.0.0, see the README. The
 outgoing encoder throws instead of substituting an empty payload and rejects
 cyclic Foundation graphs before bridging. Its finite node/byte/depth budgets
-are deliberate deviations; full encoder parity remains an open release gate. Legacy and async acknowledgement contracts
-still differ; see the review rather than treating these as browser-only
-exceptions. Runtime tests, SDK builds, API compatibility and device validation
+are deliberate deviations, as are sorted object keys and `\/` slash escaping
+(JS keeps insertion order with index-like keys first and leaves `/` unescaped;
+both decode identically, decided 2026-09-19 to document rather than change);
+full encoder parity remains an open release gate. Callback, async and legacy acknowledgement entry points now share ordered
+retry delivery; native API representations remain documented separately. Runtime tests, SDK builds, API compatibility and device validation
 are different acceptance gates.
 
 Acknowledgements are now cleared on **every** close, including a drop the

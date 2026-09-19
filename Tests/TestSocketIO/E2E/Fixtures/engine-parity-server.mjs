@@ -19,10 +19,14 @@ const engine = new Server({
   transports: ['polling', 'websocket'],
   maxHttpBufferSize: Number(process.env.MAX_HTTP_BUFFER_SIZE || 1000000),
   pingInterval: 25000, pingTimeout: 20000,
+  allowRequest: (request, callback) => {
+    const transport = new URL(request.url, 'http://localhost').searchParams.get('transport');
+    callback(null, transport !== process.env.DENY_TRANSPORT);
+  },
 });
 engine.attach(http, { path: '/engine.io', addTrailingSlash: process.env.NO_TRAILING_SLASH !== '1' });
 engine.on('initial_headers', (headers) => {
-  headers['set-cookie'] = ['one=1; Path=/', 'two=2; Path=/'];
+  headers['set-cookie'] = ['1=1; Path=/', '2=2; Path=/'];
 });
 const observeFrames = (transport) => {
   if (transport.name !== 'websocket') return;

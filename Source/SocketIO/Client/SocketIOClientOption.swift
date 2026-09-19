@@ -28,6 +28,12 @@ protocol ClientOption : CustomStringConvertible, Equatable {
     func getSocketIOOptionValue() -> Any
 }
 
+/// Native Engine.IO transports, in connection-attempt order.
+public enum SocketTransport: String, Sendable {
+    case polling
+    case websocket
+}
+
 /// The options for a client.
 public enum SocketIOClientOption : ClientOption {
     /// The default timeout in seconds used when waiting for an acknowledgement
@@ -38,18 +44,14 @@ public enum SocketIOClientOption : ClientOption {
 
     /// Whether the manager should automatically call `connect()` at the end of `init`.
     /// Default `false` to preserve existing behavior. JS `Manager` defaults to `true`;
-    /// Swift inverts the default. When `true`, only the `defaultSocket` is auto-CONNECTed
-    /// through `_engineDidOpen`. Sockets created later via `manager.socket(forNamespace:)`
-    /// still require an explicit `socket.connect()` — matches JS where `Manager.autoConnect`
-    /// only opens the engine, not arbitrary namespaces.
+    /// Swift inverts the default. When `true`, the default socket and sockets
+    /// created later via `manager.socket(forNamespace:)` connect automatically,
+    /// matching JS `Manager.socket()`. When `false`, each socket requires connect().
     /// **Note:** when `true`, engine I/O begins before `SocketManager.init` returns.
     /// Listener attachment on `defaultSocket` happens AFTER init in user code; events
     /// fire asynchronously on the configured `handleQueue` so they do reach attached
     /// listeners, but be aware of the ordering. JS-aligned with `Manager` constructor.
     case autoConnect(Bool)
-
-    /// Legacy option. Fails connection validation because native compression controls are unavailable.
-    case compress
 
     /// How many times an emit is re-sent when the server does not acknowledge
     /// it in time, JS-aligned with the `retries` option in
@@ -98,14 +100,20 @@ public enum SocketIOClientOption : ClientOption {
     /// or when you want to be sure no state from previous engines is being carried over.
     case forceNew(Bool)
 
+    /// Ordered initial transport candidates. Defaults to polling then WebSocket.
+    case transports([SocketTransport])
+
+    /// Try the next configured transport if the initial handshake fails.
+    case tryAllTransports(Bool)
+
+    /// Start with WebSocket after a previously successful WebSocket connection.
+    case rememberUpgrade(Bool)
+
     /// If passed `true`, the only transport that will be used will be HTTP long-polling.
     case forcePolling(Bool)
 
     /// If passed `true`, the only transport that will be used will be WebSockets.
     case forceWebsockets(Bool)
-
-    /// Legacy option. `true` fails before connecting; it never silently bypasses the requested proxy.
-    case enableSOCKSProxy(Bool)
 
     /// The queue that all interaction with the client should occur on. This is the queue that event handlers are
     /// called on.
@@ -155,16 +163,9 @@ public enum SocketIOClientOption : ClientOption {
     /// Shared native TLS policy for polling and WebSocket. Normal system trust is the default.
     case security(SocketTLSConfiguration)
 
-    /// Legacy option. `true` fails; use an explicit customTrust anchor instead of trust-all.
-    case selfSigned(Bool)
-
     /// Forwards authentication (except server trust), redirect, lifecycle and metrics events.
     /// Server trust is always controlled by `security`, never by this delegate.
     case sessionDelegate(URLSessionDelegate)
-
-    /// Deprecated compatibility option. Both values use native URLSession.
-    @available(*, deprecated, message: "URLSession is the only WebSocket backend; remove this option")
-    case useCustomEngine(Bool)
 
     /// Native incoming-message and outgoing-queue limits.
     case webSocketOptions(SocketWebSocketOptions)
@@ -201,8 +202,6 @@ public enum SocketIOClientOption : ClientOption {
             description = "ackTimeout"
         case .autoConnect:
             description = "autoConnect"
-        case .compress:
-            description = "compress"
         case .retries:
             description = "retries"
         case .connectParams:
@@ -221,6 +220,12 @@ public enum SocketIOClientOption : ClientOption {
             description = "extraHeaders"
         case .forceNew:
             description = "forceNew"
+        case .transports:
+            description = "transports"
+        case .tryAllTransports:
+            description = "tryAllTransports"
+        case .rememberUpgrade:
+            description = "rememberUpgrade"
         case .forcePolling:
             description = "forcePolling"
         case .forceWebsockets:
@@ -249,16 +254,10 @@ public enum SocketIOClientOption : ClientOption {
             description = "timestampRequests"
         case .timestampParam:
             description = "timestampParam"
-        case .selfSigned:
-            description = "selfSigned"
         case .security:
             description = "security"
         case .sessionDelegate:
             description = "sessionDelegate"
-        case .enableSOCKSProxy:
-            description = "enableSOCKSProxy"
-        case .useCustomEngine:
-            description = "customEngine"
         }
 
         return description
@@ -280,8 +279,6 @@ public enum SocketIOClientOption : ClientOption {
             value = timeout
         case let .autoConnect(autoConnect):
             value = autoConnect
-        case .compress:
-            value = true
         case let .connectParams(params):
             value = params
         case let .retries(count):
@@ -300,6 +297,12 @@ public enum SocketIOClientOption : ClientOption {
             value = headers
         case let .forceNew(force):
             value = force
+        case let .transports(transports):
+            value = transports
+        case let .tryAllTransports(enabled):
+            value = enabled
+        case let .rememberUpgrade(enabled):
+            value = enabled
         case let .forcePolling(force):
             value = force
         case let .forceWebsockets(force):
@@ -330,14 +333,8 @@ public enum SocketIOClientOption : ClientOption {
             value = timestampParam
         case let .security(security):
             value = security
-        case let .selfSigned(signed):
-            value = signed
         case let .sessionDelegate(delegate):
             value = delegate
-        case let .enableSOCKSProxy(enable):
-            value = enable
-        case let .useCustomEngine(enable):
-            value = enable
         }
 
         return value

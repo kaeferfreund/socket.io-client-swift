@@ -2,7 +2,8 @@
 """Validate traceable contracts; optionally require passed XCTest executions.
 
 A green default check only protects reviewed contracts and the explicit backlog.
---strict intentionally fails while any applicable runtime row is uncertified.
+--strict fails while any supported runtime row is uncertified. Reviewed feature
+exclusions are resolved scope boundaries, never counted as executed tests.
 """
 import argparse
 import csv
@@ -68,6 +69,20 @@ def validate(root=ROOT, swift_log=None, upstream_inventory=None, strict=False):
                 errors.append(name + ': missing test method ' + symbol)
             if swift_log is not None and symbol not in passed:
                 errors.append(name + ': XCTest did not report a PASS for ' + symbol)
+    # The inventory's swift_tests column is a derived view of the gated
+    # contracts, never independent evidence: it must name exactly the symbols
+    # the contracts certify for that row, so readers and CI see the same tests.
+    contract_symbols = {}
+    for contract in manifest['contracts']:
+        for id in contract['upstream_ids']:
+            contract_symbols.setdefault(id, set()).update(t['symbol'] for t in contract['tests'])
+    for row in rows:
+        if row['status'] != 'focused-regression':
+            continue
+        listed = {ref for ref in re.split(r'[;\s]+', row['swift_tests']) if ref}
+        expected = contract_symbols.get(row['id'], set())
+        if listed != expected:
+            errors.append(row['id'] + ': inventory swift_tests differ from the gated contract tests')
     review = manifest.get('remaining_review')
     if review is None:
         errors.append('Missing explicit remaining-client review')
@@ -92,6 +107,24 @@ def validate(root=ROOT, swift_log=None, upstream_inventory=None, strict=False):
                     errors.append(str(id) + ': native disposition requires an executable contract')
             elif status not in ('api-difference', 'platform-specific'):
                 errors.append(str(id) + ': unreviewed disposition category')
+    excluded = set()
+    for group in manifest.get('excluded_unsupported_features', []):
+        ids = group.get('upstream_ids', [])
+        if not ids or not group.get('reason', '').strip():
+            errors.append('Unsupported-feature exclusion requires IDs and a reviewed reason')
+        for id in ids:
+            if id in excluded:
+                errors.append(str(id) + ': duplicate unsupported-feature exclusion')
+            excluded.add(id)
+            row = by_id.get(id)
+            if row is None or row['status'] != 'unsupported-feature':
+                errors.append(str(id) + ': exclusion must refer to an unsupported-feature row')
+    unsupported = {r['id'] for r in rows if r['status'] == 'unsupported-feature'}
+    if excluded != unsupported:
+        errors.append('Unsupported-feature rows require explicit reviewed exclusions')
+    for row in rows:
+        if row['status'] in ('unsupported-feature', 'api-difference', 'platform-specific') and not row['review_note'].strip():
+            errors.append(row['id'] + ': scope exclusion requires an inventory reason')
     for row in rows:
         if row['status'] in ('candidate-existing-test', 'focused-regression') and row['swift_tests'].strip() == 'browser-only type':
             errors.append(row['id'] + ': platform description is not test evidence')
@@ -103,9 +136,10 @@ def validate(root=ROOT, swift_log=None, upstream_inventory=None, strict=False):
             errors.append('CSV declarations differ from the freshly generated pinned upstream AST inventory')
     if strict:
         missing = [r['id'] for r in rows if r['scope'] == 'runtime-declaration'
-                   and r['status'] not in ('api-difference', 'platform-specific') and r['id'] not in certified]
+                   and r['status'] not in ('api-difference', 'platform-specific')
+                   and r['id'] not in excluded and r['id'] not in certified]
         if missing:
-            errors.append('Complete parity NOT established; uncertified or unsupported rows: ' + ', '.join(missing))
+            errors.append('Complete parity NOT established; uncertified supported rows: ' + ', '.join(missing))
     return errors
 
 

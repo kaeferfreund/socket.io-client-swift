@@ -90,9 +90,6 @@ open class SocketEngine: NSObject,
     /// `true` if this engine is closed.
     public private(set) var closed = false
 
-    /// If `true` the engine will attempt to use WebSocket compression.
-    public private(set) var compress = false
-
     /// `true` if this engine is connected. Connected means that the initial poll connect has succeeded.
     public private(set) var connected = false
 
@@ -116,6 +113,19 @@ open class SocketEngine: NSObject,
     ///
     /// **Do not touch this directly**
     public private(set) var fastUpgrade = false
+
+    /// Ordered connection candidates; forcePolling/forceWebsockets restrict this list.
+    public private(set) var transports: [SocketTransport] = [.polling, .websocket]
+    public private(set) var tryAllTransports = false
+    public private(set) var rememberUpgrade = false
+    private var openingTransports: [SocketTransport] = []
+    private static let upgradeMemory = SocketUpgradeMemory()
+
+    private var configuredTransports: [SocketTransport] {
+        if forcePolling { return transports.filter { $0 == .polling } }
+        if forceWebsockets { return transports.filter { $0 == .websocket } }
+        return transports
+    }
 
     /// When `true`, the engine will only use HTTP long-polling as a transport.
     public private(set) var forcePolling = false
@@ -162,19 +172,6 @@ open class SocketEngine: NSObject,
     /// The url for WebSockets.
     public private(set) var urlWebSocket = URL(string: "http://localhost/")!
 
-    /// Compatibility property. The only WebSocket backend is URLSession.
-    @available(*, deprecated, message: "URLSession is always used")
-    public private(set) var useCustomEngine = false
-
-
-    /// If `true`, then the engine is currently in WebSockets mode.
-    @available(*, deprecated, message: "No longer needed, if we're not polling, then we must be doing websockets")
-    public private(set) var websocket = false
-
-    /// Requested legacy SOCKS option. `true` fails validation before any network request.
-    public private(set) var enableSOCKSProxy = false
-
-
     /// Whether or not the WebSocket is currently connected.
     public private(set) var wsConnected = false
 
@@ -198,9 +195,8 @@ open class SocketEngine: NSObject,
     /// Set while a graceful close waits for an unfinished upgrade to settle.
     /// Non-nil is JS's `readyState === "closing"`: no new packet may be written.
     private var pendingCloseReason: String?
-    private var probeWait = ProbeWaitQueue()
+    private(set) var probeWait = ProbeWaitQueue()
     private var secure = false
-    private var selfSigned = false
 
     // MARK: Initializers
 
@@ -262,18 +258,9 @@ open class SocketEngine: NSObject,
          3: Bad request
          */
         let reason = (try? msg.toDictionary())?["message"] as? String
-        didError(reason: reason ?? "Got unknown error from server \(msg)")
+        didError(reason: reason ?? "parser error")
     }
 
-    private func handleBase64(message: String) {
-        let offset = 1
-        // binary in base64 string
-        let noPrefix = String(message[message.index(message.startIndex, offsetBy: offset)..<message.endIndex])
-
-        if let data = Data(base64Encoded: noPrefix, options: .ignoreUnknownCharacters) {
-            client?.parseEngineBinaryData(data)
-        }
-    }
 
     /// Retires the current attempt once and completes abandoned writes locally.
     /// A graceful polling close owns its old session until the final POST or deadline.
@@ -284,6 +271,7 @@ open class SocketEngine: NSObject,
         let oldTransport = webSocketTransport
         let wasWebSocketOpen = wsConnected
         let wasPolling = polling
+        let wasUpgrading = polling && (probing || fastUpgrade) && oldTransport != nil
         let pendingPosts = postWait
         let pendingProbes = probeWait
         pendingCloseReason = nil
@@ -340,6 +328,10 @@ open class SocketEngine: NSObject,
             engineQueue.socketAsyncAfter(deadline: .now() + 1) { transport.abort() }
         } else {
             oldTransport?.abort()
+        }
+        if wasUpgrading {
+            client?.engineDidFailUpgrade?(error: error ?? SocketTransportError(
+                transport: "websocket", operation: "upgrade", closeReason: "socket closed"))
         }
         if let error = error, let callback = client?.engineDidClose(reason:error:) {
             callback(reason, error)
@@ -404,22 +396,44 @@ open class SocketEngine: NSObject,
         DefaultSocketLogger.Logger.log("Starting engine. Server: \(url)", type: SocketEngine.logType)
         DefaultSocketLogger.Logger.log("Handshaking", type: SocketEngine.logType)
 
+        openingTransports = []
         resetEngine()
         if let error = validateConfiguration() {
             didError(reason: "Invalid socket configuration: " + error)
             return
         }
 
-        if forceWebsockets {
-            polling = false
-            createWebSocketAndConnect()
-            return
+        openingTransports = configuredTransports
+        if rememberUpgrade, Self.upgradeMemory.succeeded, openingTransports.contains(.websocket) {
+            openingTransports.removeAll { $0 == .websocket }
+            openingTransports.insert(.websocket, at: 0)
         }
+        startOpeningTransport()
+    }
 
-        var reqPolling = URLRequest(url: urlPollingHandshake, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60.0)
+    /// Starts one attempt without notifying the manager of intermediate failures.
+    private func startOpeningTransport() {
+        guard let transport = openingTransports.first else { return }
+        polling = transport == .polling
+        if transport == .websocket {
+            createWebSocketAndConnect()
+        } else {
+            var request = URLRequest(url: urlPollingHandshake, cachePolicy: .reloadIgnoringLocalCacheData,
+                                     timeoutInterval: 60)
+            addHeaders(to: &request)
+            doLongPoll(for: request)
+        }
+    }
 
-        addHeaders(to: &reqPolling)
-        doLongPoll(for: reqPolling)
+    /// A fallback gets a fresh session/generation, so callbacks from the failed
+    /// transport cannot close or parse into its successor.
+    private func tryNextOpeningTransport() -> Bool {
+        Self.upgradeMemory.succeeded = false
+        guard !connected, tryAllTransports, openingTransports.count > 1 else { return false }
+        openingTransports.removeFirst()
+        resetEngine()
+        startOpeningTransport()
+        return true
     }
 
     private func createURLs() -> (URL, URL) {
@@ -521,12 +535,17 @@ open class SocketEngine: NSObject,
         transport.connect()
     }
 
+    /// Server order is retained, but only locally configured transports can upgrade.
+    func filterUpgrades(_ advertised: [String]) -> [SocketTransport] {
+        advertised.compactMap(SocketTransport.init(rawValue:)).filter { configuredTransports.contains($0) }
+    }
+
     private func validateConfiguration() -> String? {
         if let error = configurationError { return error }
+        if transports.isEmpty { return "No transports available" }
+        if configuredTransports.isEmpty { return "Forced transport is absent from transports" }
+        if Set(transports).count != transports.count { return "Duplicate transport names" }
         if forcePolling && forceWebsockets { return "forcePolling and forceWebsockets cannot both be true" }
-        if selfSigned { return "selfSigned(true) is unsupported; use security(.customTrust(anchors:pins:))" }
-        if enableSOCKSProxy { return "enableSOCKSProxy(true) is unsupported by the native transport; refusing a direct connection" }
-        if compress { return "compress is unsupported: URLSession does not expose compression negotiation controls" }
         if tlsConfiguration.requiresTLS && !secure { return "a custom security policy requires https/wss" }
         return tlsConfiguration.validationError ?? webSocketOptions.validationError
     }
@@ -539,6 +558,7 @@ open class SocketEngine: NSObject,
     open func didError(reason: String) {
         let fail = { [weak self] in
             guard let self = self, !self.closed else { return }
+            if self.tryNextOpeningTransport() { return }
             DefaultSocketLogger.Logger.error(reason, type: SocketEngine.logType)
             let error = self.currentTransportError
             if let error, let callback = self.client?.engineDidError(reason:error:) {
@@ -620,12 +640,14 @@ open class SocketEngine: NSObject,
         guard canSendUpgradePacket, wsConnected, !closed else { return }
         DefaultSocketLogger.Logger.log("Switching to WebSockets", type: SocketEngine.logType)
         polling = false
+        Self.upgradeMemory.succeeded = true
         retirePollingSession()
         fastUpgrade = false
         probing = false
         // Queue the upgrade packet before anything held by the polling transport.
         sendWebSocketMessage("", withType: .upgrade, withData: [], completion: nil)
         guard !closed else { return }
+        client?.engineDidCompleteUpgrade?()
         flushWaitingForPostToWebSocket()
         flushProbeWait()
         // JS `waitForUpgrade()` resumes on `upgrade`, i.e. after the buffered
@@ -642,11 +664,8 @@ open class SocketEngine: NSObject,
         probeWait.removeAll(keepingCapacity: false)
         for waiter in waiting {
             guard connected, !closed else { waiter.completion?(); continue }
-            if polling {
-                sendPollMessage(waiter.msg, withType: waiter.type, withData: waiter.data, completion: waiter.completion)
-            } else {
-                sendWebSocketMessage(waiter.msg, withType: waiter.type, withData: waiter.data, completion: waiter.completion)
-            }
+            sendPreparedWrite(waiter.msg, withType: waiter.type, withData: waiter.data,
+                              rawBinary: waiter.rawBinary, completion: waiter.completion)
         }
     }
 
@@ -669,9 +688,9 @@ open class SocketEngine: NSObject,
             engineQueue.socketAsync { self.sendWebSocketMessage(str, withType: type, withData: data, completion: completion) }
             return
         }
-        var messages: [EngineWebSocketMessage] = [.text("\(type.rawValue)\(str)")]
+        var messages: [EngineWebSocketMessage] = [.text(SocketEnginePacketCodec.encodeText(str, type: type))]
         messages += data.map {
-            forceBase64 ? .text("b" + $0.base64EncodedString()) : .binary($0)
+            SocketEnginePacketCodec.encode(.init(type: .message, data: .binary($0)), supportsBinary: !forceBase64)
         }
         sendWebSocketBatch(messages, completion: completion)
     }
@@ -742,9 +761,11 @@ open class SocketEngine: NSObject,
 
         self.sid = sid
         connected = true
+        openingTransports = []
+        Self.upgradeMemory.succeeded = !polling
 
         if let upgrades = json["upgrades"] as? [String] {
-            upgradeWs = upgrades.contains("websocket")
+            upgradeWs = filterUpgrades(upgrades).contains(.websocket)
         } else {
             upgradeWs = false
         }
@@ -756,13 +777,13 @@ open class SocketEngine: NSObject,
         // we batch without one, which is how this client always behaved.
         maxPayload = json["maxPayload"] as? Int
 
-        if !forcePolling && !forceWebsockets && upgradeWs {
+        if polling && upgradeWs {
             createWebSocketAndConnect()
         }
 
         checkPings()
 
-        if !forceWebsockets {
+        if polling {
             doPoll()
         }
 
@@ -865,31 +886,37 @@ open class SocketEngine: NSObject,
 
         DefaultSocketLogger.Logger.log("Got message: \(message)", type: SocketEngine.logType)
 
-        if message.hasPrefix("b") {
-            return handleBase64(message: message)
+        switch SocketEnginePacketCodec.decode(.text(message)) {
+        case .success(let packet): dispatchDecodedPacket(packet)
+        case .failure: checkAndHandleEngineError(message)
         }
+    }
 
-        guard let type = SocketEnginePacketType(rawValue: message.first?.wholeNumberValue ?? -1) else {
-            checkAndHandleEngineError(message)
-
-            return
-        }
-
-        switch type {
+    /// Called on engineQueue; lifecycle processing deliberately stops at CLOSE.
+    func dispatchDecodedPacket(_ packet: SocketEnginePacket) {
+        guard !closed else { return }
+        let text: String
+        if case .text(let value) = packet.data { text = value } else { text = "" }
+        switch packet.type {
         case .message:
-            handleMessage(String(message.dropFirst()))
-        case .noop:
-            handleNOOP()
-        case .ping:
-            handlePing(with: message)
-        case .pong:
-            handlePong(with: message)
-        case .open:
-            handleOpen(openData: String(message.dropFirst()))
-        case .close:
-            handleClose(message)
-        default:
-            DefaultSocketLogger.Logger.log("Got unknown packet type", type: SocketEngine.logType)
+            if case .binary(let data) = packet.data { client?.parseEngineBinaryData(data) }
+            else { handleMessage(text) }
+        case .noop: handleNOOP()
+        case .ping: handlePing(with: "2" + text)
+        case .pong: handlePong(with: "3" + text)
+        case .open: handleOpen(openData: text)
+        case .close: handleClose("1" + text)
+        case .upgrade: break
+        }
+    }
+
+    func dispatchPollingPayload(_ payload: String) {
+        for packet in SocketEnginePacketCodec.decodePayload(payload) {
+            guard !closed else { break }
+            switch packet {
+            case .success(let value): dispatchDecodedPacket(value)
+            case .failure: checkAndHandleEngineError(payload)
+            }
         }
     }
 
@@ -966,6 +993,12 @@ open class SocketEngine: NSObject,
                 extraHeaders = headers
             case let .sessionDelegate(delegate):
                 sessionDelegate = delegate
+            case let .transports(transports):
+                self.transports = transports
+            case let .tryAllTransports(enabled):
+                tryAllTransports = enabled
+            case let .rememberUpgrade(enabled):
+                rememberUpgrade = enabled
             case let .forcePolling(force):
                 forcePolling = force
             case let .forceWebsockets(force):
@@ -974,8 +1007,6 @@ open class SocketEngine: NSObject,
                 socketPath = path
             case let .secure(secure):
                 self.secure = secure
-            case let .selfSigned(selfSigned):
-                self.selfSigned = selfSigned
             case let .security(policy):
                 tlsConfiguration = policy
             case let .webSocketOptions(options):
@@ -984,16 +1015,10 @@ open class SocketEngine: NSObject,
                 bufferLimits = limits
             case let .invalidConfiguration(reason):
                 configurationError = reason
-            case .compress:
-                self.compress = true
             case let .timestampRequests(stamp):
                 timestampRequests = stamp
             case let .timestampParam(param):
                 timestampParam = param
-            case let .enableSOCKSProxy(enable):
-                self.enableSOCKSProxy = enable
-            case .useCustomEngine:
-                self.useCustomEngine = false // Deprecated compatibility option; native is the only backend.
             default:
                 continue
             }
@@ -1040,23 +1065,45 @@ open class SocketEngine: NSObject,
     }
 
     private func _write(_ msg: String, withType type: SocketEnginePacketType,
-                        withData data: [Data], completion: (() -> Void)?) {
+                        withData data: [Data], rawBinary: Bool = false, completion: (() -> Void)?) {
         // JS `sendPacket` returns early once `readyState` is "closing"/"closed",
         // so a `send()` after `close()` never produces a packet — including
         // while the close is deferred behind an upgrade.
         guard connected, !closed, pendingCloseReason == nil else { completion?(); return }
         guard !probing else {
-            probeWait.append((msg, type, data, completion))
+            probeWait.append((msg, type, data, rawBinary, completion))
             return
         }
-        if polling { sendPollMessage(msg, withType: type, withData: data, completion: completion) }
+        sendPreparedWrite(msg, withType: type, withData: data, rawBinary: rawBinary, completion: completion)
+    }
+
+    /// Sends one raw Engine.IO binary message, without a Socket.IO attachment header.
+    open func send(_ data: Data, completion: (() -> Void)? = nil) {
+        engineQueue.socketAsync {
+            self._write("", withType: .message, withData: [data], rawBinary: true, completion: completion)
+        }
+    }
+
+    private func sendPreparedWrite(_ msg: String, withType type: SocketEnginePacketType,
+                                   withData data: [Data], rawBinary: Bool, completion: (() -> Void)?) {
+        if rawBinary {
+            let frames = data.map {
+                SocketEnginePacketCodec.encode(.init(type: .message, data: .binary($0)), supportsBinary: !polling && !forceBase64)
+            }
+            if polling {
+                for frame in frames {
+                    if case .text(let value) = frame { postWait.append((value, completion)) }
+                }
+                if !waitingForPost { flushWaitingForPost() }
+            } else { sendWebSocketBatch(frames, completion: completion) }
+        } else if polling { sendPollMessage(msg, withType: type, withData: data, completion: completion) }
         else { sendWebSocketMessage(msg, withType: type, withData: data, completion: completion) }
     }
 
     private func websocketDidConnect() {
         // RFC6455 open is not Engine.IO open. In forced-WebSocket mode only the
         // subsequent Engine.IO `0{...}` handshake may set `connected`.
-        guard !forceWebsockets else { return }
+        guard polling else { return }
         probing = true
         probeWebSocket()
         let attempt = generation
@@ -1072,6 +1119,8 @@ open class SocketEngine: NSObject,
     private func websocketDidDisconnect(error: Error?, reason: String? = nil, reportSendError: Bool = false,
                                         closeCode: Int? = nil) {
         guard !closed else { return }
+        if !connected, error != nil, tryNextOpeningTransport() { return }
+        Self.upgradeMemory.succeeded = false
         let failed = webSocketTransport
         webSocketTransport = nil
         wsConnected = false
@@ -1085,6 +1134,10 @@ open class SocketEngine: NSObject,
             // polling connection. Resume both paused write and poll paths.
             probing = false
             fastUpgrade = false
+            client?.engineDidFailUpgrade?(error: SocketTransportError(
+                transport: "websocket", operation: "upgrade", closeCode: closeCode,
+                closeReason: reason, underlyingError: error))
+            guard !closed else { return }
             if pendingCloseReason != nil {
                 // JS `waitForUpgrade()` also resumes on `upgradeError`: the
                 // packets held for the upgrade go out over polling, followed by
@@ -1183,10 +1236,6 @@ open class SocketEngine: NSObject,
         connected = value
     }
 
-    func setClosed(_ value: Bool) {
-        closed = value
-    }
-
     func setFastUpgrade(_ value: Bool) {
         fastUpgrade = value
     }
@@ -1280,17 +1329,17 @@ private final class RetiringPollingSender {
     }
 }
 
-extension SocketEngine {
-    // MARK: URLSessionDelegate methods
-
-    /// Delegate called when the session becomes invalid.
-    public func URLSession(session: URLSession, didBecomeInvalidWithError error: NSError?) {
-        DefaultSocketLogger.Logger.error("Engine URLSession became invalid", type: "SocketEngine")
-
-        didError(reason: "Engine URLSession became invalid")
-    }
-}
-
 enum EngineError: Error {
     case canceled
+}
+
+/// JS shares prior WebSocket success across Engine.IO instances. Guard the
+/// native counterpart because engines may run on different serial queues.
+private final class SocketUpgradeMemory: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var succeeded: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return value }
+        set { lock.lock(); value = newValue; lock.unlock() }
+    }
 }

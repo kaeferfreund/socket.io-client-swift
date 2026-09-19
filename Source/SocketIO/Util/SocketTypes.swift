@@ -83,7 +83,7 @@ public typealias NormalCallback = ([Any], SocketAckEmitter) -> ()
 public typealias Post = (msg: String, completion: (() -> ())?)
 
 typealias JSON = [String: Any]
-typealias Probe = (msg: String, type: SocketEnginePacketType, data: [Data], completion: (() -> ())?)
+typealias Probe = (msg: String, type: SocketEnginePacketType, data: [Data], rawBinary: Bool, completion: (() -> ())?)
 typealias ProbeWaitQueue = [Probe]
 
 enum Either<E, V> {
@@ -124,7 +124,6 @@ internal extension DispatchQueue {
         asyncAfter(deadline: deadline) { work.run() }
     }
 
-    func socketAsync(execute work: DispatchWorkItem) { async(execute: work) }
     func socketAsyncAfter(deadline: DispatchTime, execute work: DispatchWorkItem) {
         asyncAfter(deadline: deadline, execute: work)
     }

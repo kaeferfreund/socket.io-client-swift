@@ -667,7 +667,6 @@ final class CaptureEngine: SocketEngineSpec {
     /// which cannot show that a flushed buffer preserved its order.
     private(set) var sentPackets = [String]()
     let closed = false
-    let compress = false
     let connected = true
     var connectParams: [String: Any]? = nil
     let cookies: [HTTPCookie]? = nil
@@ -683,7 +682,6 @@ final class CaptureEngine: SocketEngineSpec {
     let urlPolling = URL(string: "http://localhost/")!
     let urlWebSocket = URL(string: "http://localhost/")!
 
-    let websocket = false
 
     required init(client: SocketEngineClient, url: URL, options: [String: Any]?) {
         self.client = client
@@ -703,5 +701,47 @@ final class CaptureEngine: SocketEngineSpec {
         lastSent = msg
         sentPackets.append(msg)
         completion?()
+    }
+}
+
+extension SocketStateRecoveryTest {
+    func testInitialReceiveBufferPreservesBinaryAckAndFlushesBeforeSendAndConnect() throws {
+        let engine = MockEngine()
+        manager.engine = engine
+        socket.setTestStatus(.connecting)
+        XCTAssertNil(socket._pid)
+        let bytes = Data([0, 1, 255])
+        var order: [String] = []
+        socket.on("early") { data, ack in
+            XCTAssertEqual(data.first as? Data, bytes)
+            order.append("receive")
+            ack.with("received")
+        }
+        engine.onWrite = { _, _ in order.append("write") }
+        socket.on(clientEvent: .connect) { _, _ in order.append("connect") }
+        socket.emit("outgoing")
+        socket.handlePacket(SocketPacket(type: .binaryEvent, data: ["early", bytes], id: 42, nsp: "/", placeholders: 0))
+        XCTAssertTrue(order.isEmpty)
+        socket.didConnect(toNamespace: "/", payload: ["sid": "first"])
+        XCTAssertEqual(order.first, "receive")
+        XCTAssertEqual(order.last, "connect")
+        // Ack emit may enqueue on handleQueue; wait for it before inspecting frames.
+        let settled = expectation(description: "ACK sent")
+        manager.handleQueue.socketAsync { settled.fulfill() }
+        wait(for: [settled], timeout: 3)
+        let packets = try engine.sentPackets.map { try manager.parseString($0.0) }
+        XCTAssertTrue(packets.contains { $0.type == .ack && $0.id == 42 && $0.data.first as? String == "received" })
+        XCTAssertEqual(packets.filter { $0.type == .event }.map { $0.event }, ["outgoing"])
+    }
+
+    func testInitialReceiveBufferIsDiscardedAfterAuthenticationRejection() {
+        socket.setTestStatus(.connecting)
+        var calls = 0
+        socket.on("early") { _, _ in calls += 1 }
+        socket.handlePacket(SocketPacket(type: .event, data: ["early", "old session"], id: -1, nsp: "/", placeholders: 0))
+        socket.handlePacket(SocketPacket(type: .error, data: [["message": "denied"]], id: -1, nsp: "/", placeholders: 0))
+        XCTAssertEqual(socket.status, .notConnected)
+        socket.didConnect(toNamespace: "/", payload: ["sid": "new identity"])
+        XCTAssertEqual(calls, 0)
     }
 }

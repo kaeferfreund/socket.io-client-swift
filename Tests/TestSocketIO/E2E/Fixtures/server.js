@@ -268,6 +268,7 @@ io.engine.on("connection", (rawSocket) => {
 });
 
 io.on("connection", (socket) => {
+  socket.on("hi", () => socket.emit("hi"));
   // Read the receiving namespace's identity, never echo a caller-provided ID.
   socket.on("server-socket-id", (...args) => {
     const ack = args[args.length - 1];
@@ -311,6 +312,21 @@ io.on("connection", (socket) => {
     socket.emit("false", false);
   });
 
+  // Original client-test direction: the server requests an acknowledgement.
+  socket.on("parity-request-ack", () => {
+    socket.emit("parity-server-ack", (number, object) => {
+      socket.emit("parity-ack-result", number === 5 && object?.test === true);
+    });
+  });
+  socket.on("parity-get-utf8", () => {
+    for (const value of ["てすと", "Я Б Г Д Ж Й", "Ä ä Ü ü ß", "utf8 — string", "utf8 — string"]) {
+      socket.emit("parity-utf8", value);
+    }
+  });
+  socket.on("parity-binary", (value, ack) => {
+    if (typeof ack === "function") ack(value);
+  });
+
   // JS parity: `socket.on("echo", (arg, cb) => cb(arg))` from the JS support
   // server. Used by the ported ack scenarios.
   socket.on("echo", (...args) => {
@@ -338,6 +354,19 @@ io.on("connection", (socket) => {
   socket.on("getAckDate", (...args) => {
     const cb = args[args.length - 1];
     if (typeof cb === "function") { cb(new Date()); }
+  });
+
+  // Original connection.ts binary scenarios; acknowledge only if the server
+  // decoded native binary data and all surrounding JSON fields survived.
+  socket.on("doge", () => socket.emit("doge", Buffer.from("asdfasdf", "utf8")));
+  socket.on("getbin", () => socket.emit("takebin", Buffer.from("asdfasdf", "utf8")));
+  socket.on("buffa", (value) => {
+    if (Buffer.isBuffer(value)) socket.emit("buffack");
+  });
+  socket.on("jsonbuff", (value) => {
+    if (value?.hello === "lol" && Buffer.isBuffer(value.message) && value.goodbye === "gotcha") {
+      socket.emit("jsonbuff-ack");
+    }
   });
 
   // JS parity: expect receiving buffers in order (connection.ts

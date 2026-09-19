@@ -16,7 +16,6 @@ import Foundation
 final class MockEngine: NSObject, SocketEngineSpec {
     weak var client: SocketEngineClient?
     var closed: Bool = false
-    var compress: Bool = false
     var connected: Bool = true
     var connectParams: [String: Any]?
     var cookies: [HTTPCookie]?
@@ -32,9 +31,6 @@ final class MockEngine: NSObject, SocketEngineSpec {
     var urlPolling: URL = URL(string: "http://localhost/")!
     var urlWebSocket: URL = URL(string: "ws://localhost/")!
 
-    var websocket: Bool = true
-
-
     /// Test-controlled writable signal. Defaults to `true` (most tests want
     /// non-volatile-drop behavior); flip to `false` to exercise the volatile gate.
     var writable: Bool = true
@@ -45,6 +41,7 @@ final class MockEngine: NSObject, SocketEngineSpec {
     /// method on `SocketEngineSpec` that routes through `write` (the protocol
     /// requirement), so all sent packets are captured here.
     var sentPackets: [(String, [Data])] = []
+    var onWrite: ((String, [Data]) -> Void)?
 
     required convenience init(client: SocketEngineClient, url: URL, options: [String: Any]?) {
         self.init()
@@ -72,6 +69,7 @@ final class MockEngine: NSObject, SocketEngineSpec {
                withData data: [Data],
                completion: (() -> ())?) {
         sentPackets.append((msg, data))
+        onWrite?(msg, data)
         completion?()
     }
 }

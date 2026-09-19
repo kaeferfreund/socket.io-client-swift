@@ -40,7 +40,7 @@ jobs:
           p.write_text(text)
           PY
           git diff --check
-          git add Package.swift Socket.IO-Client-Swift.podspec Socket.IO-Client-Swift.xcodeproj/project.pbxproj README.md Documentation/SocketIO4Swift6Migration.md Tests/TestSocketIO/SocketParseErrorTest.swift
+          git add -f Package.swift Socket.IO-Client-Swift.podspec Socket.IO-Client-Swift.xcodeproj/project.pbxproj README.md Documentation/SocketIO4Swift6Migration.md Tests/TestSocketIO/SocketParseErrorTest.swift
           git config user.name 'Manuel'
           git config user.email 'manuel.cargnel@rwth-aachen.de'
           git commit -m 'fix: align watchOS minimum with Xcode 27 and migrate XCTest waits'

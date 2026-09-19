@@ -1704,6 +1704,244 @@
           "symbol": "JSParityE2ETest.testOriginalOutgoingCatchAllPayloadAndPrependOrder"
         }
       ]
+    },
+    {
+      "id": "JS-014",
+      "upstream_ids": [
+        "JS-014"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Default reconnect is not overridden: a real established server transport is dropped; the socket observes disconnect, successful reconnect and namespace connect in that order, with a working server ACK afterward. Native explicit connect replaces JS autoConnect; server-side transport termination replaces engine.close and a connect barrier replaces the fixed 100 ms delay.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testNoErrorEventWhenAnEstablishedConnectionDrops"
+        }
+      ]
+    },
+    {
+      "id": "JS-016",
+      "upstream_ids": [
+        "JS-016"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Initial connect triggers disconnect; its callback calls connect reentrantly. After that manual connection a real transport drop must produce reconnect(attempt 1) before the namespace rejoins. Three total connects are asserted. Native socket lifecycle events expose manager events; a real handshake barrier replaces the JS 100 ms delay before engine termination.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testReconnectAutomaticallyAfterReconnectingManually"
+        }
+      ]
+    },
+    {
+      "id": "JS-017",
+      "upstream_ids": [
+        "JS-017"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real connectTimeout(0), two retries and reconnectFailed; connect is invoked inside the first reconnectFailed callback, then the second cycle must fail with a fresh two-attempt budget (four total attempts, two failures). Native one-second backoff replaces JS 10 ms and manager events are observed on the socket.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testAttemptReconnectsAfterAFailedReconnect"
+        }
+      ]
+    },
+    {
+      "id": "JS-018",
+      "upstream_ids": [
+        "JS-018"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real timeout(0), three retries, jitter 0.2: measure monotonic elapsed time from each opening error to reconnectAttempt, assert exactly [1,2,3], strictly increasing three actual intervals, then reconnectFailed. Native whole-second backoff scales the original 100 ms intervals by ten; the default cap does not truncate the third interval. Manager error is observed through native connectError.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testReconnectDelayIncreasesAcrossThreeRealTimeouts"
+        }
+      ]
+    },
+    {
+      "id": "JS-019",
+      "upstream_ids": [
+        "JS-019"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real opening timeout must occur, disconnect inside its error callback, then no reconnectAttempt over a window longer than the initial jittered retry delay. Native connectError exposes the opening error; seconds replace JS millisecond timing and the namespace is irrelevant because timeout precedes joining.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testNoReconnectWhenForceClosedDuringTimeout"
+        }
+      ]
+    },
+    {
+      "id": "JS-020",
+      "upstream_ids": [
+        "JS-020"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real timeout(0); disconnect in first reconnectAttempt, observe long enough for another retry, assert exactly one attempt. Native seconds scale the observation window and socket events expose manager events.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testStopReconnectingWhenForceClosed"
+        }
+      ]
+    },
+    {
+      "id": "JS-021",
+      "upstream_ids": [
+        "JS-021"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real timeout(0); disconnect and connect in the same first reconnectAttempt callback; await and assert a subsequent attempt. Native socket event API and seconds replace manager emitter and millisecond backoff; teardown closes the retrying socket.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testReconnectAfterStoppingReconnection"
+        }
+      ]
+    },
+    {
+      "id": "JS-022",
+      "upstream_ids": [
+        "JS-022"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Shared manager with root and /asd first connected; terminate real transport, disconnect root inside reconnectAttempt, await /asd rejoining, then assert root still has exactly one connect while /asd has reconnected. Native socket lifecycle events expose manager events; handshake barriers and a server-side transport kill replace timed engine.close.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testStopReconnectingOnOneSocketButNotTheOther"
+        }
+      ]
+    },
+    {
+      "id": "JS-023",
+      "upstream_ids": [
+        "JS-023"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real timeout(0), reconnectAttempts(2), await reconnectFailed and assert attempts exactly [1,2]. Native socket exposes manager lifecycle events; one-second backoff replaces JS 10 ms; namespace name cannot affect an opening timeout.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testReconnectTwiceThenFailWithImmediateTimeout"
+        }
+      ]
+    },
+    {
+      "id": "JS-024",
+      "upstream_ids": [
+        "JS-024"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original executable assertions: timeout(0), reconnectAttempts(2), reconnectAttempt carries sequential numbers 1 then 2, and reconnectFailed ends the cycle with exactly two attempts. All are checked together against real timers. Native socket lifecycle subscription replaces the JS manager event emitter, not an exclusion.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testReconnectTwiceThenFailWithImmediateTimeout"
+        }
+      ]
+    },
+    {
+      "id": "JS-025",
+      "upstream_ids": [
+        "JS-025"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original repeats the timeout(0), two attempts, sequential 1-based reconnectAttempt payload and reconnectFailed scenario. The native test asserts the exact [1,2] sequence at failure with real opening timers; socket subscriptions expose manager events.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testReconnectTwiceThenFailWithImmediateTimeout"
+        }
+      ]
+    },
+    {
+      "id": "JS-026",
+      "upstream_ids": [
+        "JS-026"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Connect real /valid with reconnect enabled and default opening timeout, then observe beyond the first retry interval: connected status and zero reconnectAttempt callbacks. Native seconds scale the original observation period.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testNoReconnectAttemptWhenConnectingToCorrectPort"
+        }
+      ]
+    },
+    {
+      "id": "JS-030",
+      "upstream_ids": [
+        "JS-030"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real refused port produces reconnectError after the first attempt; disable reconnects in that error callback (not reconnectAttempt), then assert that callback ran and only one attempt occurred over the observation window. Native socket emitter carries manager events and seconds replace JS millisecond timing.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testStopTryingToReconnect"
+        }
+      ]
+    },
+    {
+      "id": "JS-031",
+      "upstream_ids": [
+        "JS-031"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real refused localhost port with retries enabled and budget two: await reconnectFailed and assert exactly two attempts. The concrete unused port and namespace spelling differ; connection refusal occurs before namespace join. Native socket receives manager events.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testReconnectTwiceThenFailWithIncorrectAddress"
+        }
+      ]
+    },
+    {
+      "id": "JS-032",
+      "upstream_ids": [
+        "JS-032"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real refused localhost port with reconnects false must report terminal failure, then zero retry attempts throughout an observation window longer than the configured retry interval. Native terminal error/disconnect representations are accepted only with a non-nil reason.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testNoReconnectWhenDisabledWithIncorrectPort"
+        }
+      ]
+    },
+    {
+      "id": "JS-033",
+      "upstream_ids": [
+        "JS-033"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real refused port and two-attempt budget: asynchronously open another namespace during the initial backoff; await reconnectFailed and assert second namespace was opened and exactly two attempts occurred. Native explicit connect replaces JS manager autoConnect; delay is scaled within the initial native backoff.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testReconnectTwiceAfterOpeningAnotherSocketAsynchronously"
+        }
+      ]
+    },
+    {
+      "id": "JS-046",
+      "upstream_ids": [
+        "JS-046"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "AutoConnect enabled: first connect disconnects; inside that disconnect callback fetch the same namespace, assert object identity and active true immediately, then await its second connect. Native manager.defaultSocket uses the same namespace cache as socket(forNamespace:).",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testReopenACachedSocket"
+        }
+      ]
     }
   ],
   "remaining_review": {

@@ -572,37 +572,29 @@ final class JSParityE2ETest: XCTestCase {
 
     func testReconnectAutomaticallyAfterReconnectingManually() throws {
         let manager = makeManager(.reconnectWait(1))
-        let socket = manager.socket(forNamespace: "/")
-        connect(socket)
-
-        let disconnected = expectation(description: "manual disconnect")
-        disconnected.assertForOverFulfill = false
-        socket.on(clientEvent: .disconnect) { _, _ in disconnected.fulfill() }
-        socket.disconnect()
-        wait(for: [disconnected], timeout: 5)
-
-        connect(socket)
-
-        // JS-aligned since 17.0.0: the drop reports `.disconnect(reason)`, the
-        // successful retry reports `.reconnect(attempt)` and the re-joined
-        // namespace then reports `.connect`.
+        let socket = manager.defaultSocket
+        let manuallyReconnected = expectation(description: "manual reconnect from disconnect callback")
         var connects = 0
-        var transportKilled = false
-        let cameBack = expectation(description: "reconnected after transport drop")
-        cameBack.assertForOverFulfill = false
         socket.on(clientEvent: .connect) { _, _ in
             connects += 1
-            if transportKilled {
-                cameBack.fulfill()
-            }
+            if connects == 1 { socket.disconnect() }
+            if connects == 2 { manuallyReconnected.fulfill() }
         }
-        let connectsBeforeKill = connects
-        try killTransport(ofSocketWithId: XCTUnwrap(socket.sid))
-        transportKilled = true
-        wait(for: [cameBack], timeout: 15)
+        socket.once(clientEvent: .disconnect) { _, _ in socket.connect() }
+        socket.connect()
+        wait(for: [manuallyReconnected], timeout: 10)
 
+        let reconnect = expectation(description: "automatic reconnect event")
+        socket.once(clientEvent: .reconnect) { data, _ in
+            XCTAssertEqual(data.first as? Int, 1)
+            reconnect.fulfill()
+        }
+        let joined = expectation(description: "namespace rejoins after automatic reconnect")
+        socket.once(clientEvent: .connect) { _, _ in joined.fulfill() }
+        try killTransport(ofSocketWithId: XCTUnwrap(socket.sid))
+        wait(for: [reconnect, joined], timeout: 15, enforceOrder: true)
+        XCTAssertEqual(connects, 3)
         XCTAssertEqual(socket.status, .connected)
-        XCTAssertGreaterThan(connects, connectsBeforeKill)
     }
 
     // MARK: socket.ts — "should properly disconnect then reconnect"
@@ -758,8 +750,8 @@ final class JSParityE2ETest: XCTestCase {
 
         var attempts = 0
         var stopped = false
-        socket.on(clientEvent: .reconnectAttempt) { _, _ in
-            attempts += 1
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in attempts += 1 }
+        socket.on(clientEvent: .reconnectError) { _, _ in
             if !stopped {
                 stopped = true
                 self.manager.reconnects = false
@@ -769,6 +761,7 @@ final class JSParityE2ETest: XCTestCase {
 
         settle(4)
 
+        XCTAssertTrue(stopped, "The reconnect attempt must actually fail before disabling retries")
         XCTAssertEqual(attempts, 1, "Disabling reconnection must stop the loop after the first attempt")
         XCTAssertNotEqual(socket.status, .connected)
     }
@@ -928,8 +921,8 @@ final class JSParityE2ETest: XCTestCase {
         let manager = makeManager(.connectTimeout(0), .reconnectAttempts(2), .reconnectWait(1))
         let socket = manager.socket(forNamespace: "/")
 
-        var attempts = 0
-        socket.on(clientEvent: .reconnectAttempt) { _, _ in attempts += 1 }
+        var attempts = [Int]()
+        socket.on(clientEvent: .reconnectAttempt) { data, _ in attempts.append(data.first as? Int ?? -1) }
 
         let failed = expectation(description: "reconnect failed")
         failed.assertForOverFulfill = false
@@ -939,7 +932,7 @@ final class JSParityE2ETest: XCTestCase {
         socket.connect()
         wait(for: [failed], timeout: 15)
 
-        XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(attempts, [1, 2])
     }
 
     // MARK: connection.ts — "should attempt reconnects after a failed reconnect"
@@ -956,25 +949,53 @@ final class JSParityE2ETest: XCTestCase {
         socket.on(clientEvent: .reconnectAttempt) { _, _ in attempts += 1 }
 
         var failures = 0
-        let firstFailed = expectation(description: "first reconnect failed")
-        firstFailed.assertForOverFulfill = false
         let secondFailed = expectation(description: "second reconnect failed")
         secondFailed.assertForOverFulfill = false
         socket.on(clientEvent: .reconnectFailed) { _, _ in
             failures += 1
             if failures == 1 {
-                firstFailed.fulfill()
+                XCTAssertEqual(attempts, 2)
+                socket.connect()
             } else if failures == 2 {
                 secondFailed.fulfill()
             }
         }
         socket.connect()
-        wait(for: [firstFailed], timeout: 15)
-        XCTAssertEqual(attempts, 2, "The first round must spend exactly its budget of 2 attempts")
-
-        socket.connect()
         wait(for: [secondFailed], timeout: 15)
+        XCTAssertEqual(failures, 2)
         XCTAssertEqual(attempts, 4, "The second round must get a fresh budget of 2 attempts")
+    }
+
+    // MARK: connection.ts — "reconnect delay should increase every time"
+
+    func testReconnectDelayIncreasesAcrossThreeRealTimeouts() {
+        // The native option uses whole seconds. Keep the original 0.2 jitter
+        // and three exponentially increasing intervals, scaled from 100 ms.
+        let manager = makeManager(.connectTimeout(0), .reconnectAttempts(3),
+                                  .reconnectWait(1), .randomizationFactor(0.2))
+        let socket = manager.defaultSocket
+        var started: UInt64?
+        var delays = [Double]()
+        var attemptNumbers = [Int]()
+        socket.on(clientEvent: .connectError) { data, _ in
+            XCTAssertEqual(data.first as? String, "timeout")
+            started = DispatchTime.now().uptimeNanoseconds
+        }
+        socket.on(clientEvent: .reconnectAttempt) { data, _ in
+            attemptNumbers.append(data.first as? Int ?? -1)
+            guard let started else { return XCTFail("Retry must follow an opening timeout") }
+            delays.append(Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000_000)
+        }
+        let failed = expectation(description: "three attempts exhaust the reconnect budget")
+        socket.once(clientEvent: .reconnectFailed) { _, _ in failed.fulfill() }
+        socket.connect()
+        wait(for: [failed], timeout: 15)
+        XCTAssertEqual(attemptNumbers, [1, 2, 3])
+        XCTAssertEqual(delays.count, 3)
+        guard delays.count == 3 else { return }
+        XCTAssertGreaterThan(delays[0], 0)
+        XCTAssertGreaterThan(delays[1], delays[0])
+        XCTAssertGreaterThan(delays[2], delays[1])
     }
 
     // MARK: connection.ts — "should not reconnect when force closed"
@@ -1059,15 +1080,12 @@ final class JSParityE2ETest: XCTestCase {
 
         var attempts = 0
         var openedSecond = false
-        socket.on(clientEvent: .reconnectAttempt) { _, _ in
-            attempts += 1
-            if !openedSecond {
-                openedSecond = true
-                DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.5) {
-                    let other = self.manager.socket(forNamespace: "/asd")
-                    other.connect()
-                }
-            }
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in attempts += 1 }
+        // Open the other namespace during the initial backoff, as in the
+        // original test, rather than after the first retry has already begun.
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.1) {
+            openedSecond = true
+            self.manager.socket(forNamespace: "/asd").connect()
         }
 
         let failed = expectation(description: "reconnect failed")
@@ -1078,6 +1096,7 @@ final class JSParityE2ETest: XCTestCase {
         socket.connect()
         wait(for: [failed], timeout: 15)
 
+        XCTAssertTrue(openedSecond)
         XCTAssertEqual(attempts, 2, "Opening a second socket must not change the first socket's attempt budget")
     }
 
@@ -1087,28 +1106,21 @@ final class JSParityE2ETest: XCTestCase {
     /// disconnected re-connects it and hands back the same instance.
     func testReopenACachedSocket() {
         let manager = makeManager(.autoConnect(true))
-        let socket = manager.socket(forNamespace: "/")
-
-        let connected = expectation(description: "connect")
-        connected.assertForOverFulfill = false
-        socket.on(clientEvent: .connect) { _, _ in connected.fulfill() }
-        wait(for: [connected], timeout: 5)
-
-        let disconnected = expectation(description: "disconnect")
-        disconnected.assertForOverFulfill = false
-        socket.on(clientEvent: .disconnect) { _, _ in disconnected.fulfill() }
-        socket.disconnect()
-        wait(for: [disconnected], timeout: 5)
-
-        let reconnected = expectation(description: "reconnect")
-        reconnected.assertForOverFulfill = false
-        socket.on(clientEvent: .connect) { _, _ in reconnected.fulfill() }
-
-        let again = manager.socket(forNamespace: "/")
-        XCTAssertTrue(again === socket, "The manager has to hand back the cached socket")
-        XCTAssertTrue(again.active, "Fetching an inactive socket with autoConnect must reactivate it")
-
-        wait(for: [reconnected], timeout: 5)
+        let socket = manager.defaultSocket
+        let reconnected = expectation(description: "cached namespace reconnected")
+        var connects = 0
+        socket.on(clientEvent: .connect) { _, _ in
+            connects += 1
+            if connects == 1 { socket.disconnect() }
+            if connects == 2 { reconnected.fulfill() }
+        }
+        socket.once(clientEvent: .disconnect) { _, _ in
+            let again = manager.socket(forNamespace: "/")
+            XCTAssertTrue(again === socket)
+            XCTAssertTrue(again.active)
+        }
+        wait(for: [reconnected], timeout: 10)
+        XCTAssertEqual(connects, 2)
     }
 
     // MARK: engine.io-client — Polling.uri() cache buster

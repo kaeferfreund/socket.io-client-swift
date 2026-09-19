@@ -37,6 +37,10 @@ extendedKeyUsage = serverAuth
 subjectAltName = DNS:localhost
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid,issuer
+[ client ]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = clientAuth
 `;
 writeFileSync(join(directory, 'openssl.cnf'), config);
 writeFileSync(join(directory, 'index'), '');
@@ -63,3 +67,13 @@ openssl('ca', '-batch', '-notext', '-config', 'openssl.cnf', '-extensions', 'ser
 for (const name of ['ca', 'leaf', 'expired']) {
   openssl('x509', '-in', `${name}.pem`, '-outform', 'DER', '-out', `${name}.der`);
 }
+
+openssl('req', '-new', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-subj', '/CN=SocketIO test client',
+        '-keyout', 'client.key', '-out', 'client.csr');
+openssl('ca', '-batch', '-notext', '-config', 'openssl.cnf', '-extensions', 'client',
+        '-in', 'client.csr', '-out', 'client.pem', '-startdate', stamp(new Date(now - 3600000)),
+        '-enddate', stamp(new Date(now + 7 * 86400000)));
+// Explicit portable PKCS#12 algorithms supported by Apple Security as well as OpenSSL 3.
+openssl('pkcs12', '-export', '-inkey', 'client.key', '-in', 'client.pem',
+        '-out', 'client.p12', '-passout', 'pass:fixture', '-keypbe', 'PBE-SHA1-3DES',
+        '-certpbe', 'PBE-SHA1-3DES', '-macalg', 'sha1');

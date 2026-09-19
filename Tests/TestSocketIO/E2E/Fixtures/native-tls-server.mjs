@@ -10,6 +10,11 @@ const certificate = process.env.NATIVE_TLS_EXPIRED === '1' ? 'expired' : 'leaf';
 const server = https.createServer({
   key: readFileSync(join(directory, 'leaf.key')),
   cert: readFileSync(join(directory, `${certificate}.pem`)),
+  ...(process.env.NATIVE_TLS_CLIENT_AUTH === '1' ? {
+    ca: readFileSync(join(directory, 'ca.pem')),
+    requestCert: true,
+    rejectUnauthorized: true,
+  } : {}),
 });
 const io = new Server(server, { transports: ['polling', 'websocket'] });
 io.on('connection', socket => {

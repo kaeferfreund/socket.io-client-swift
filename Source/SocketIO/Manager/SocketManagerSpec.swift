@@ -46,7 +46,7 @@ import Foundation
 public protocol SocketManagerSpec : SocketEngineClient {
     // MARK: Properties
 
-    /// Returns the socket associated with the default namespace ("/").
+    /// Returns the socket for the URL path namespace, or "/" when there is no path.
     var defaultSocket: SocketIOClient { get }
 
     /// The engine for this manager.

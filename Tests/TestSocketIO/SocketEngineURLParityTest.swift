@@ -85,3 +85,44 @@ final class SocketEngineURLParityTest: XCTestCase {
         XCTAssertEqual(engine.urlPolling.query, "transport=polling&b64=1&token=original&EIO=4")
     }
 }
+
+
+extension SocketEngineURLParityTest {
+    func testConnectParamsEscapeCrashCharactersInKeysAndValues() {
+        for (raw, encoded) in [("<", "%3C"), (">", "%3E"), ("\\", "%5C"), ("`", "%60")] {
+            let engine = self.engine("https://localhost", .connectParams([raw: raw]))
+            for url in [engine.urlPolling, engine.urlWebSocket] {
+                let components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+                XCTAssertTrue(components.percentEncodedQuery!.contains("&\(encoded)=\(encoded)&"))
+                XCTAssertEqual(components.queryItems?.first(where: { $0.name == raw })?.value, raw)
+            }
+        }
+    }
+
+    func testConnectParamsMatchEncodeURIComponent() {
+        let input = "AZaz09-_.!~*'() /?:@&=+$,#[]%\"{}^|<>\\`é😀\n"
+        let encoded = "AZaz09-_.!~*'()%20%2F%3F%3A%40%26%3D%2B%24%2C%23%5B%5D%25%22%7B%7D%5E%7C%3C%3E%5C%60%C3%A9%F0%9F%98%80%0A"
+        let engine = self.engine("https://localhost", .connectParams(["value": input]))
+        for url in [engine.urlPolling, engine.urlWebSocket] {
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+            XCTAssertTrue(components.percentEncodedQuery!.contains("&value=\(encoded)&"))
+            XCTAssertEqual(components.queryItems?.first(where: { $0.name == "value" })?.value, input)
+        }
+    }
+
+    func testURLPathSelectsNamespaceWithoutChangingTransportPathOrExplicitSockets() {
+        for (path, namespace) in [("", "/"), ("/", "/"), ("/admin", "/admin"),
+                                  ("/admin/", "/admin/"), ("/a%2Fb", "/a%2Fb")] {
+            let engine = self.engine("https://localhost" + path + "?token=x#ignored", .path("/custom/"))
+            let manager = self.manager!
+            XCTAssertEqual(manager.defaultSocket.nsp, namespace)
+            XCTAssertTrue(manager.defaultSocket === manager.socket(forNamespace: namespace))
+            XCTAssertEqual(manager.socket(forNamespace: "/other").nsp, "/other")
+            XCTAssertEqual(manager.socket(forNamespace: "/").nsp, "/")
+            for url in [engine.urlPolling, engine.urlWebSocket] {
+                XCTAssertEqual(URLComponents(url: url, resolvingAgainstBaseURL: false)?.path, "/custom/")
+                XCTAssertTrue(url.absoluteString.contains("token=x"))
+            }
+        }
+    }
+}

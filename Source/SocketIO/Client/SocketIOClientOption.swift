@@ -163,7 +163,13 @@ public enum SocketIOClientOption : ClientOption {
     /// Shared native TLS policy for polling and WebSocket. Normal system trust is the default.
     case security(SocketTLSConfiguration)
 
-    /// Forwards authentication (except server trust), redirect, lifecycle and metrics events.
+    /// Client identity for mutual TLS, shared by polling and WebSocket.
+    /// Create with URLCredential(identity:certificates:persistence:). Sent only
+    /// to the configured HTTPS/WSS host and port; server trust still applies.
+    case clientCertificate(URLCredential)
+
+    /// Forwards authentication (except server trust and configured client certificates),
+    /// redirect, lifecycle and metrics events.
     /// Server trust is always controlled by `security`, never by this delegate.
     case sessionDelegate(URLSessionDelegate)
 
@@ -254,6 +260,8 @@ public enum SocketIOClientOption : ClientOption {
             description = "timestampRequests"
         case .timestampParam:
             description = "timestampParam"
+        case .clientCertificate:
+            description = "clientCertificate"
         case .security:
             description = "security"
         case .sessionDelegate:
@@ -331,6 +339,8 @@ public enum SocketIOClientOption : ClientOption {
             value = timestampRequests
         case let .timestampParam(timestampParam):
             value = timestampParam
+        case let .clientCertificate(credential):
+            value = credential
         case let .security(security):
             value = security
         case let .sessionDelegate(delegate):

@@ -46,6 +46,7 @@ open class SocketEngine: NSObject,
     internal private(set) var pollingPostGroup = DispatchGroup()
     /// Internal test seam; production polling retains the default session configuration.
     internal var pollingSessionConfigurationFactory: () -> URLSessionConfiguration = { .default }
+    private var clientCertificate: URLCredential?
     private var tlsConfiguration: SocketTLSConfiguration = .systemDefault
     private var webSocketOptions = SocketWebSocketOptions()
     /// Pipeline-wide resource policy; only `maximumPollingResponseBytes` is
@@ -501,6 +502,7 @@ open class SocketEngine: NSObject,
             request: request, queue: engineQueue,
             configuration: .ephemeral,
             tlsConfiguration: tlsConfiguration, sessionDelegate: sessionDelegate,
+            clientCertificate: clientCertificate,
             maximumMessageSize: options.maximumMessageSize,
             maximumPendingBytes: options.maximumPendingBytes,
             maximumPendingBatches: options.maximumPendingBatches,
@@ -547,6 +549,14 @@ open class SocketEngine: NSObject,
         if Set(transports).count != transports.count { return "Duplicate transport names" }
         if forcePolling && forceWebsockets { return "forcePolling and forceWebsockets cannot both be true" }
         if tlsConfiguration.requiresTLS && !secure { return "a custom security policy requires https/wss" }
+        if let clientCertificate {
+            guard secure else { return "clientCertificate requires https/wss" }
+            #if canImport(Security)
+            guard clientCertificate.identity != nil else { return "clientCertificate requires a client identity" }
+            #else
+            return "clientCertificate requires Apple's Security framework"
+            #endif
+        }
         return tlsConfiguration.validationError ?? webSocketOptions.validationError
     }
 
@@ -954,7 +964,8 @@ open class SocketEngine: NSObject,
         pingInterval = nil
         pingTimeout = 0
         pendingCloseReason = nil
-        let proxy = SocketSessionDelegateProxy(tlsConfiguration: tlsConfiguration, forwardingDelegate: sessionDelegate)
+        let proxy = SocketSessionDelegateProxy(tlsConfiguration: tlsConfiguration, forwardingDelegate: sessionDelegate,
+                                               clientCertificate: clientCertificate, credentialOrigin: urlPolling)
         proxy.onInvalidation = { [weak self] invalidSession, error in
             guard let self = self, self.session === invalidSession, self.polling, !self.closed,
                   let error = error else { return }
@@ -1007,6 +1018,8 @@ open class SocketEngine: NSObject,
                 socketPath = path
             case let .secure(secure):
                 self.secure = secure
+            case let .clientCertificate(credential):
+                clientCertificate = credential
             case let .security(policy):
                 tlsConfiguration = policy
             case let .webSocketOptions(options):

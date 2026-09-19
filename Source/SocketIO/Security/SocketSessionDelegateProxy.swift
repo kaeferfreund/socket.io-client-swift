@@ -10,6 +10,8 @@ import Security
 /// delegate. Server-trust challenges are reserved for the configured policy;
 /// an external delegate cannot bypass hostname verification or configured pins.
 internal class SocketSessionDelegateProxy: NSObject, URLSessionDataDelegate {
+    private let clientCertificate: URLCredential?
+    private let credentialOrigin: URL?
     internal let tlsConfiguration: SocketTLSConfiguration
     internal weak var forwardingDelegate: URLSessionDelegate?
     internal var onInvalidation: ((URLSession, Error?) -> Void)?
@@ -22,14 +24,34 @@ internal class SocketSessionDelegateProxy: NSObject, URLSessionDataDelegate {
     private let boundedBodyLock = NSLock()
 
     internal init(tlsConfiguration: SocketTLSConfiguration,
-                  forwardingDelegate: URLSessionDelegate?) {
+                  forwardingDelegate: URLSessionDelegate?,
+                  clientCertificate: URLCredential? = nil, credentialOrigin: URL? = nil) {
+        self.clientCertificate = clientCertificate
+        self.credentialOrigin = credentialOrigin
         self.tlsConfiguration = tlsConfiguration
         self.forwardingDelegate = forwardingDelegate
     }
 
-    private func handleTrust(_ challenge: URLAuthenticationChallenge,
-                             completion: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) -> Bool {
+    private func handleAuthentication(_ challenge: URLAuthenticationChallenge,
+                                      completion: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) -> Bool {
         #if canImport(Security)
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate,
+           let clientCertificate {
+            let space = challenge.protectionSpace
+            // A redirect must not disclose the configured identity to another origin.
+            guard let origin = credentialOrigin,
+                  ["https", "wss"].contains(origin.scheme?.lowercased() ?? ""),
+                  ["https", "wss"].contains(space.protocol?.lowercased() ?? ""),
+                  origin.host?.lowercased() == space.host.lowercased(),
+                  (origin.port ?? 443) == space.port,
+                  challenge.previousFailureCount == 0,
+                  clientCertificate.identity != nil else {
+                completion(.cancelAuthenticationChallenge, nil)
+                return true
+            }
+            completion(.useCredential, clientCertificate)
+            return true
+        }
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust else { return false }
         if case .systemDefault = tlsConfiguration {
             completion(.performDefaultHandling, nil)
@@ -49,7 +71,7 @@ internal class SocketSessionDelegateProxy: NSObject, URLSessionDataDelegate {
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
                     completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         let once = SocketOnce(completionHandler)
-        guard !handleTrust(challenge, completion: { once.call(($0, $1)) }) else { return }
+        guard !handleAuthentication(challenge, completion: { once.call(($0, $1)) }) else { return }
         #if canImport(ObjectiveC)
         if forwardingDelegate?.urlSession?(session, didReceive: challenge,
                                            completionHandler: { once.call(($0, $1)) }) == nil {
@@ -65,7 +87,7 @@ internal class SocketSessionDelegateProxy: NSObject, URLSessionDataDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
                     completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         let once = SocketOnce(completionHandler)
-        guard !handleTrust(challenge, completion: { once.call(($0, $1)) }) else { return }
+        guard !handleAuthentication(challenge, completion: { once.call(($0, $1)) }) else { return }
         #if canImport(ObjectiveC)
         if (forwardingDelegate as? URLSessionTaskDelegate)?.urlSession?(session, task: task, didReceive: challenge,
                                                                        completionHandler: { once.call(($0, $1)) }) == nil {

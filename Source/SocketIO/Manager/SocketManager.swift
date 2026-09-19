@@ -50,9 +50,11 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
     // MARK: Properties
 
-    /// The socket associated with the default namespace ("/").
+    /// The socket for the URL path namespace, or "/" when the URL has no path.
+    /// Use `socket(forNamespace: "/")` to explicitly select the root namespace.
     public var defaultSocket: SocketIOClient {
-        return socket(forNamespace: "/")
+        let path = URLComponents(url: socketURL, resolvingAgainstBaseURL: true)?.percentEncodedPath ?? ""
+        return socket(forNamespace: path.isEmpty ? "/" : path)
     }
 
     /// The URL of the socket.io server.

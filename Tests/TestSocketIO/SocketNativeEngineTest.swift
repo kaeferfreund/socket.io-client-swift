@@ -623,7 +623,10 @@ final class SocketNativeEngineTest: XCTestCase {
         let invalid: [SocketIOClientConfiguration] = [
             [.forceWebsockets(true), .webSocketOptions(.init(maximumMessageSize: 0))],
             [.forceWebsockets(true), .forcePolling(true)],
-            [.forceWebsockets(true), .security(.certificatePinning([]))]
+            [.forceWebsockets(true), .security(.certificatePinning([]))],
+            [.forceWebsockets(true), .clientCertificate(URLCredential(user: "x", password: "y", persistence: .none))],
+            [.forceWebsockets(true), .secure(true),
+             .clientCertificate(URLCredential(user: "x", password: "y", persistence: .none))]
         ]
         for config in invalid {
             let (engine, client, transport) = make(config)
@@ -635,7 +638,7 @@ final class SocketNativeEngineTest: XCTestCase {
     }
 
     func testInvalidDictionarySecurityNeverDisappears() {
-        for key in ["security", "secure", "sessionDelegate", "webSocketOptions"] {
+        for key in ["security", "secure", "sessionDelegate", "webSocketOptions", "clientCertificate"] {
             let config = ["forceWebsockets": true, key: "invalid legacy object"] as [String: Any]
             let (engine, client, transport) = make(config.toSocketConfiguration())
             XCTAssertTrue(engine.closed, key)

@@ -68,10 +68,54 @@ pins. Hostname, expiry and certificate chain validation still apply:
 Empty pin lists in certificatePinning, empty custom trust-anchor lists, malformed
 DER and custom TLS policies on cleartext connections are rejected. Pinning is
 identical for polling and WebSocket. External `.sessionDelegate` callbacks cover
-non-server-trust authentication, redirects, invalidation, completion, metrics and
+authentication not handled by the configured TLS/client identity policy, redirects,
+invalidation, completion, metrics and
 WebSocket open/close. Server-trust challenges belong exclusively to the TLS policy;
 an external delegate cannot weaken it. Redirects cannot downgrade HTTPS/WSS to
 HTTP/WS. Custom Apple TLS policies are explicitly unsupported on non-Apple builds.
+
+
+### Client certificates (mutual TLS)
+
+Provide an existing `SecIdentity` (private key and client certificate), optionally
+with intermediate certificates. Both polling and WebSocket, including upgrades
+and reconnects, use the same credential:
+
+```swift
+let credential = URLCredential(identity: identity, certificates: intermediates,
+                               persistence: .forSession)
+let manager = SocketManager(socketURL: URL(string: "https://example.com/admin")!, config: [
+    .clientCertificate(credential)
+])
+```
+
+`identity` comes from your keychain or a PKCS#12 import; `intermediates` is an
+optional array of `SecCertificate` values. See Apple's
+[credential initializer](https://developer.apple.com/documentation/foundation/urlcredential/init(identity:certificates:persistence:))
+and [identity import guide](https://developer.apple.com/documentation/security/importing-an-identity).
+The library does not import or persist private keys. The credential must contain
+an identity and the connection must use HTTPS/WSS. It is supplied only to the
+configured host and port, never a different redirect origin. Rejected identities
+are not repeatedly offered within the same authentication challenge sequence.
+Server trust, hostname validation and optional `.security(...)` pins remain active.
+Without `.clientCertificate`, an external `.sessionDelegate` can still handle
+client-certificate challenges itself.
+
+### URL path and namespace
+
+`SocketManager(socketURL: URL(string: "https://example.com/admin?token=x")!)`
+selects `/admin` through `manager.defaultSocket`, matching the JavaScript client.
+No path (or `/`) selects the root namespace. Trailing slashes and percent escapes
+in namespace paths are preserved. Use `manager.socket(forNamespace: "/")` to
+explicitly select root, or another namespace to override the URL selection.
+
+The URL path does not select the HTTP/WebSocket endpoint: use `.path("/socket.io/")`
+for that. URL query parameters still reach the transport; `.connectParams(...)`
+replaces them and encodes keys and values using `encodeURIComponent` semantics.
+
+`connect(timeoutAfter:withHandler:)` applies to that connection attempt. Its timer
+is canceled on success, explicit disconnection, or a replacement `connect()` call,
+so it cannot terminate a later reconnect.
 
 ## Resource limits
 

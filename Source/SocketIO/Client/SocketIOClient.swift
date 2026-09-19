@@ -260,6 +260,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
 
     /// :nodoc:
     deinit {
+        connectTimeoutWork?.cancel()
         DefaultSocketLogger.Logger.log("Client is being released", type: logType)
     }
 
@@ -292,29 +293,34 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             return
         }
 
+        connectTimeoutWork?.cancel()
+        connectTimeoutWork = nil
         self.authGeneration &+= 1
+        let attempt = authGeneration
 
-        status = .connecting
+        // Install before status callbacks or joining: either can connect synchronously.
+        if timeoutAfter != 0 {
+            let timeout = DispatchWorkItem { [weak self] in
+                guard let this = self, this.status == .connecting || this.status == .notConnected else { return }
+                this.connectTimeoutWork = nil
+                if this.status == .connecting {
+                    DefaultSocketLogger.Logger.log("Timeout: Socket not connected, so setting to disconnected", type: this.logType)
 
-        joinNamespace(withPayload: payload)
+                    this.clearReceiveBuffer()
+                    this.status = .disconnected
+                    this.leaveNamespace()
+                } else {
+                    DefaultSocketLogger.Logger.log("Timeout: Socket already reset before connect completed", type: this.logType)
+                }
 
-
-        guard timeoutAfter != 0 else { return }
-
-        manager.handleQueue.socketAsyncAfter(deadline: DispatchTime.now() + timeoutAfter) {[weak self] in
-            guard let this = self, this.status == .connecting || this.status == .notConnected else { return }
-            if this.status == .connecting {
-                DefaultSocketLogger.Logger.log("Timeout: Socket not connected, so setting to disconnected", type: this.logType)
-
-                this.clearReceiveBuffer()
-                this.status = .disconnected
-                this.leaveNamespace()
-            } else {
-                DefaultSocketLogger.Logger.log("Timeout: Socket already reset before connect completed", type: this.logType)
+                handler?()
             }
-
-            handler?()
+            connectTimeoutWork = timeout
+            manager.handleQueue.asyncAfter(deadline: .now() + timeoutAfter, execute: timeout)
         }
+        status = .connecting
+        guard authGeneration == attempt, active, status == .connecting else { return }
+        joinNamespace(withPayload: payload)
     }
 
     /// Returns the CONNECT payload to send to the server, merging `pid`/`offset` into
@@ -498,6 +504,8 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     open func didConnect(toNamespace namespace: String, payload: [String: Any]?) {
         guard status != .connected else { return }
 
+        connectTimeoutWork?.cancel()
+        connectTimeoutWork = nil
         DefaultSocketLogger.Logger.log("Socket connected", type: logType)
         sid = payload?["sid"] as? String
 
@@ -526,6 +534,8 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         handleClientEvent(.connect, data: connectData)
     }
 
+    private var connectTimeoutWork: DispatchWorkItem?
+
     private var pendingTransportCloseError: SocketTransportError?
 
     /// Preserves existing public close overrides while attaching detail only to
@@ -541,6 +551,8 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     ///
     /// - parameter reason: The reason for the disconnection.
     open func didDisconnect(reason: String) {
+        connectTimeoutWork?.cancel()
+        connectTimeoutWork = nil
         guard status != .disconnected else { return }
 
         DefaultSocketLogger.Logger.log("Disconnected: \(reason)", type: logType)
@@ -581,6 +593,8 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// the cached socket so a later connect() can reuse this instance. Use the manager
     /// disconnectSocket(_:) API when the namespace must also be removed from its cache.
     open func disconnect() {
+        connectTimeoutWork?.cancel()
+        connectTimeoutWork = nil
         self.active = false
         DefaultSocketLogger.Logger.log("Closing socket", type: logType)
 

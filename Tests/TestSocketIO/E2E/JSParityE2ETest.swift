@@ -1854,3 +1854,17 @@ private final class ParityCloseObservingManager: SocketManager {
         onEngineClose?(reason)
     }
 }
+
+
+extension JSParityE2ETest {
+    func testManagerURLPathConnectsToNamespaceAndRetainsQuery() {
+        manager = SocketManager(socketURL: URL(string: serverURL.absoluteString + "/abc?token=from-url")!,
+                                config: [.autoConnect(false), .reconnects(false)])
+        let socket = manager.defaultSocket
+        let query = handshakeEventQuery(for: socket)
+        XCTAssertEqual(socket.nsp, "/abc")
+        XCTAssertEqual(socket.status, .connected)
+        XCTAssertTrue(socket === manager.socket(forNamespace: "/abc"))
+        XCTAssertEqual(query["token"] as? String, "from-url")
+    }
+}

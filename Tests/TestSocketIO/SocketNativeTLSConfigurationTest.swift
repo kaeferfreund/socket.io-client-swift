@@ -37,6 +37,21 @@ internal enum NativeTLSFixtures {
         SecTrustSetNetworkFetchAllowed(result, false)
         return result
     }
+    static func clientCredential() throws -> URLCredential {
+        // Avoid adding the ephemeral fixture identity to the macOS keychain.
+        guard #available(macOS 15, iOS 18, tvOS 18, watchOS 11, *) else {
+            throw XCTSkip("In-memory PKCS#12 import requires macOS 15 / iOS 18")
+        }
+        let data = try Data(contentsOf: directory().appendingPathComponent("client.p12"))
+        var items: CFArray?
+        let options = [kSecImportExportPassphrase as String: "fixture",
+                       kSecImportToMemoryOnly as String: true] as [String: Any]
+        XCTAssertEqual(SecPKCS12Import(data as CFData, options as CFDictionary, &items), errSecSuccess)
+        let item = try XCTUnwrap((items as? [[String: Any]])?.first)
+        let identity = try XCTUnwrap(item[kSecImportItemIdentity as String]) as! SecIdentity
+        return URLCredential(identity: identity, certificates: nil, persistence: .forSession)
+    }
+
     static func policy(pinned: Bool = true) throws -> SocketTLSConfiguration {
         .customTrust(anchors: [try certificate("ca")], pins: pinned ? [try certificate("leaf")] : [])
     }
@@ -218,5 +233,70 @@ private final class RepeatedTaskCompletionDelegate: NSObject, URLSessionTaskDele
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         completionHandler(redirect)
         completionHandler(request)
+    }
+}
+
+
+extension SocketNativeTLSConfigurationTest {
+    func testClientCertificateChallengesUseIdentityAtBothDelegateLevelsAndRejectOtherOrigins() throws {
+        let credential = try NativeTLSFixtures.clientCredential()
+        let delegate = DoubleCompletingAuthDelegate()
+        let proxy = SocketSessionDelegateProxy(tlsConfiguration: .systemDefault, forwardingDelegate: delegate,
+            clientCertificate: credential, credentialOrigin: URL(string: "https://localhost:8443"))
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: URL(string: "https://localhost:8443")!)
+        for (host, port, proto, failures, accepted) in [
+            ("localhost", 8443, "https", 0, true),
+            ("LOCALHOST", 8443, "wss", 0, true),
+            ("other.test", 8443, "https", 0, false),
+            ("localhost", 443, "https", 0, false),
+            ("localhost", 8443, "http", 0, false),
+            ("localhost", 8443, "https", 1, false)
+        ] {
+            let space = URLProtectionSpace(host: host, port: port, protocol: proto, realm: nil,
+                                           authenticationMethod: NSURLAuthenticationMethodClientCertificate)
+            let challenge = URLAuthenticationChallenge(protectionSpace: space, proposedCredential: nil,
+                previousFailureCount: failures, failureResponse: nil, error: nil, sender: NativeChallengeSender())
+            var calls = 0
+            let completion: (URLSession.AuthChallengeDisposition, URLCredential?) -> Void = { disposition, result in
+                XCTAssertEqual(disposition, accepted ? .useCredential : .cancelAuthenticationChallenge)
+                if accepted { XCTAssertTrue(result === credential) }
+                else { XCTAssertNil(result) }
+                calls += 1
+            }
+            proxy.urlSession(session, didReceive: challenge, completionHandler: completion)
+            proxy.urlSession(session, task: task, didReceive: challenge, completionHandler: completion)
+            XCTAssertEqual(calls, 2)
+        }
+        XCTAssertEqual(delegate.calls, 0)
+    }
+
+    func testUnconfiguredClientCertificateStillForwardsToExternalDelegate() {
+        let delegate = DoubleCompletingAuthDelegate()
+        let proxy = SocketSessionDelegateProxy(tlsConfiguration: .systemDefault, forwardingDelegate: delegate)
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let space = URLProtectionSpace(host: "localhost", port: 443, protocol: "https", realm: nil,
+                                       authenticationMethod: NSURLAuthenticationMethodClientCertificate)
+        let challenge = URLAuthenticationChallenge(protectionSpace: space, proposedCredential: nil,
+            previousFailureCount: 0, failureResponse: nil, error: nil, sender: NativeChallengeSender())
+        var calls = 0
+        proxy.urlSession(session, didReceive: challenge) { disposition, credential in
+            XCTAssertEqual(disposition, .performDefaultHandling)
+            XCTAssertNil(credential)
+            calls += 1
+        }
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(delegate.calls, 1)
+    }
+
+    func testClientCertificateOptionRoundTripsAndRejectsWrongDictionaryType() throws {
+        let credential = try NativeTLSFixtures.clientCredential()
+        let config = (["clientCertificate": credential] as [String: Any]).toSocketConfiguration()
+        XCTAssertTrue(config.contains(.clientCertificate(credential)))
+        XCTAssertTrue(config.first?.getSocketIOOptionValue() as? URLCredential === credential)
+        let invalid = (["clientCertificate": "not an identity"] as [String: Any]).toSocketConfiguration()
+        XCTAssertTrue(invalid.contains(.invalidConfiguration("")))
     }
 }

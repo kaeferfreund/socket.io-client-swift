@@ -29,8 +29,9 @@ enum JSONError : Error {
 }
 
 extension CharacterSet {
+    // JavaScript encodeURIComponent: use an ASCII allowlist, never an inverted denylist.
     static var allowedURLCharacterSet: CharacterSet {
-        return CharacterSet(charactersIn: "!*'();:@&=+$,/?%#[]\" {}^|").inverted
+        return CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
     }
 }
 
@@ -107,6 +108,8 @@ extension Dictionary where Key == String, Value == Any {
             return .timestampRequests(timestampRequests)
         case let ("timestampParam", timestampParam as String):
             return .timestampParam(timestampParam)
+        case let ("clientCertificate", credential as URLCredential):
+            return .clientCertificate(credential)
         case let ("security", security as SocketTLSConfiguration):
             return .security(security)
         case let ("sessionDelegate", delegate as URLSessionDelegate):
@@ -122,6 +125,8 @@ extension Dictionary where Key == String, Value == Any {
             return .invalidConfiguration("invalid value for parserOptions; expected SocketParserOptions")
         case ("bufferLimits", _):
             return .invalidConfiguration("invalid value for bufferLimits; expected SocketBufferLimits")
+        case ("clientCertificate", _):
+            return .invalidConfiguration("invalid value for clientCertificate; expected URLCredential with a client identity")
         case ("security", _), ("secure", _), ("sessionDelegate", _), ("webSocketOptions", _):
             return .invalidConfiguration("invalid value for " + key + "; legacy security objects must migrate to SocketTLSConfiguration")
         case _:

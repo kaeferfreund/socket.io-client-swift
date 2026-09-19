@@ -4,14 +4,17 @@ import XCTest
 @testable import SocketIO
 
 final class SocketNativeTLSE2ETest: XCTestCase {
-    private func roundTrip(forcePolling: Bool) throws {
+    private func roundTrip(forcePolling: Bool, clientAuth: Bool = false) throws {
         let server = try TestServerProcess.start(serverScript: "native-tls-server.mjs",
-            extraEnvironment: ["NATIVE_TLS_DIR": try NativeTLSFixtures.directory().path])
+            extraEnvironment: ["NATIVE_TLS_DIR": try NativeTLSFixtures.directory().path,
+                               "NATIVE_TLS_CLIENT_AUTH": clientAuth ? "1" : "0"])
         defer { server.stop() }
-        let manager = SocketManager(socketURL: URL(string: "https://localhost:\(server.port)")!, config: [
+        var config: SocketIOClientConfiguration = [
             .forcePolling(forcePolling), .forceWebsockets(!forcePolling), .reconnects(false),
             .connectTimeout(5), .security(try NativeTLSFixtures.policy())
-        ])
+        ]
+        if clientAuth { config.insert(.clientCertificate(try NativeTLSFixtures.clientCredential())) }
+        let manager = SocketManager(socketURL: URL(string: "https://localhost:\(server.port)")!, config: config)
         defer { manager.disconnect() }
         let socket = manager.defaultSocket
         let echoed = expectation(description: "TLS multipart binary acknowledgement")
@@ -27,6 +30,9 @@ final class SocketNativeTLSE2ETest: XCTestCase {
         wait(for: [echoed], timeout: 10)
     }
 
+    func testClientCertificateAuthenticatesPolling() throws { try roundTrip(forcePolling: true, clientAuth: true) }
+    func testClientCertificateAuthenticatesWebSocket() throws { try roundTrip(forcePolling: false, clientAuth: true) }
+
     func testNativeWebSocketTLSBinaryRoundTripWithPrivateCA() throws { try roundTrip(forcePolling: false) }
 
     /// The default transport path over TLS: HTTP long-polling handshake, then
@@ -34,12 +40,23 @@ final class SocketNativeTLSE2ETest: XCTestCase {
     /// against a TLS server dying right after "Switching to WebSockets"; the
     /// plain-HTTP fixtures could not exercise that path.
     func testPollingToWebSocketUpgradeOverTLSStaysConnected() throws {
+        try upgradeRoundTrip(clientAuth: false)
+    }
+
+    func testClientCertificateAuthenticatesPollingAndWebSocketUpgrade() throws {
+        try upgradeRoundTrip(clientAuth: true)
+    }
+
+    private func upgradeRoundTrip(clientAuth: Bool) throws {
         let server = try TestServerProcess.start(serverScript: "native-tls-server.mjs",
-            extraEnvironment: ["NATIVE_TLS_DIR": try NativeTLSFixtures.directory().path])
+            extraEnvironment: ["NATIVE_TLS_DIR": try NativeTLSFixtures.directory().path,
+                               "NATIVE_TLS_CLIENT_AUTH": clientAuth ? "1" : "0"])
         defer { server.stop() }
-        let manager = SocketManager(socketURL: URL(string: "https://localhost:\(server.port)")!, config: [
+        var config: SocketIOClientConfiguration = [
             .reconnects(false), .connectTimeout(5), .security(try NativeTLSFixtures.policy())
-        ])
+        ]
+        if clientAuth { config.insert(.clientCertificate(try NativeTLSFixtures.clientCredential())) }
+        let manager = SocketManager(socketURL: URL(string: "https://localhost:\(server.port)")!, config: config)
         defer { manager.disconnect() }
         let socket = manager.defaultSocket
 
@@ -76,15 +93,18 @@ final class SocketNativeTLSE2ETest: XCTestCase {
     func testPollingUsesTheSameTLSPolicyAndBinaryRoundTrip() throws { try roundTrip(forcePolling: true) }
 
     private func reject(host: String = "localhost", forcePolling: Bool = false, expired: Bool = false,
-                        policy: SocketTLSConfiguration, delegate: URLSessionDelegate? = nil) throws {
+                        policy: SocketTLSConfiguration, clientAuth: Bool = false, credential: URLCredential? = nil,
+                        delegate: URLSessionDelegate? = nil) throws {
         let server = try TestServerProcess.start(serverScript: expired ? "native-tls-expired.mjs" : "native-tls-server.mjs",
-            extraEnvironment: ["NATIVE_TLS_DIR": try NativeTLSFixtures.directory().path])
+            extraEnvironment: ["NATIVE_TLS_DIR": try NativeTLSFixtures.directory().path,
+                               "NATIVE_TLS_CLIENT_AUTH": clientAuth ? "1" : "0"])
         defer { server.stop() }
         var config: SocketIOClientConfiguration = [
             .forcePolling(forcePolling), .forceWebsockets(!forcePolling), .reconnects(false),
             .connectTimeout(5), .security(policy)
         ]
         if let delegate = delegate { config.insert(.sessionDelegate(delegate)) }
+        if let credential { config.insert(.clientCertificate(credential)) }
         let manager = SocketManager(socketURL: URL(string: "https://\(host):\(server.port)")!, config: config)
         defer { manager.disconnect() }
         let socket = manager.defaultSocket
@@ -98,6 +118,19 @@ final class SocketNativeTLSE2ETest: XCTestCase {
         socket.connect()
         wait(for: [failed], timeout: 7)
         XCTAssertNotEqual(socket.status, .connected)
+    }
+
+    func testClientIdentityDoesNotBypassServerPinning() throws {
+        try reject(policy: .customTrust(anchors: [NativeTLSFixtures.certificate("ca")],
+                                        pins: [NativeTLSFixtures.certificate("expired")]),
+                   clientAuth: true, credential: NativeTLSFixtures.clientCredential())
+    }
+
+    func testMutualTLSRejectsPollingWithoutClientIdentity() throws {
+        try reject(forcePolling: true, policy: NativeTLSFixtures.policy(), clientAuth: true)
+    }
+    func testMutualTLSRejectsWebSocketWithoutClientIdentity() throws {
+        try reject(policy: NativeTLSFixtures.policy(), clientAuth: true)
     }
 
     func testSystemTrustRejectsUntrustedFixtureCA() throws { try reject(policy: .systemDefault) }

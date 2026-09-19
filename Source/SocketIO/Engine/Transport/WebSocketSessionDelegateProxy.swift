@@ -13,6 +13,7 @@ extension URLSessionWebSocketTransport {
                               configuration: URLSessionConfiguration = .default,
                               tlsConfiguration: SocketTLSConfiguration = .systemDefault,
                               sessionDelegate: URLSessionDelegate? = nil,
+                              clientCertificate: URLCredential? = nil,
                               maximumMessageSize: Int = 16 * 1024 * 1024,
                               maximumPendingBytes: Int = URLSessionWebSocketTransport.defaultMaximumPendingBytes,
                               maximumPendingBatches: Int = URLSessionWebSocketTransport.defaultMaximumPendingBatches,
@@ -25,7 +26,8 @@ extension URLSessionWebSocketTransport {
             URLSessionWebSocketConnection(request: request, queue: queue,
                                           configuration: snapshot,
                                           maximumMessageSize: maximumMessageSize,
-                                          tlsConfiguration: tlsConfiguration, sessionDelegate: sessionDelegate)
+                                          tlsConfiguration: tlsConfiguration, sessionDelegate: sessionDelegate,
+                                          clientCertificate: clientCertificate)
         }
     }
 }
@@ -42,16 +44,19 @@ internal final class URLSessionWebSocketConnection: EngineWebSocketConnection {
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
     private var started = false
+    private let clientCertificate: URLCredential?
     private let tlsConfiguration: SocketTLSConfiguration
     private weak var sessionDelegate: URLSessionDelegate?
 
     internal init(request: URLRequest, queue: DispatchQueue,
                   configuration: URLSessionConfiguration, maximumMessageSize: Int,
-                  tlsConfiguration: SocketTLSConfiguration = .systemDefault, sessionDelegate: URLSessionDelegate? = nil) {
+                  tlsConfiguration: SocketTLSConfiguration = .systemDefault, sessionDelegate: URLSessionDelegate? = nil,
+                  clientCertificate: URLCredential? = nil) {
         self.request = request
         self.queue = queue
         self.configuration = configuration
         self.maximumMessageSize = maximumMessageSize
+        self.clientCertificate = clientCertificate
         self.tlsConfiguration = tlsConfiguration
         self.sessionDelegate = sessionDelegate
     }
@@ -65,7 +70,8 @@ internal final class URLSessionWebSocketConnection: EngineWebSocketConnection {
         guard !started else { return }
         started = true
         let proxy = WebSocketSessionDelegateProxy(owner: self, tlsConfiguration: tlsConfiguration,
-                                                  forwardingDelegate: sessionDelegate)
+                                                  forwardingDelegate: sessionDelegate,
+                                                  clientCertificate: clientCertificate, credentialOrigin: request.url)
         let session = URLSession(configuration: configuration, delegate: proxy, delegateQueue: nil)
         let task = session.webSocketTask(with: request)
         task.maximumMessageSize = maximumMessageSize
@@ -184,10 +190,12 @@ internal final class WebSocketSessionDelegateProxy: SocketSessionDelegateProxy, 
     private let queue: DispatchQueue
 
     internal init(owner: URLSessionWebSocketConnection, tlsConfiguration: SocketTLSConfiguration,
-                  forwardingDelegate: URLSessionDelegate?) {
+                  forwardingDelegate: URLSessionDelegate?,
+                  clientCertificate: URLCredential? = nil, credentialOrigin: URL? = nil) {
         self.owner = owner
         self.queue = owner.queue
-        super.init(tlsConfiguration: tlsConfiguration, forwardingDelegate: forwardingDelegate)
+        super.init(tlsConfiguration: tlsConfiguration, forwardingDelegate: forwardingDelegate,
+                   clientCertificate: clientCertificate, credentialOrigin: credentialOrigin)
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,

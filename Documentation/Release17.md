@@ -6,6 +6,14 @@ created. The podspec and framework now declare 17.0.0; the podspec uses the
 immutable `v17.0.0` tag that will be created on the validated release commit.
 Until then, development consumers must pin a commit explicitly.
 
+## Additional parity corrections
+
+When explicitly enabled, `autoConnect(true)` now also connects newly created
+namespaces, matching the JavaScript client. The default remains false. Namespace
+CONNECT packets and lifecycle callbacks follow subscription order. Engine.IO
+framing requires ASCII packet type digits, preserves combining Unicode scalars
+in text data, and reports an empty polling payload as a parser error.
+
 ## Draft release notes
 
 Socket.IO-Client-Swift 17 targets Socket.IO 4 servers using Engine.IO 4 over

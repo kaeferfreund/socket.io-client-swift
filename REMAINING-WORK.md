@@ -43,9 +43,9 @@ Stream-Codec bleiben ausdrücklich ausgeschlossen.
 
 ## Aktuelle Implementierungs- und Nachweisarbeit
 
-- Im aktuellen Nachlauf sind 86 vorher unvollständig belegte Deklarationen
-  mit vollständigen nativen Assertions zugeordnet (31 zuerst, 55 danach);
-  74 bleiben offen. Jev unterstützt die Quellenprüfung, ersetzt aber weder
+- Im aktuellen Nachlauf sind 124 vorher unvollständig belegte Deklarationen
+  mit vollständigen nativen Assertions zugeordnet (31 zuerst, dann 55 und 38);
+  36 bleiben offen. Jev unterstützt die Quellenprüfung, ersetzt aber weder
   die unabhängige Prüfung noch erfolgreiche Testausführungen.
 - Vollständiger Assertion-Abgleich der 68 alten Kandidaten **und** der 120
   fokussierten Zuordnungen. Ein Klassenverweis oder vorhandener Testtitel reicht

@@ -35,7 +35,13 @@ a real implementation with timeout and retry-bypass regressions. The bounded
 [Jev audit](JevAckFollowup-2026-09-19.md) helped identify missing assertions;
 its recommendations were independently checked and corrected before mapping.
 
-Complete original-scenario certification remains open for 74 supported test
+A further [38-scenario continuation](ParityContinuation-2026-09-19.md)
+checks packet creation and original Engine.IO payload/error cases. It fixes
+namespace subscription order, autoConnect for newly created namespaces, and
+Engine.IO ASCII framing/empty-payload handling. Jev assisted with bounded
+comparisons; every recommendation was independently checked.
+
+Complete original-scenario certification remains open for 36 supported test
 declarations. No coverage percentage implies semantic equivalence.
 
 ## Evidence and CI contracts
@@ -47,7 +53,7 @@ The original Node client suites are executed in a separate Node 24 job (matching
 `swift test --enable-code-coverage` exports LLVM coverage. The summary counts only `Source/SocketIO`, not tests. Execution coverage and scenario parity remain separate metrics.
 
 The inventory now contains 297 runtime declarations plus 14 type declarations:
-24 candidate-existing, 171 focused regressions, 38 platform-specific, 28 API
+8 candidate-existing, 187 focused regressions, 38 platform-specific, 28 API
 differences and 36 unsupported-feature entries, with zero unmapped declarations.
 Seven transport scenarios moved from unsupported to limited native regressions
 following implementation; they are not automatically certified as complete

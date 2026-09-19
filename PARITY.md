@@ -43,9 +43,9 @@ See [the full inventory](Documentation/JavaScriptTestInventory.csv),
 Inventory labels distinguish focused regressions, candidate old pointers,
 unmapped rows, API differences and unsupported features. A candidate is not a
 proof that all assertions of an upstream test have been ported. The current
-inventory contains 24 candidate mappings and 171 focused regressions, with no
-unmapped declarations. The assertion audit adds complete mappings for 86 previously
-uncertified scenarios (31 in the first batch, 55 in the follow-up); 74 supported
+inventory contains 8 candidate mappings and 187 focused regressions, with no
+unmapped declarations. The assertion audit adds complete mappings for 124 previously
+uncertified scenarios (31 initially, then 55 and 38); 36 supported
 declarations still need full certification. Static mappings require passed CI
 executions and do not establish complete runtime parity.
 These labels do not remove the deliberate encoding bounds or close release gate R2.

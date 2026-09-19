@@ -84,7 +84,7 @@ final class SocketSendBufferTest: XCTestCase {
         // Listener registration is serialized through handleQueue, so let it land
         // before emitting.
         let registered = expectation(description: "listener registered")
-        manager.handleQueue.async { registered.fulfill() }
+        manager.handleQueue.socketAsync { registered.fulfill() }
         wait(for: [registered], timeout: 2)
 
         socket.emit("msg", "hello")
@@ -103,7 +103,7 @@ final class SocketSendBufferTest: XCTestCase {
 
         socket.emitAck(7, with: ["ok"])
 
-        waitForExpectations(timeout: 1)
+        wait(for: [reported], timeout: 1)
         XCTAssertTrue(engine.sentPackets.isEmpty)
 
         connect()
@@ -149,13 +149,13 @@ final class SocketSendBufferTest: XCTestCase {
 
         // Let emitTimed's handleQueue hop register the ack before disconnecting.
         let registered = expectation(description: "ack registered")
-        manager.handleQueue.async { registered.fulfill() }
+        manager.handleQueue.socketAsync { registered.fulfill() }
         wait(for: [registered], timeout: 2)
 
         socket.didDisconnect(reason: "transport close")
 
         let settled = expectation(description: "clearTimedAcks ran")
-        manager.handleQueue.async { settled.fulfill() }
+        manager.handleQueue.socketAsync { settled.fulfill() }
         wait(for: [settled], timeout: 2)
 
         XCTAssertTrue(outcomes.isEmpty, "The packet never left, so its ack is still outstanding")

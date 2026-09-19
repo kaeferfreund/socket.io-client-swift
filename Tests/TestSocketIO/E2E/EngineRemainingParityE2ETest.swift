@@ -8,20 +8,19 @@ private final class RemainingEngineClient: NSObject, SocketEngineClient {
     var message: (EngineWebSocketMessage) -> Void = { _ in }
     var failed: (String, SocketTransportError?) -> Void = { _, _ in }
     var closed: (String, SocketTransportError?) -> Void = { _, _ in }
-    func engineDidOpen(reason: String) { DispatchQueue.main.async { self.opened() } }
-    func parseEngineMessage(_ msg: String) { DispatchQueue.main.async { self.message(.text(msg)) } }
-    func parseEngineBinaryData(_ data: Data) { DispatchQueue.main.async { self.message(.binary(data)) } }
-    func engineDidError(reason: String) { DispatchQueue.main.async { self.failed(reason, nil) } }
+    func engineDidOpen(reason: String) { DispatchQueue.main.socketAsync { self.opened() } }
+    func parseEngineMessage(_ msg: String) { DispatchQueue.main.socketAsync { self.message(.text(msg)) } }
+    func parseEngineBinaryData(_ data: Data) { DispatchQueue.main.socketAsync { self.message(.binary(data)) } }
+    func engineDidError(reason: String) { DispatchQueue.main.socketAsync { self.failed(reason, nil) } }
     func engineDidError(reason: String, error: SocketTransportError) {
-        DispatchQueue.main.async { self.failed(reason, error) }
+        DispatchQueue.main.socketAsync { self.failed(reason, error) }
     }
-    func engineDidClose(reason: String) { DispatchQueue.main.async { self.closed(reason, nil) } }
+    func engineDidClose(reason: String) { DispatchQueue.main.socketAsync { self.closed(reason, nil) } }
     func engineDidClose(reason: String, error: SocketTransportError) {
-        DispatchQueue.main.async { self.closed(reason, error) }
+        DispatchQueue.main.socketAsync { self.closed(reason, error) }
     }
     func engineDidReceivePing() {}
     func engineDidReceivePong() {}
-    func engineDidSendPing() {}
     func engineDidSendPong() {}
     func engineDidWebsocketUpgrade(headers: [String: String]) {}
 }

@@ -34,7 +34,6 @@ private final class EngineCodecClient: NSObject, SocketEngineClient {
     func engineDidOpen(reason: String) { opens += 1 }
     func engineDidReceivePing() { pings += 1 }
     func engineDidReceivePong() { pongs += 1 }
-    func engineDidSendPing() { pings += 1 }
     func engineDidSendPong() { pongs += 1 }
     func parseEngineMessage(_ msg: String) { messages.append(msg) }
     func parseEngineBinaryData(_ data: Data) { binary.append(data) }

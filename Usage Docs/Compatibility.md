@@ -1,61 +1,38 @@
-Here is the compatibility table with the Node.js server:
+# Compatibility
 
-<table>
-    <tr>
-        <th rowspan="2">Swift Client version</th>
-        <th colspan="3">Socket.IO server version</th>
-    </tr>
-    <tr>
-        <td align="center">2.x</td>
-        <td align="center">3.x</td>
-        <td align="center">4.x</td>
-    </tr>
-    <tr>
-        <td align="center">v15.x</td>
-        <td align="center"><b>YES</b></td>
-        <td align="center"><b>YES</b><sup>1</sup></td>
-        <td align="center"><b>YES</b><sup>2</sup></td>
-    </tr>
-    <tr>
-        <td align="center">v16.x</td>
-        <td align="center"><b>YES</b><sup>3</sup></td>
-        <td align="center"><b>YES</b></td>
-        <td align="center"><b>YES</b></td>
-    </tr>
-</table>
+The current development line of this fork supports **Socket.IO 4.x servers**
+using **Engine.IO protocol 4** only.
 
-[1] Yes, with <code><a href="https://socket.io/docs/v4/server-initialization/#allowEIO3">allowEIO3: true</a></code> (server) and `.connectParams(["EIO": "3"])` (client):
+| Socket.IO server | Support in this fork |
+| --- | --- |
+| 2.x and older | Not supported; Engine.IO 3 was removed |
+| 3.x | Not supported or tested |
+| 4.x | Supported, no version selector required |
 
-*Server*
-
-```js
-const { createServer } = require("http");
-const { Server } = require("socket.io");
-
-const httpServer = createServer();
-const io = new Server(httpServer, {
-  allowEIO3: true
-});
-
-httpServer.listen(8080);
-```
-
-*Client*
+Socket.IO 3 and 4 share the modern wire protocol, so the handshake cannot prove
+a server's major version. This is a supported-version boundary, not a claim that
+the client can identify and reject every 3.x server.
 
 ```swift
-SocketManager(socketURL: URL(string:"http://localhost:8080/")!, config: [.connectParams(["EIO": "3"])])
+let manager = SocketManager(
+    socketURL: URL(string: "http://localhost:8080/")!,
+    config: [.log(false)]
+)
 ```
 
-[2] Yes, <code><a href="https://socket.io/docs/v4/server-initialization/#allowEIO3">allowEIO3: true</a></code> (server)
+Remove `.version(.two)`, `.version(.three)` and dictionary `"version"` entries.
+There is no replacement `.four` option. An explicit dictionary version is a
+configuration error. User-supplied `EIO` query values cannot re-enable protocol 3.
+Connection State Recovery requires Socket.IO 4.6+ and server-side configuration.
 
-[3] Yes, with `.version(.two)` (client):
+## Swift and deployment targets
 
-```swift
-SocketManager(socketURL: URL(string:"http://localhost:8080/")!, config: [.version(.two)])
-```
+Use the Swift 6.4 toolchain, or newer, with Swift 6 language mode. Xcode 27 is used
+by CI. Minimum deployment targets are iOS 15, macOS 12, tvOS 15 and watchOS 9.
 
-See also:
+The client remains serial-queue-owned, not actor-based. Consult
+[the migration guide](../Documentation/SocketIO4Swift6Migration.md) for removed
+APIs and the async authentication/acknowledgement concurrency contract.
 
-- Migrating from 2.x to 3.0: https://socket.io/docs/v4/migrating-from-2-x-to-3-0/
-- Migrating from 3.x to 4.0: https://socket.io/docs/v4/migrating-from-3-x-to-4-0/
-- Socket.IO protocol: https://github.com/socketio/socket.io-protocol
+Compatibility tables for older upstream Swift client releases do not describe
+this fork's current API or supported server range.

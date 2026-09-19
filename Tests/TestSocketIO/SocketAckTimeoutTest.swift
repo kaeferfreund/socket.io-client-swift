@@ -28,7 +28,7 @@ final class SocketAckTimeoutTest: XCTestCase {
     /// proceeds (e.g. to disconnect or read the captured packet).
     private func waitForAckRegistration() {
         let registered = expectation(description: "ack registered")
-        manager.handleQueue.async { registered.fulfill() }
+        manager.handleQueue.socketAsync { registered.fulfill() }
         wait(for: [registered], timeout: 2)
     }
 

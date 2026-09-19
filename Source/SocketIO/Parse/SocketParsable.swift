@@ -151,15 +151,11 @@ public extension SocketParsable where Self: SocketManagerSpec & SocketDataBuffer
             namespace = String(decoding: bytes[start..<cursor], as: UTF8.self)
             if cursor < bytes.count { cursor += 1 }
         }
-        // Socket.IO 2 ERROR permits primitive payloads, including a leading
-        // number. Modern packets use the optional acknowledgement-id grammar.
-        //
         // JS reads the id with `Number(...)`, which never fails: an id too large
         // for `Int` becomes a float no registered handler can match. The packet
         // stays valid — the ACK is dropped ("bad ack") and the EVENT is delivered
         // without an acknowledgement — so overflow yields the no-ack sentinel.
-        let id: Int
-        if type == .error && version == .two { id = -1 } else { id = readDigits() ?? -1 }
+        let id = readDigits() ?? -1
         guard cursor < bytes.count else {
             // JS `decodeString` only parses a payload `if (str.charAt(++i))`, so
             // "2", "2/nsp,", "2123", "3" and "399" decode with `data === undefined`:
@@ -167,8 +163,7 @@ public extension SocketParsable where Self: SocketManagerSpec & SocketDataBuffer
             // listeners see the empty event), `onack` logs "bad ack". Binary
             // headers still require a payload — their placeholders cannot exist
             // without one.
-            guard type == .connect || type == .disconnect || type == .event || type == .ack
-                    || (type == .error && version == .two) else {
+            guard type == .connect || type == .disconnect || type == .event || type == .ack else {
                 throw SocketParsableError.invalidDataArray
             }
             return SocketPacket(type: type, id: id, nsp: namespace)
@@ -188,7 +183,7 @@ public extension SocketParsable where Self: SocketManagerSpec & SocketDataBuffer
         case .disconnect:
             throw SocketParsableError.invalidDataArray
         case .error:
-            guard version == .two || object is String || object is JSON else {
+            guard object is String || object is JSON else {
                 throw SocketParsableError.invalidDataArray
             }
             data = (object as? [Any]) ?? [object]

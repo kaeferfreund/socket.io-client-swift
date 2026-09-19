@@ -96,8 +96,6 @@ public protocol SocketEngineSpec: AnyObject {
     /// The url for WebSockets.
     var urlWebSocket: URL { get }
 
-    /// The version of engine.io being used. Default is three.
-    var version: SocketIOVersion { get }
 
     /// Whether polling (and WebSocket) requests carry a cache-busting
     /// timestamp query parameter. `nil` is the JS default (`timestampRequests`
@@ -206,14 +204,7 @@ extension SocketEngineSpec {
         return com.url!
     }
 
-    var engineIOParam: String {
-        switch version {
-        case .two:
-            return "&EIO=3"
-        case .three:
-            return "&EIO=4"
-        }
-    }
+    var engineIOParam: String { "&EIO=4" }
 
     /// The first polling GET (no `sid` yet — used by `_connect`); every later
     /// poll and POST goes through `urlPollingWithSid`. Both carry the
@@ -229,9 +220,9 @@ extension SocketEngineSpec {
         var com = URLComponents(url: urlPolling, resolvingAgainstBaseURL: false)!
         com.percentEncodedQuery = com.percentEncodedQuery! + "&sid=\(sid.urlEncode()!)"
 
-        if !com.percentEncodedQuery!.contains("EIO") {
-            com.percentEncodedQuery = com.percentEncodedQuery! + engineIOParam
-        }
+        var query = (com.percentEncodedQueryItems ?? []).filter { $0.name.removingPercentEncoding != "EIO" }
+        query.append(URLQueryItem(name: "EIO", value: "4"))
+        com.percentEncodedQueryItems = query
 
         guard timestampRequests != false else { return com.url! }
 
@@ -242,9 +233,9 @@ extension SocketEngineSpec {
         var com = URLComponents(url: urlWebSocket, resolvingAgainstBaseURL: false)!
         com.percentEncodedQuery = com.percentEncodedQuery! + (sid == "" ? "" : "&sid=\(sid.urlEncode()!)")
 
-        if !com.percentEncodedQuery!.contains("EIO") {
-            com.percentEncodedQuery = com.percentEncodedQuery! + engineIOParam
-        }
+        var query = (com.percentEncodedQueryItems ?? []).filter { $0.name.removingPercentEncoding != "EIO" }
+        query.append(URLQueryItem(name: "EIO", value: "4"))
+        com.percentEncodedQueryItems = query
 
         // JS-aligned with `WS.uri()` in engine.io-client: the WebSocket URL
         // is only stamped when `timestampRequests` is explicitly `true`.
@@ -269,13 +260,8 @@ extension SocketEngineSpec {
     }
 
     func createBinaryDataForSend(using data: Data) -> Either<Data, String> {
-        let prefixB64 = version.rawValue >= 3 ? "b" : "b4"
-
-        if polling || forceBase64 {
-            return .right(prefixB64 + data.base64EncodedString(options: Data.Base64EncodingOptions(rawValue: 0)))
-        } else {
-            return .left(version.rawValue >= 3 ? data : Data([0x4]) + data)
-        }
+        if polling || forceBase64 { return .right("b" + data.base64EncodedString()) }
+        return .left(data)
     }
 
     /// Send an engine message (4)

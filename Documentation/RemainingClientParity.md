@@ -9,7 +9,7 @@ Scope: client, client transport and codecs only. The Node server is a fixture, n
 All **44 previously unmapped declarations** now have an explicit disposition:
 **29 native regression mappings, 13 API differences and 2 platform differences**.
 This is a complete classification of that backlog, **not 100% JavaScript scenario parity**.
-The inventory still contains 70 candidate mappings and unsupported features.
+After integration with the Swift 6.4 branch, the inventory still contains 68 candidate mappings and unsupported features.
 A native `Data` adaptation does not certify the JavaScript `Blob`/prototype API.
 An original Node suite passing does not prove that Swift has every corresponding assertion.
 
@@ -116,3 +116,19 @@ compression configuration, full concurrency validation and assertion-level
 certification of all remaining candidate mappings are not supplied by this change.
 Use the current PR's pinned commit and CI artifacts for measured counts; this
 classification document is not a timeless green-build certificate.
+
+## Integration into the Socket.IO 4 / Swift 6.4 branch
+
+This follow-up is merged with `feat/socketio4-swift6.4` at
+`3237747dbf6486bc59672288c5e6df25eaf369f7`, not into `master`.
+The combined implementation retains `swift-tools-version:6.4`, Swift 6 language
+mode, the Xcode 27 runner, and the removal of Socket.IO version selection and
+Engine.IO 3 framing. Forced base64 is always the Engine.IO 4 `b` prefix; neither
+`b4` nor the legacy binary packet prefix is restored.
+
+The new raw Engine.IO test callbacks use the existing serial-queue transfer
+helper. The async transport-drop acknowledgement regression waits for an actual
+write-registration signal, without blocking MainActor. Test contracts from both
+branches are retained; inventory totals are regenerated from the merged rows.
+The full CI also runs for pull requests targeting and pushes to this integration
+branch, including its strict-concurrency and Thread Sanitizer checks.

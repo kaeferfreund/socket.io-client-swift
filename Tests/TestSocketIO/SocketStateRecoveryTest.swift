@@ -150,7 +150,7 @@ final class SocketStateRecoveryTest: XCTestCase {
 
         socket.didConnect(toNamespace: "/", payload: ["sid": "s2", "pid": "p1"])
 
-        waitForExpectations(timeout: 1)
+        wait(for: [replayExpect, connectExpect], timeout: 1)
         XCTAssertEqual(received.first as? String, "replayed")
         XCTAssertEqual(received.last as? String, "offset-r")
         XCTAssertEqual(socket._lastOffset, "offset-r")
@@ -171,7 +171,7 @@ final class SocketStateRecoveryTest: XCTestCase {
             errors.append(data)
         }
         socket.on("msg") { _, ack in
-            DispatchQueue.main.async {
+            DispatchQueue.main.socketAsync {
                 ack.with("ok")
                 expect.fulfill()
             }
@@ -185,7 +185,7 @@ final class SocketStateRecoveryTest: XCTestCase {
 
         socket.didConnect(toNamespace: "/", payload: ["sid": "s2", "pid": "p1"])
 
-        waitForExpectations(timeout: 1)
+        wait(for: [expect], timeout: 1)
         let expectedAck = SocketPacket.packetFromEmit(["ok"], id: 7, nsp: "/", ack: true).packetString
         XCTAssertEqual(engine.lastSent, expectedAck)
         XCTAssertTrue(errors.isEmpty, "ack path must not surface not-connected error during replay recovery")
@@ -217,7 +217,7 @@ final class SocketStateRecoveryTest: XCTestCase {
 
         socket.didConnect(toNamespace: "/", payload: ["sid": "s2", "pid": "p1"])
 
-        waitForExpectations(timeout: 1)
+        wait(for: [expect], timeout: 1)
         let expectedEmit = SocketPacket.packetFromEmit(["client-event", "hello"], id: -1, nsp: "/", ack: false).packetString
         XCTAssertEqual(engine.lastSent, expectedEmit)
         XCTAssertTrue(errors.isEmpty, "ordinary emits from replayed handlers should run after status becomes connected")
@@ -280,7 +280,7 @@ final class SocketStateRecoveryTest: XCTestCase {
         socket.abortPendingConnect()
         socket.didConnect(toNamespace: "/", payload: ["sid": "s2", "pid": "p1"])
 
-        waitForExpectations(timeout: 0.1)
+        wait(for: [noReplay], timeout: 0.1)
         XCTAssertNil(socket._lastOffset, "discarded replay packets must not advance offset")
     }
 
@@ -301,7 +301,7 @@ final class SocketStateRecoveryTest: XCTestCase {
 
         socket.emitAck(7, with: ["ok"])
 
-        waitForExpectations(timeout: 1)
+        wait(for: [expect], timeout: 1)
         XCTAssertNil(engine.lastSent)
         XCTAssertEqual(captured.first as? String, "Tried emitting when not connected")
     }
@@ -319,7 +319,7 @@ final class SocketStateRecoveryTest: XCTestCase {
         socket.setTestStatus(.connecting)
         socket.didConnect(toNamespace: "/", payload: ["sid": "s2", "pid": "p1"])
 
-        waitForExpectations(timeout: 1)
+        wait(for: [expect], timeout: 1)
         XCTAssertEqual(socket._pid, "p1")
         XCTAssertTrue(socket.recovered)
         let payload = connectData.dropFirst().first as? [String: Any]
@@ -336,27 +336,11 @@ final class SocketStateRecoveryTest: XCTestCase {
         socket.setTestStatus(.connecting)
         socket.didConnect(toNamespace: "/", payload: ["sid": "s3", "pid": "p2"])
 
-        waitForExpectations(timeout: 1)
+        wait(for: [expect], timeout: 1)
         XCTAssertEqual(socket._pid, "p2")
         XCTAssertFalse(socket.recovered)
     }
 
-    // MARK: U8 — v2 manager returns raw connectPayload (no pid/offset injected)
-
-    func testU8_v2ManagerSkipsInjection() {
-        let v2Manager = SocketManager(socketURL: URL(string: "http://localhost/")!, config: [.log(false), .version(.two)])
-        let v2Socket = v2Manager.defaultSocket
-        v2Socket.setTestable()
-        v2Socket._pid = "p1"                   // would be injected on v3
-        v2Socket._lastOffset = "offset-1"
-        v2Socket.connectPayload = ["token": "t"]
-
-        let merged = v2Socket.currentConnectPayload()
-
-        XCTAssertEqual(merged?["pid"] as? String, nil, "v2 must not inject pid")
-        XCTAssertEqual(merged?["offset"] as? String, nil, "v2 must not inject offset")
-        XCTAssertEqual(merged?["token"] as? String, "t")
-    }
 
     // MARK: U11 — clearRecoveryState resets pid, offset, and recovered
 
@@ -393,7 +377,7 @@ final class SocketStateRecoveryTest: XCTestCase {
         // Next session CONNECT ack arrives (new pid, fresh identity)
         socket.didConnect(toNamespace: "/", payload: ["sid": "s2", "pid": "p2"])
 
-        waitForExpectations(timeout: 0.1)
+        wait(for: [noReplay], timeout: 0.1)
         XCTAssertEqual(socket._pid, "p2")
         XCTAssertNil(socket._lastOffset,
                      "buffered replay from prior identity must not advance offset of new session")
@@ -426,7 +410,7 @@ final class SocketStateRecoveryTest: XCTestCase {
 
         socket.didConnect(toNamespace: "/", payload: ["sid": "s2", "pid": "p1"])
 
-        waitForExpectations(timeout: 0.1)
+        wait(for: [firstHandled, secondNotHandled], timeout: 0.1)
         XCTAssertEqual(socket._lastOffset, "offset-a",
                        "offset must stop at the last delivered packet; undelivered buffered packets must not advance it")
     }
@@ -455,7 +439,7 @@ final class SocketStateRecoveryTest: XCTestCase {
 
         socket.didConnect(toNamespace: "/", payload: ["sid": "s2", "pid": "p1"])
 
-        waitForExpectations(timeout: 0.1)
+        wait(for: [msgHandled, noConnect], timeout: 0.1)
         XCTAssertEqual(socket.status, .disconnected,
                        "status must reflect the replay-triggered disconnect, not bounce back to connected")
     }
@@ -475,7 +459,7 @@ final class SocketStateRecoveryTest: XCTestCase {
 
         socket.didConnect(toNamespace: "/", payload: ["sid": "s1", "pid": "p1"])
 
-        waitForExpectations(timeout: 1)
+        wait(for: [expect], timeout: 1)
         XCTAssertEqual(socket._pid, "p1")
         XCTAssertFalse(socket.recovered)
         XCTAssertEqual(connectData.first as? String, "/")
@@ -484,50 +468,6 @@ final class SocketStateRecoveryTest: XCTestCase {
         XCTAssertEqual(payload?["pid"] as? String, "p1")
     }
 
-    // MARK: U8b — v2, payload=nil → .connect data is exactly [nsp]
-
-    func testU8b_v2ConnectWithoutPayloadPreservesShape() {
-        let m = SocketManager(socketURL: URL(string: "http://localhost/")!, config: [.log(false), .version(.two)])
-        let s = m.defaultSocket
-        s.setTestable()
-        s.setTestStatus(.connecting)
-        let expect = expectation(description: ".connect fired")
-        var captured: [Any] = []
-        s.on(clientEvent: .connect) { data, _ in
-            captured = data
-            expect.fulfill()
-        }
-        s.didConnect(toNamespace: "/", payload: nil)
-
-        waitForExpectations(timeout: 1)
-        XCTAssertEqual(captured.count, 1)
-        XCTAssertEqual(captured.first as? String, "/")
-        XCTAssertNil(s._pid)
-        XCTAssertFalse(s.recovered)
-    }
-
-    // MARK: U8c — v2, payload provided → .connect data is [nsp, payload] (unchanged)
-
-    func testU8c_v2ConnectWithPayloadPreservesShape() {
-        let m = SocketManager(socketURL: URL(string: "http://localhost/")!, config: [.log(false), .version(.two)])
-        let s = m.defaultSocket
-        s.setTestable()
-        s.setTestStatus(.connecting)
-        let expect = expectation(description: ".connect fired")
-        var captured: [Any] = []
-        s.on(clientEvent: .connect) { data, _ in
-            captured = data
-            expect.fulfill()
-        }
-        s.didConnect(toNamespace: "/", payload: ["x": 1])
-
-        waitForExpectations(timeout: 1)
-        XCTAssertEqual(captured.count, 2)
-        XCTAssertEqual(captured.first as? String, "/")
-        let payload = captured.dropFirst().first as? [String: Any]
-        XCTAssertEqual(payload?["x"] as? Int, 1)
-        XCTAssertNil(payload?["recovered"], "v2 must NOT inject recovered key")
-    }
 
     // MARK: U10 — server omits pid → _pid stays nil, recovered=false
 
@@ -537,7 +477,7 @@ final class SocketStateRecoveryTest: XCTestCase {
         socket.setTestStatus(.connecting)
         socket.didConnect(toNamespace: "/", payload: ["sid": "s1"])
 
-        waitForExpectations(timeout: 1)
+        wait(for: [expect], timeout: 1)
         XCTAssertNil(socket._pid)
         XCTAssertFalse(socket.recovered)
     }
@@ -614,7 +554,7 @@ final class SocketStateRecoveryTest: XCTestCase {
 
         manager.connectSocket(socket, withPayload: nil)
 
-        waitForExpectations(timeout: 1)
+        wait(for: [expect], timeout: 1)
         XCTAssertNil(engine.lastSent, "engine must NOT be sent to on serialization failure")
         let msg = captured.first as? String
         XCTAssertNotNil(msg)
@@ -643,7 +583,7 @@ final class SocketStateRecoveryTest: XCTestCase {
 
         socket.connect(withPayload: ["bad": Date()], timeoutAfter: 0, withHandler: nil)
 
-        waitForExpectations(timeout: 0.1)
+        wait(for: [expect, noDisconnect], timeout: 0.1)
         XCTAssertNil(engine.lastSent, "engine must NOT be sent to on serialization failure")
         let msg = captured.first as? String
         XCTAssertNotNil(msg)
@@ -675,7 +615,7 @@ final class SocketStateRecoveryTest: XCTestCase {
             timeoutExpect.fulfill()
         })
 
-        waitForExpectations(timeout: 0.2)
+        wait(for: [errorExpect, timeoutExpect, noDisconnect], timeout: 0.2)
         XCTAssertNil(engine.lastSent, "engine must NOT send CONNECT or namespace leave packets on serialization failure")
         let msg = captured.first as? String
         XCTAssertNotNil(msg)
@@ -742,7 +682,7 @@ final class CaptureEngine: SocketEngineSpec {
     let socketPath = ""
     let urlPolling = URL(string: "http://localhost/")!
     let urlWebSocket = URL(string: "http://localhost/")!
-    let version: SocketIOVersion = .three
+
     let websocket = false
 
     required init(client: SocketEngineClient, url: URL, options: [String: Any]?) {

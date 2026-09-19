@@ -207,6 +207,8 @@ public enum SocketIOClientOption : ClientOption {
             description = "parserOptions"
         case .bufferLimits:
             description = "bufferLimits"
+        case .version:
+            description = "version"
         case .invalidConfiguration:
             description = "invalidConfiguration"
         case .ackTimeout:
@@ -271,8 +273,6 @@ public enum SocketIOClientOption : ClientOption {
             description = "enableSOCKSProxy"
         case .useCustomEngine:
             description = "customEngine"
-        case .version:
-            description = "version"
         }
 
         return description
@@ -288,6 +288,8 @@ public enum SocketIOClientOption : ClientOption {
             value = options
         case let .bufferLimits(limits):
             value = limits
+        case let .version(versionNum):
+            value = versionNum
         case let .invalidConfiguration(reason):
             value = reason
         case let .ackTimeout(timeout):
@@ -352,8 +354,6 @@ public enum SocketIOClientOption : ClientOption {
             value = enable
         case let .useCustomEngine(enable):
             value = enable
-        case let.version(versionNum):
-            value = versionNum
         }
 
         return value

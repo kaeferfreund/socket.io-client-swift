@@ -58,7 +58,7 @@ final class SocketNativeTLSE2ETest: XCTestCase {
         wait(for: [connected, upgraded], timeout: 10)
 
         let settled = expectation(description: "upgrade packet sent, polling retired")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { settled.fulfill() }
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + 2) { settled.fulfill() }
         wait(for: [settled], timeout: 5)
         XCTAssertEqual(manager.engine?.polling, false, "the engine must be on the WebSocket now")
         XCTAssertEqual(manager.engine?.connected, true)

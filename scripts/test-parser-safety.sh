@@ -8,9 +8,7 @@ trap 'rm -rf "$TMP"' EXIT
 cat > "$TMP/Shims.swift" <<'SWIFT'
 import Foundation
 public typealias JSON = [String: Any]
-public enum SocketIOVersion { case two, three }
 public protocol SocketManagerSpec: AnyObject {
-    var version: SocketIOVersion { get }
     var parserOptions: SocketParserOptions { get }
 }
 enum DefaultSocketLogger { static let Logger = QuietLogger() }
@@ -20,7 +18,6 @@ struct QuietLogger {
 }
 extension Array { func toJSON() throws -> Data { try JSONSerialization.data(withJSONObject: self) } }
 final class Parser: SocketManagerSpec, SocketDataBufferable, SocketParsable {
-    let version = SocketIOVersion.three
     let parserOptions = SocketParserOptions()
     var waitingPackets = [SocketPacket]()
 }
@@ -79,10 +76,9 @@ for _ in 0..<20000 {
 }
 print("PASS: \(rejected.count) known malformed headers rejected; payload-less/overflowed-id, Unicode and binary valid controls; 20,000 seeded malformed inputs, no crash")
 SWIFT
-swiftc "$TMP/Shims.swift" \
+swiftc -swift-version 6 "$TMP/Shims.swift" \
     "$ROOT/Source/SocketIO/Parse/SocketParsable.swift" \
     "$ROOT/Source/SocketIO/Parse/SocketPacket.swift" \
-    "$ROOT/Source/SocketIO/Util/SocketStringReader.swift" \
     "$ROOT/Source/SocketIO/Client/SocketReservedEvent.swift" \
     "$TMP/main.swift" -o "$TMP/probe"
 "$TMP/probe"

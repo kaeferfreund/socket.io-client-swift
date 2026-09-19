@@ -108,8 +108,8 @@ extension Dictionary where Key == String, Value == Any {
             return compress ? .compress : nil
         case let ("enableSOCKSProxy", enable as Bool):
             return .enableSOCKSProxy(enable)
-        case let ("version", version as Int):
-            return .version(SocketIOVersion(rawValue: version) ?? .three)
+        case ("version", _):
+            return .invalidConfiguration("The version option was removed. Only Socket.IO 4.x (Engine.IO 4) is supported; remove version from configuration.")
         case ("withCredentials", _), ("forceBase64", _), ("addTrailingSlash", _):
             return .invalidConfiguration("invalid value for " + key + "; expected Bool")
         case ("parserOptions", _):

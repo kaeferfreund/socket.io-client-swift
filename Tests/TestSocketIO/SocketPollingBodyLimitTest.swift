@@ -83,7 +83,8 @@ private final class BodyLimitFixture {
 
 private final class BodyLimitProtocol: URLProtocol {
     private static let registryLock = NSLock()
-    private static var fixtures = [String: BodyLimitFixture]()
+    // Guarded by `registryLock`; Swift 6 cannot see the lock discipline.
+    nonisolated(unsafe) private static var fixtures = [String: BodyLimitFixture]()
     private let stateLock = NSLock()
     private var ended = false
 
@@ -293,14 +294,14 @@ final class SocketPollingBodyLimitTest: XCTestCase {
 
         let delivered = expectation(description: "message delivered")
         delivered.assertForOverFulfill = false
-        let poll = DispatchQueue(label: "bodylimit.poll")
-        func check() {
-            poll.asyncAfter(deadline: .now() + 0.05) {
-                if self.client.messages.contains("hello") { delivered.fulfill() } else { check() }
-            }
+        // Poll the engine-queue-owned client state from the main run loop:
+        // XCTest's wait services it, and no @Sendable closure has to touch `self`.
+        let deadline = Date().addingTimeInterval(10)
+        while !client.messages.contains("hello") && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
-        check()
-        wait(for: [delivered], timeout: 10)
+        if client.messages.contains("hello") { delivered.fulfill() }
+        wait(for: [delivered], timeout: 1)
 
         XCTAssertTrue(client.closes.isEmpty, "a response inside the cap does not close anything")
     }
@@ -317,13 +318,13 @@ final class SocketPollingBodyLimitTest: XCTestCase {
 
         let delivered = expectation(description: "oversized message delivered")
         delivered.assertForOverFulfill = false
-        let poll = DispatchQueue(label: "bodylimit.unlimited.poll")
-        func check() {
-            poll.asyncAfter(deadline: .now() + 0.05) {
-                if self.client.messages.contains(payload) { delivered.fulfill() } else { check() }
-            }
+        // Poll the engine-queue-owned client state from the main run loop:
+        // XCTest's wait services it, and no @Sendable closure has to touch `self`.
+        let deadline = Date().addingTimeInterval(10)
+        while !client.messages.contains(payload) && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
-        check()
-        wait(for: [delivered], timeout: 10)
+        if client.messages.contains(payload) { delivered.fulfill() }
+        wait(for: [delivered], timeout: 1)
     }
 }

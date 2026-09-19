@@ -308,7 +308,7 @@ final class SocketReconnectEventsTest: XCTestCase {
         socket.connect()
 
         let settled = expectation(description: "settled")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { settled.fulfill() }
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.5) { settled.fulfill() }
         wait(for: [settled], timeout: 3)
 
         XCTAssertEqual(attempts, 1, "Closing the last socket must stop the loop after the first attempt")
@@ -399,7 +399,6 @@ private final class ReconnectTestEngine: SocketEngineSpec {
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
     private(set) var websocket = false
 
-    private(set) var version = SocketIOVersion.three
 
     /// Fails every handshake while `true`.
     var alwaysFail = false
@@ -589,9 +588,11 @@ extension SocketReconnectEventsTest {
         socket.addAnyOutgoingListener { event in
             if event.event == "pending-async" { manager.engineDidClose(reason: "transport close") }
         }
+        // The socket is used again after the Task; box it so the closure can be sent.
+        let boxed = SocketUncheckedSendableBox(socket)
         let task = Task {
             do {
-                let _: [Any] = try await socket.emitWithAck("pending-async")
+                let _: [Any] = try await boxed.value.emitWithAck("pending-async")
                 XCTFail("the server never acknowledged this event")
             } catch {
                 XCTAssertEqual(error as? SocketAckError, .disconnected)

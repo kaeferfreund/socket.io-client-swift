@@ -769,6 +769,69 @@
           "symbol": "SocketRemainingBinaryParserTest.testPublicPacketTypesMatchWireNumbers"
         }
       ]
+    },
+    {
+      "id": "JS-102/JS-103/JS-104-clear-acks-on-retried-close",
+      "upstream_ids": [
+        "JS-102",
+        "JS-103",
+        "JS-104"
+      ],
+      "kind": "assertion-port",
+      "assertions": "JS `Socket.onclose` runs `_clearAcks()` on every close, so a transport drop that the manager retries settles a pending acknowledgement exactly as `disconnect()` does: `socket.timeout(N).emit` and a configured-`ackTimeout` callback receive the disconnect error and the registry is left empty (JS asserts `Object.keys(socket.acks).length === 0`), the `emitWithAck` continuation is resumed with `.disconnected` as JS rejects the promise, and a callback registered without `withError` is removed silently without being invoked. The real server-side transport kill covers the same contract end to end with an emit the server never acknowledges.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketClearAcksOnCloseTest.swift",
+          "symbol": "SocketClearAcksOnCloseTest.testTimedAckFailsOnATransportDropThatReconnects"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketClearAcksOnCloseTest.swift",
+          "symbol": "SocketClearAcksOnCloseTest.testAckTimeoutCallbackFailsOnATransportDropThatReconnects"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketClearAcksOnCloseTest.swift",
+          "symbol": "SocketClearAcksOnCloseTest.testPlainAckIsRemovedSilentlyOnATransportDropThatReconnects"
+        },
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testPendingAckFailsWhenTheTransportIsKilledAndTheSocketReconnects"
+        }
+      ]
+    },
+    {
+      "id": "JS-106/JS-107-unsent-ack-survives-the-close",
+      "upstream_ids": [
+        "JS-106",
+        "JS-107"
+      ],
+      "kind": "assertion-port",
+      "assertions": "`_clearAcks` skips an acknowledgement whose packet is still in `sendBuffer`: the packet has not reached the server, so it goes out on the next CONNECT and the acknowledgement is still owed. The throttled-timer scenario is what buffers a packet while the socket still believes it is connected (JS sets `_pingTimeoutTime` into the past; here `hasPingExpired`), and the buffered emit is answered after the reconnect.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketClearAcksOnCloseTest.swift",
+          "symbol": "SocketClearAcksOnCloseTest.testUnsentAckSurvivesATransportDropAndIsAcknowledgedAfterReconnect"
+        }
+      ]
+    },
+    {
+      "id": "JS-056/JS-057/JS-058-retried-head-across-a-close",
+      "upstream_ids": [
+        "JS-056",
+        "JS-057",
+        "JS-058"
+      ],
+      "kind": "assertion-port",
+      "assertions": "`_clearAcks` retires the per-attempt acknowledgement `_drainQueue` registered, and the callback `_addToQueue` appended decides what the close means for the entry: with retries left it keeps its place in `_queue` with `pending = false` and `onconnect`'s `_drainQueue(true)` re-sends it under a fresh id; once `tryCount > retries` the entry is discarded and the user's acknowledgement settles with the error. The queue never drains while the socket is disconnected.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketClearAcksOnCloseTest.swift",
+          "symbol": "SocketClearAcksOnCloseTest.testRetryHeadStaysQueuedAndIsResentWithAFreshIdAfterADrop"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketClearAcksOnCloseTest.swift",
+          "symbol": "SocketClearAcksOnCloseTest.testRetryHeadWhoseBudgetIsSpentIsDiscardedByTheDrop"
+        }
+      ]
     }
   ],
   "remaining_review": {

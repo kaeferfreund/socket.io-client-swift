@@ -55,7 +55,7 @@ final class JSParityE2ETest: XCTestCase {
     /// Waits a fixed interval, for assertions that nothing *further* happens.
     private func settle(_ seconds: TimeInterval) {
         let done = expectation(description: "settled")
-        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { done.fulfill() }
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + seconds) { done.fulfill() }
         wait(for: [done], timeout: seconds + 5)
     }
 
@@ -237,7 +237,7 @@ final class JSParityE2ETest: XCTestCase {
         // lands after the registration and before any ack the server sends back,
         // which a wall-clock wait could not guarantee. (`handleQueue.sync` is not
         // an option — this manager's handleQueue is the queue we are on.)
-        manager.handleQueue.async { socket.disconnect() }
+        manager.handleQueue.socketAsync { socket.disconnect() }
         settle(0.2)
         // Read on handleQueue: it is the main queue, which is this thread.
         XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
@@ -322,7 +322,7 @@ final class JSParityE2ETest: XCTestCase {
         foo.disconnect()
 
         let settled = expectation(description: "give the disconnect time to propagate")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { settled.fulfill() }
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + 1) { settled.fulfill() }
         wait(for: [settled], timeout: 5)
 
         XCTAssertFalse(asdDisconnected, "Leaving one namespace must not close the shared engine")
@@ -1038,7 +1038,7 @@ final class JSParityE2ETest: XCTestCase {
             attempts += 1
             if !openedSecond {
                 openedSecond = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.5) {
                     let other = self.manager.socket(forNamespace: "/asd")
                     other.connect()
                 }

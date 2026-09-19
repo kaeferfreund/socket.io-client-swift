@@ -101,15 +101,6 @@ final class SocketProtocolSafetyTest: XCTestCase {
         XCTAssertThrowsError(try manager.parseString("2[\"x\",\"" + String(repeating: "ä", count: 40) + "\"]"))
     }
 
-    func testModernConnectErrorPayloadAndLegacyCompatibility() throws {
-        let manager = parser()
-        XCTAssertNotNil(try manager.parseString("4{\"message\":\"denied\",\"data\":{\"code\":3}}"))
-        XCTAssertNotNil(try manager.parseString("4\"denied\""))
-        XCTAssertThrowsError(try manager.parseString("41"))
-        XCTAssertThrowsError(try manager.parseString("4[1,\"denied\"]"))
-        manager.setConfigs([.version(.two)])
-        XCTAssertEqual(try manager.parseString("41").data.first as? Int, 1)
-    }
 
     func testAckZeroNumericEventsAndEmptyAckArray() throws {
         let manager = parser()
@@ -144,17 +135,6 @@ final class SocketProtocolSafetyTest: XCTestCase {
         XCTAssertFalse(SocketParserOptions(maximumNestingDepth: 1025).isValid)
     }
 
-    func testUTF16ReaderRejectsNegativeOversizedAndSplitSurrogateReads() {
-        for count in [-1, Int.max, 1] {
-            var reader = SocketStringReader(message: "🦧")
-            XCTAssertNil(reader.readSafely(count: count))
-            XCTAssertFalse(reader.hasNext)
-        }
-        var reader = SocketStringReader(message: "🦧é")
-        XCTAssertEqual(reader.readSafely(count: 2), "🦧")
-        XCTAssertEqual(reader.readSafely(count: 1), "é")
-        XCTAssertFalse(reader.hasNext)
-    }
 
     func testTextCannotInterleaveBinaryAndFailureIsTerminalUntilReconnect() {
         let manager = parser()
@@ -170,7 +150,7 @@ final class SocketProtocolSafetyTest: XCTestCase {
         manager.parseEngineBinaryData(Data([1]))
         manager.parseEngineMessage("2[\"x\"]")
         let finished = expectation(description: "queued parser operations finished")
-        manager.handleQueue.async { finished.fulfill() }
+        manager.handleQueue.socketAsync { finished.fulfill() }
         wait(for: [finished], timeout: 3)
         XCTAssertEqual(engine.reasons, ["parse error"])
         XCTAssertTrue(manager.waitingPackets.isEmpty)
@@ -212,7 +192,7 @@ final class SocketProtocolSafetyTest: XCTestCase {
 
     private func drainHandleQueue(of manager: SocketManager) {
         let drained = expectation(description: "queued parser operations finished")
-        manager.handleQueue.async { drained.fulfill() }
+        manager.handleQueue.socketAsync { drained.fulfill() }
         wait(for: [drained], timeout: 3)
     }
 
@@ -225,7 +205,7 @@ final class SocketProtocolSafetyTest: XCTestCase {
             manager.parseEngineMessage("51-[\"x\"]")
             manager.parseEngineMessage(second)
             let finished = expectation(description: "second header processed")
-            manager.handleQueue.async { finished.fulfill() }
+            manager.handleQueue.socketAsync { finished.fulfill() }
             wait(for: [finished], timeout: 3)
             XCTAssertEqual(engine.reasons, ["parse error"])
         }
@@ -236,4 +216,18 @@ final class SocketProtocolSafetyTest: XCTestCase {
 private final class ReviewParseEngine: TestEngine {
     var reasons = [String]()
     override func disconnect(reason: String) { reasons.append(reason) }
+}
+
+
+extension SocketProtocolSafetyTest {
+    func testModernConnectErrorPayloadsRemainSupported() throws {
+        let manager = parser()
+        XCTAssertEqual(try manager.parseString("4\"denied\"").data.first as? String, "denied")
+        let packet = try manager.parseString("4/admin,{\"message\":\"denied\",\"data\":{\"code\":401}}")
+        XCTAssertEqual(packet.nsp, "/admin")
+        XCTAssertEqual((packet.data.first as? [String: Any])?["message"] as? String, "denied")
+        for text in ["4", "41", "4true", "4null", "4[]", "4/admin,"] {
+            XCTAssertThrowsError(try manager.parseString(text), text)
+        }
+    }
 }

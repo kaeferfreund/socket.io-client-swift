@@ -33,7 +33,7 @@ public protocol SocketEnginePollable: SocketEngineSpec {
 
     /// The maximum number of bytes the server accepts in a single polling POST,
     /// as advertised in the handshake. `nil` when the server does not advertise
-    /// a limit, which is always the case on engine.io v3.
+    /// a limit.
     ///
     /// **You should not touch this directly**
     var maxPayload: Int? { get }
@@ -103,7 +103,7 @@ extension SocketEnginePollable {
     /// Always at least 1 for a non-empty queue, so a caller can drain by
     /// repeatedly taking the prefix.
     func writablePrefixCount(of pending: [Post]) -> Int {
-        guard let maxPayload = maxPayload, version.rawValue >= 3, pending.count > 1 else {
+        guard let maxPayload = maxPayload, pending.count > 1 else {
             return pending.count
         }
 
@@ -141,12 +141,7 @@ extension SocketEnginePollable {
     /// Encodes explicit wire packets without draining the application queue.
     /// Used by normal batches and the close-only request for a retiring session.
     func createRequestForPost(with messages: [String]) -> URLRequest {
-        let postStr: String
-        if version.rawValue >= 3 {
-            postStr = messages.joined(separator: "\u{1e}")
-        } else {
-            postStr = messages.map { "\($0.utf16.count):\($0)" }.joined()
-        }
+        let postStr = messages.joined(separator: "\u{1e}")
         DefaultSocketLogger.Logger.log("Created POST string: \(postStr)", type: "SocketEnginePolling")
         let postData = Data(postStr.utf8)
         var req = URLRequest(url: urlPollingWithSid)
@@ -203,14 +198,16 @@ extension SocketEnginePollable {
         postGroup?.enter()
 
         let engine = self as? SocketEngine
-        let deliver: (Data?, URLResponse?, Error?) -> Void = { [weak self, weak requestSession] data, response, error in
+        let queue = engineQueue
+        let delivery = SocketUncheckedSendableBox({ [weak self, weak requestSession]
+            (data: Data?, response: URLResponse?, error: Error?) in
+            guard let self = self, let requestSession = requestSession,
+                  self.session === requestSession, !self.closed, !self.invalidated else { return }
+            callback(data, response, error)
+        })
+        let deliver: @Sendable (Data?, URLResponse?, Error?) -> Void = { data, response, error in
             defer { postGroup?.leave() }
-            guard let self = self else { return }
-            self.engineQueue.async { [weak self, weak requestSession] in
-                guard let self = self, let requestSession = requestSession,
-                      self.session === requestSession, !self.closed, !self.invalidated else { return }
-                callback(data, response, error)
-            }
+            queue.socketAsync { delivery.value(data, response, error) }
         }
 
         // Gate R1: with a configured cap the body is accumulated by the session
@@ -329,35 +326,10 @@ extension SocketEnginePollable {
 
     func parsePollingMessage(_ str: String) {
         guard !str.isEmpty else { return }
-
         DefaultSocketLogger.Logger.log("Got poll message: \(str)", type: "SocketEnginePolling")
-
-        if version.rawValue >= 3 {
-            let records = str.components(separatedBy: "\u{1e}")
-
-            for record in records {
-                guard !closed else { break }
-                parseEngineMessage(record)
-            }
-        } else {
-            guard str.count != 1 else {
-                parseEngineMessage(str)
-
-                return
-            }
-
-            var reader = SocketStringReader(message: str)
-
-            while reader.hasNext && !closed {
-                let length = reader.readUntilOccurence(of: ":")
-                guard !length.isEmpty, length.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
-                      let count = Int(length), count > 0, reader.hasNext,
-                      let packet = reader.readSafely(count: count) else {
-                    didError(reason: "Invalid Engine.IO 3 polling payload length")
-                    return
-                }
-                parseEngineMessage(packet)
-            }
+        for record in str.components(separatedBy: "\u{1e}") {
+            guard !closed else { break }
+            parseEngineMessage(record)
         }
     }
 

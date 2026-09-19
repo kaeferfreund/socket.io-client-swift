@@ -12,7 +12,6 @@ private final class RemainingUnitClient: NSObject, SocketEngineClient {
     func engineDidOpen(reason: String) {}
     func engineDidReceivePing() {}
     func engineDidReceivePong() {}
-    func engineDidSendPing() {}
     func engineDidSendPong() {}
     func parseEngineMessage(_ msg: String) {}
     func parseEngineBinaryData(_ data: Data) {}
@@ -73,8 +72,12 @@ final class SocketRemainingParityTest: XCTestCase {
         XCTAssertEqual(URLComponents(url: engine([.path("/custom")]).urlPolling, resolvingAgainstBaseURL: false)?.percentEncodedPath, "/custom/")
     }
     func testProtocolVersionsHaveNativeWireConstants() {
-        XCTAssertEqual(engine().engineIOParam, "&EIO=4")
-        XCTAssertEqual(engine([.version(.two)]).engineIOParam, "&EIO=3")
+        // Version selection is removed in the integration branch. Every
+        // transport configuration must retain the Engine.IO 4 wire constant.
+        for options: [SocketIOClientOption] in [[], [.forcePolling(true)],
+                [.forceWebsockets(true)], [.forceBase64(true)]] {
+            XCTAssertEqual(engine(options).engineIOParam, "&EIO=4")
+        }
     }
     func testContradictoryTransportOptionsFailBeforeNetwork() {
         let instance = engine([.forcePolling(true), .forceWebsockets(true)])
@@ -88,8 +91,8 @@ final class SocketRemainingParityTest: XCTestCase {
         }
     }
     func testForcedBase64ControlsWebSocketBatch() {
-        for version in [SocketIOVersion.two, .three] {
-            let instance = engine([.forceWebsockets(true), .forceBase64(true), .version(version)])
+        for base64 in [false, true] {
+            let instance = engine([.forceWebsockets(true), .forceBase64(base64)])
             let transport = RemainingUnitTransport()
             instance.webSocketTransportFactory = { _ in transport }
             instance.connect(); settle(instance)
@@ -97,9 +100,12 @@ final class SocketRemainingParityTest: XCTestCase {
             instance.sendWebSocketMessage("header", withType: .message, withData: [Data([0, 1, 2]), Data()], completion: nil)
             settle(instance)
             instance.engineQueue.sync {
-                let prefix = version == .two ? "b4" : "b"
-                XCTAssertEqual(transport.messages, [.text("4header"), .text(prefix + "AAEC"), .text(prefix)])
-                XCTAssertEqual(instance.urlWebSocket.query?.contains("b64=1"), true)
+                let expected: [EngineWebSocketMessage] = base64
+                    ? [.text("4header"), .text("bAAEC"), .text("b")]
+                    : [.text("4header"), .binary(Data([0, 1, 2])), .binary(Data())]
+                XCTAssertEqual(transport.messages, expected)
+                XCTAssertEqual(instance.urlWebSocket.query?.contains("b64=1"), base64)
+                XCTAssertEqual(instance.engineIOParam, "&EIO=4")
             }
             instance.disconnect(reason: "test"); settle(instance)
         }

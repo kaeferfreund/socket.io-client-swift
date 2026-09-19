@@ -2,14 +2,14 @@ name: PR18 review-fix validation
 on:
   push:
     branches: [fix/coderabbit-findings-audit]
-    paths: [.github/workflows/review-fix-validation.yml, scripts/_review_fix.py, scripts/_review_fix_followup.py]
+    paths: [.github/workflows/review-fix-validation.yml, scripts/_review_fix.py, scripts/_review_fix_followup.py, scripts/_review_fix_namespace.py]
 permissions:
   contents: read
 jobs:
   validate:
     if: github.repository == 'kaeferfreund/socket.io-client-swift'
     runs-on: macos-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     permissions:
       contents: write
     steps:
@@ -23,6 +23,7 @@ jobs:
         run: |
           python3 scripts/_review_fix_followup.py
           python3 scripts/_review_fix.py apply
+          python3 scripts/_review_fix_namespace.py
           git -c core.whitespace=cr-at-eol diff --cached --check
       - name: Check review evidence and fixture guards
         run: |
@@ -44,11 +45,11 @@ jobs:
           python3 - <<'PY'
           import os, signal, subprocess, sys
           path = os.path.join(os.environ['RUNNER_TEMP'], 'review-swift-tests.log')
-          args = ['swift', 'test', '--filter', 'SocketPacketEncoderTest|SocketActiveTest|SocketNativeEngineTest|SocketTimedEmitterAsyncTest|SocketPollingCloseTest']
+          args = ['swift', 'test']
           with open(path, 'w') as log:
               process = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
               try:
-                  code = process.wait(timeout=180)
+                  code = process.wait(timeout=360)
               except subprocess.TimeoutExpired:
                   os.killpg(process.pid, signal.SIGKILL)
                   process.wait()

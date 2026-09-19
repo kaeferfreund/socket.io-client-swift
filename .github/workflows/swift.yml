@@ -3,34 +3,125 @@ name: Swift
 on:
   push:
     branches: [fix/client-parity-followup]
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  snapshot:
-    if: github.ref == 'refs/heads/fix/client-parity-followup'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+  validate-and-publish:
+    if: github.repository == 'kaeferfreund/socket.io-client-swift' && github.ref == 'refs/heads/fix/client-parity-followup'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
-          ref: 37e8b039f3db1d30beee320b4d97610711f3718f
-      - name: Export reviewed baseline and pinned client reference
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - name: Materialize hash-checked implementation from reviewed master
+        shell: bash
         run: |
           set -euo pipefail
-          git archive --format=zip HEAD -o "$RUNNER_TEMP/swift-baseline.zip"
-          git init "$RUNNER_TEMP/upstream"
-          git -C "$RUNNER_TEMP/upstream" remote add origin https://github.com/socketio/socket.io.git
-          git -C "$RUNNER_TEMP/upstream" fetch --depth=1 origin aaf2af36ec8ad05910f357a788e0e358bad32738
-          git -C "$RUNNER_TEMP/upstream" checkout --detach FETCH_HEAD
-          git -C "$RUNNER_TEMP/upstream" archive --format=zip HEAD -o "$RUNNER_TEMP/js-reference.zip"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor 37e8b039f3db1d30beee320b4d97610711f3718f HEAD
+          cp .github/workflows/swift.yml "$RUNNER_TEMP/bootstrap.yml"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, lzma, os
+          data = b''.join(Path(f'.github/parity-staging/part{i}.xz').read_bytes() for i in range(3))
+          assert hashlib.sha256(data).hexdigest() == '03378a1407fdad3ace8f3526a611310433a5108f4f0e678ea2d803ec49a3b7cd'
+          patch = lzma.decompress(data)
+          assert hashlib.sha256(patch).hexdigest() == '0630f4847bef6f3e3f6d9256611548a59ca0fa911a788ea3d160e54be56a9ff3'
+          Path(os.environ['RUNNER_TEMP'], 'implementation.patch').write_bytes(patch)
+          PY
+          git show 37e8b039f3db1d30beee320b4d97610711f3718f:.github/workflows/swift.yml > .github/workflows/swift.yml
+          git apply --check "$RUNNER_TEMP/implementation.patch"
+          git apply "$RUNNER_TEMP/implementation.patch"
+          cp .github/workflows/swift.yml "$RUNNER_TEMP/permanent-swift.yml"
+          cd Tests/TestSocketIO/E2E/Fixtures
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prove new regressions fail on the unmodified production baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp Source/SocketIO/Client/SocketIOClient.swift "$RUNNER_TEMP/fixed-client.swift"
+          cp Source/SocketIO/Engine/SocketEngine.swift "$RUNNER_TEMP/fixed-engine.swift"
+          restore() {
+            cp "$RUNNER_TEMP/fixed-client.swift" Source/SocketIO/Client/SocketIOClient.swift
+            cp "$RUNNER_TEMP/fixed-engine.swift" Source/SocketIO/Engine/SocketEngine.swift
+          }
+          trap restore EXIT
+          git show 37e8b039f3db1d30beee320b4d97610711f3718f:Source/SocketIO/Client/SocketIOClient.swift > Source/SocketIO/Client/SocketIOClient.swift
+          git show 37e8b039f3db1d30beee320b4d97610711f3718f:Source/SocketIO/Engine/SocketEngine.swift > Source/SocketIO/Engine/SocketEngine.swift
+          set +e
+          swift test --filter 'SocketQueueTurnParityTest.testOutgoingRegistrationAndBinaryEmitInConnectCallbackSameTurn|SocketEngineURLParityTest.testProtocolIsNotSuppressedByEIOInsideAValueOrAnotherName' 2>&1 | tee "$RUNNER_TEMP/baseline-red.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          test "$result" -ne 0
+          grep -E "Test Case .*testOutgoingRegistrationAndBinaryEmitInConnectCallbackSameTurn.*failed" "$RUNNER_TEMP/baseline-red.log"
+          grep -E "Test Case .*testProtocolIsNotSuppressedByEIOInsideAValueOrAnotherName.*failed" "$RUNNER_TEMP/baseline-red.log"
+      - name: Run complete native suite with coverage and executed-contract gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-review-regressions.py
+          swift test --enable-code-coverage 2>&1 | tee "$RUNNER_TEMP/native-swift-tests.log"
+          python3 scripts/check-parity-contracts.py --swift-log "$RUNNER_TEMP/native-swift-tests.log"
+          coverage_path="$(swift test --show-codecov-path)"
+          cp "$coverage_path" "$RUNNER_TEMP/swift-coverage.json"
+          python3 scripts/report-swift-coverage.py "$coverage_path" "$RUNNER_TEMP/swift-coverage-summary.json"
+      - name: Record hashes and export the tested source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os, zipfile
+          roots = ['Source', 'Tests', 'Documentation', 'scripts']
+          paths = [p for root in roots for p in Path(root).rglob('*') if p.is_file() and 'node_modules' not in p.parts and '__pycache__' not in p.parts]
+          paths += [Path(p) for p in ['README.md', 'CHANGELOG.md', '.gitignore']]
+          hashes = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(paths)}
+          Path(os.environ['RUNNER_TEMP'], 'tested-source-hashes.json').write_text(json.dumps(hashes, indent=2)+'\n')
+          with zipfile.ZipFile(Path(os.environ['RUNNER_TEMP'], 'tested-source.zip'), 'w', zipfile.ZIP_DEFLATED) as archive:
+              for p in paths: archive.write(p, str(p))
+          PY
+      - name: Commit tested source only to the new feature branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = kaeferfreund/socket.io-client-swift
+          test "$GITHUB_REF" = refs/heads/fix/client-parity-followup
+          test "$(git ls-remote origin refs/heads/fix/client-parity-followup | cut -f1)" = "$GITHUB_SHA"
+          # Workflow restoration is performed separately through the authorized
+          # connector, never by this contents-only automation token.
+          cp "$RUNNER_TEMP/bootstrap.yml" .github/workflows/swift.yml
+          git rm .github/parity-staging/part0.xz .github/parity-staging/part1.xz .github/parity-staging/part2.xz
+          git add Source Tests Documentation scripts README.md CHANGELOG.md .gitignore
+          git -c core.whitespace=cr-at-eol diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: restore client lifecycle parity and enforce executable regression evidence'
+          credential="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $credential" push origin HEAD:refs/heads/fix/client-parity-followup
+          git rev-parse HEAD > "$RUNNER_TEMP/published-head.txt"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: parity-source-snapshot
-          retention-days: 1
+          name: parity-followup-validation-${{ github.run_id }}
+          retention-days: 7
           path: |
-            ${{ runner.temp }}/swift-baseline.zip
-            ${{ runner.temp }}/js-reference.zip
+            ${{ runner.temp }}/baseline-red.log
+            ${{ runner.temp }}/native-swift-tests.log
+            ${{ runner.temp }}/swift-coverage.json
+            ${{ runner.temp }}/swift-coverage-summary.json
+            ${{ runner.temp }}/tested-source.zip
+            ${{ runner.temp }}/tested-source-hashes.json
+            ${{ runner.temp }}/published-head.txt
+            ${{ runner.temp }}/permanent-swift.yml

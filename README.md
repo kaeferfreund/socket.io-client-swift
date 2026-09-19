@@ -56,7 +56,7 @@ Socket.IO 3.x shares much of the modern wire protocol, but it is outside the sup
 
 ## Installation
 
-Swift Package Manager is the recommended and supported installation method.
+Swift Package Manager is the only supported installation method.
 
 In Xcode, choose:
 

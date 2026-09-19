@@ -2,8 +2,7 @@
 
 Stable release dated 2026-09-19, distributed through Swift Package Manager using
 the immutable [`v17.0.0` tag](https://github.com/kaeferfreund/socket.io-client-swift/releases/tag/v17.0.0).
-The framework and retained podspec metadata also declare 17.0.0.
-CocoaPods registry publication is not part of this release.
+Swift Package Manager is the only supported installation method.
 
 ## Additional parity corrections
 
@@ -71,7 +70,7 @@ behavior or a device/release certificate. See [PARITY.md](../PARITY.md).
 
 Publication requires all seven CI jobs to pass on the exact release commit:
 844 native tests and the strict parity checker against their actual log, Thread
-Sanitizer, strict concurrency, four Apple SDK framework builds, pinned upstream
+Sanitizer, strict concurrency, four Apple SDK package builds, pinned upstream
 Node suites, parser differential checks and wire proofs. CI also builds and runs
 an independent Swift Package consumer; when dispatched against the release tag,
 it resolves version 17.0.0 from GitHub instead of using a local package path.
@@ -87,10 +86,8 @@ half of R4 remain deferred architecture work without a demonstrated defect; see
 [ProtocolParityReview.md](ProtocolParityReview.md).
 
 Physical iOS/watchOS runtime checks remain outstanding and
-are not certified by this release. The supported installation method is SPM;
-independent CocoaPods and framework application integration remain unverified,
-although all four SDK framework builds are checked in CI. See
-[REMAINING-WORK.md](../REMAINING-WORK.md) for the follow-up backlog.
+are not certified by this release. Swift Package Manager is the only supported
+installation method; CI builds the package for all four Apple SDKs.
 
 ## Pre-release evidence
 

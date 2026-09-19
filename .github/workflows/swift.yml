@@ -125,15 +125,15 @@ jobs:
           path: ${{ runner.temp }}/strict-concurrency.log
           retention-days: 7
 
-  apple-frameworks:
-    name: Native framework distribution builds (four Apple SDKs)
+  apple-platforms:
+    name: Native Swift package builds (four Apple SDKs)
     runs-on: xcode-27
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Verify dependency removal and all framework build targets
+      - name: Verify dependency removal and all package platform builds
         run: bash scripts/test-native-distributions.sh
 
   protocol-proofs:

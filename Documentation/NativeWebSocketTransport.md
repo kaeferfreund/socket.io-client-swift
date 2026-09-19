@@ -91,11 +91,11 @@ JavaScript parser. See the
 
 ## Distribution and release
 
-SPM, CocoaPods and Xcode/Carthage definitions contain no Starscream dependency.
-Version 17.0.0 is prepared in the podspec and framework metadata. The podspec
-references the immutable `v17.0.0` tag, which has not yet been created.
-Publication remains blocked by the checks in [Release17.md](Release17.md).
-Development consumers should explicitly pin the reviewed commit until release.
+Swift Package Manager is the only supported installation method. `Package.swift`
+declares no third-party Swift dependencies. Version 17.0.0 is published from the
+immutable `v17.0.0` tag. Publication remains blocked by the checks in
+[Release17.md](Release17.md). Development consumers should explicitly pin the
+reviewed commit until release.
 
 ## Validation
 

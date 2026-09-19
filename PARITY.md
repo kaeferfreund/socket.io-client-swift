@@ -46,8 +46,8 @@ proof that all assertions of an upstream test have been ported. The current
 inventory contains 195 focused regressions with complete native assertion contracts,
 28 API differences, 38 platform differences and 36 unsupported-feature entries.
 There are no candidate or unmapped declarations. The final 36 were checked
-against each original setup, data, order and negative assertion; see
-[the final audit](Documentation/FinalParityAssertions-2026-09-19.md).
+against each original setup, data, order and negative assertion. The gated
+contracts in `Documentation/JavaScriptParityContracts.json` are the living mapping.
 CI now requires the strict completeness check **and** passed executions of the
 mapped tests in the current run. A static mapping is not a test-run certificate.
 These labels do not remove the deliberate encoding bounds; release gate R2 is closed with those bounds recorded as documented deviations.

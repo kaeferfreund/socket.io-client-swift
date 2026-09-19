@@ -5,10 +5,14 @@ import XCTest
 /// Raw Engine.IO callbacks are marshalled to main before touching XCTest state.
 private final class RemainingEngineClient: NSObject, SocketEngineClient {
     var opened: () -> Void = {}
+    var openedOnEngineQueue: () -> Void = {}
     var message: (EngineWebSocketMessage) -> Void = { _ in }
     var failed: (String, SocketTransportError?) -> Void = { _, _ in }
     var closed: (String, SocketTransportError?) -> Void = { _, _ in }
-    func engineDidOpen(reason: String) { DispatchQueue.main.socketAsync { self.opened() } }
+    func engineDidOpen(reason: String) {
+        openedOnEngineQueue()
+        DispatchQueue.main.socketAsync { self.opened() }
+    }
     func parseEngineMessage(_ msg: String) { DispatchQueue.main.socketAsync { self.message(.text(msg)) } }
     func parseEngineBinaryData(_ data: Data) { DispatchQueue.main.socketAsync { self.message(.binary(data)) } }
     func engineDidError(reason: String) { DispatchQueue.main.socketAsync { self.failed(reason, nil) } }
@@ -58,8 +62,7 @@ final class EngineRemainingParityE2ETest: XCTestCase {
     }
 
     /// One raw send must produce exactly one echo, preserving type, bytes and order.
-    private func roundTrip(_ packets: [EngineWebSocketMessage], afterUpgrade: Bool = false,
-                           onOpen: @escaping () -> Void = {}) {
+    private func roundTrip(_ packets: [EngineWebSocketMessage], afterUpgrade: Bool = false) {
         let expected = packets
         let received = expectation(description: "all raw Engine.IO packets echoed")
         received.expectedFulfillmentCount = expected.count
@@ -81,7 +84,7 @@ final class EngineRemainingParityE2ETest: XCTestCase {
                 actual.append(packet); received.fulfill()
             }
         }
-        client.opened = { onOpen(); if !afterUpgrade { send() } }
+        if !afterUpgrade { client.opened = send }
         engine.connect()
         wait(for: [received], timeout: 10)
         XCTAssertEqual(actual, expected)
@@ -267,12 +270,12 @@ final class EngineRemainingParityE2ETest: XCTestCase {
         try make([.transports([first, second]), .tryAllTransports(true)],
                  environment: ["DENY_TRANSPORT": first.rawValue])
         client.closed = { reason, _ in XCTFail("Unexpected intermediate close: \(reason)") }
-        roundTrip([.text("fallback succeeded")], onOpen: { [self] in
-            engine.engineQueue.sync {
-                XCTAssertTrue(engine.connected)
-                XCTAssertEqual(engine.polling, second == .polling)
-            }
-        })
+        let openingEngine = try XCTUnwrap(engine)
+        client.openedOnEngineQueue = {
+            XCTAssertTrue(openingEngine.connected)
+            XCTAssertEqual(openingEngine.polling, second == .polling)
+        }
+        roundTrip([.text("fallback succeeded")])
         let requests = try XCTUnwrap(snapshot()["requests"] as? [[String: Any]])
         XCTAssertTrue((requests.first?["url"] as? String)?.contains("transport=" + first.rawValue) == true)
         XCTAssertTrue(requests.contains { ($0["url"] as? String)?.contains("transport=" + second.rawValue) == true })

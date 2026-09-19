@@ -186,7 +186,6 @@ private final class BodyLimitClient: NSObject, SocketEngineClient {
     func engineDidError(reason: String) { lock.lock(); _errors.append(reason); lock.unlock() }
     func engineDidReceivePing() {}
     func engineDidReceivePong() {}
-    func engineDidSendPing() {}
     func engineDidSendPong() {}
     func parseEngineMessage(_ msg: String) { lock.lock(); _messages.append(msg); lock.unlock() }
     func parseEngineBinaryData(_ data: Data) {}

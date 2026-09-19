@@ -195,16 +195,6 @@ class SocketEngineTest: XCTestCase {
         XCTAssertEqual(manager.engine!.socketPath, newValue)
     }
 
-    func testSettingCompressAfterConnectDoesNotIgnoreChanges() {
-        manager.engine = engine
-        manager.setTestStatus(.connected)
-        engine.setConnected(true)
-        manager.config.insert(.compress)
-
-        XCTAssertEqual(2, manager.config.count)
-        XCTAssertTrue(manager.engine!.compress)
-    }
-
     func testSettingForcePollingAfterConnectDoesNotIgnoreChanges() {
         manager.engine = engine
         manager.setTestStatus(.connected)

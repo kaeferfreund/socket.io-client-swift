@@ -487,9 +487,6 @@ final class SocketNativeEngineTest: XCTestCase {
 
     func testUnsupportedOptionsFailBeforeOpeningTransport() {
         let invalid: [SocketIOClientConfiguration] = [
-            [.forceWebsockets(true), .selfSigned(true)],
-            [.forceWebsockets(true), .enableSOCKSProxy(true)],
-            [.forceWebsockets(true), .compress],
             [.forceWebsockets(true), .webSocketOptions(.init(maximumMessageSize: 0))],
             [.forceWebsockets(true), .forcePolling(true)],
             [.forceWebsockets(true), .security(.certificatePinning([]))]
@@ -504,7 +501,7 @@ final class SocketNativeEngineTest: XCTestCase {
     }
 
     func testInvalidDictionarySecurityNeverDisappears() {
-        for key in ["security", "secure", "selfSigned", "sessionDelegate", "enableSOCKSProxy", "webSocketOptions"] {
+        for key in ["security", "secure", "sessionDelegate", "webSocketOptions"] {
             let config = ["forceWebsockets": true, key: "invalid legacy object"] as [String: Any]
             let (engine, client, transport) = make(config.toSocketConfiguration())
             XCTAssertTrue(engine.closed, key)
@@ -513,11 +510,18 @@ final class SocketNativeEngineTest: XCTestCase {
         }
     }
 
-    func testFalseLegacyProxyAndBackendOptionsUseNativeTransport() {
-        let (engine, client, transport) = make([.forceWebsockets(true), .enableSOCKSProxy(false), .useCustomEngine(false)])
-        XCTAssertEqual(transport.connects, 1)
-        XCTAssertTrue(client.errors.isEmpty)
-        engine.disconnect(reason: "test"); drain(engine)
+    /// Removed options must never silently enable a connection with different semantics.
+    func testRemovedDictionaryOptionsFailBeforeOpeningTransport() {
+        for key in ["version", "compress", "selfSigned", "enableSOCKSProxy", "useCustomEngine", "customEngine"] {
+            for value: Any in [true, false, "obsolete"] {
+                let config = ["forceWebsockets": true, key: value] as [String: Any]
+                let (engine, client, transport) = make(config.toSocketConfiguration())
+                XCTAssertTrue(engine.closed, key)
+                XCTAssertEqual(transport.connects, 0, key)
+                XCTAssertEqual(client.errors.count, 1, key)
+                XCTAssertEqual(client.closes.count, 1, key)
+            }
+        }
     }
 
     func testRequestPreservesHeadersCookiePrecedencePathAndParameters() {

@@ -1134,5 +1134,65 @@
       }
     ],
     "meaning": "All prior unmapped rows now have an explicit native regression or API/platform boundary. This is classification completeness, NOT full assertion parity."
-  }
+  },
+  "excluded_unsupported_features": [
+    {
+      "upstream_ids": [
+        "JS-068",
+        "JS-069",
+        "JS-221",
+        "JS-222"
+      ],
+      "reason": "Excluded: native URLSession exposes no JS compression enable/disable or threshold controls; deflate interoperability remains tested."
+    },
+    {
+      "upstream_ids": [
+        "JS-184",
+        "JS-185",
+        "JS-187",
+        "JS-188",
+        "JS-189",
+        "JS-190",
+        "JS-191",
+        "JS-199",
+        "JS-200"
+      ],
+      "reason": "Swift has fixed polling/WebSocket configuration and no identical public transport selection/cache API."
+    },
+    {
+      "upstream_ids": [
+        "JS-224",
+        "JS-225",
+        "JS-226",
+        "JS-227",
+        "JS-228",
+        "JS-229",
+        "JS-230",
+        "JS-231",
+        "JS-232",
+        "JS-233",
+        "JS-234",
+        "JS-281",
+        "JS-282",
+        "JS-287",
+        "JS-288",
+        "JS-289",
+        "JS-290",
+        "JS-291",
+        "JS-292",
+        "JS-293",
+        "JS-294",
+        "JS-295",
+        "JS-296",
+        "JS-297",
+        "JS-298",
+        "JS-299",
+        "JS-300",
+        "JS-301",
+        "JS-310",
+        "JS-311"
+      ],
+      "reason": "WebTransport/stream framing is outside the Swift polling+WebSocket implementation."
+    }
+  ]
 }

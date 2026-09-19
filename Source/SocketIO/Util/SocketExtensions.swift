@@ -52,8 +52,6 @@ extension Dictionary where Key == String, Value == Any {
             return .bufferLimits(limits)
         case let ("connectTimeout", timeout as Double):
             return .connectTimeout(timeout)
-        case let ("useCustomEngine", enable as Bool), let ("customEngine", enable as Bool):
-            return .useCustomEngine(enable)
         case let ("autoConnect", autoConnect as Bool):
             return .autoConnect(autoConnect)
         case let ("connectParams", params as [String: Any]):
@@ -100,14 +98,11 @@ extension Dictionary where Key == String, Value == Any {
             return .timestampParam(timestampParam)
         case let ("security", security as SocketTLSConfiguration):
             return .security(security)
-        case let ("selfSigned", selfSigned as Bool):
-            return .selfSigned(selfSigned)
         case let ("sessionDelegate", delegate as URLSessionDelegate):
             return .sessionDelegate(delegate)
-        case let ("compress", compress as Bool):
-            return compress ? .compress : nil
-        case let ("enableSOCKSProxy", enable as Bool):
-            return .enableSOCKSProxy(enable)
+        case ("compress", _), ("selfSigned", _), ("enableSOCKSProxy", _),
+             ("useCustomEngine", _), ("customEngine", _):
+            return .invalidConfiguration("The " + key + " option was removed. Use native URLSession transport and explicit SocketTLSConfiguration trust policies.")
         case ("version", _):
             return .invalidConfiguration("The version option was removed. Only Socket.IO 4.x (Engine.IO 4) is supported; remove version from configuration.")
         case ("withCredentials", _), ("forceBase64", _), ("addTrailingSlash", _):
@@ -116,9 +111,7 @@ extension Dictionary where Key == String, Value == Any {
             return .invalidConfiguration("invalid value for parserOptions; expected SocketParserOptions")
         case ("bufferLimits", _):
             return .invalidConfiguration("invalid value for bufferLimits; expected SocketBufferLimits")
-        case ("security", _), ("secure", _), ("selfSigned", _), ("sessionDelegate", _),
-             ("enableSOCKSProxy", _), ("compress", _), ("webSocketOptions", _),
-             ("useCustomEngine", _), ("customEngine", _):
+        case ("security", _), ("secure", _), ("sessionDelegate", _), ("webSocketOptions", _):
             return .invalidConfiguration("invalid value for " + key + "; legacy security objects must migrate to SocketTLSConfiguration")
         case _:
             return nil

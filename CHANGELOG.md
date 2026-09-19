@@ -1,3 +1,9 @@
+## Native configuration cleanup (2026-09-19)
+
+- Remove obsolete `compress`, `selfSigned`, `enableSOCKSProxy` and `useCustomEngine` typed options, unused engine properties and mock requirements. Removed dictionary keys now fail validation for all values, including `false`.
+- Remove obsolete configuration tests, the Engine.IO 3 ping stub, historical migration guides and generated 16.x API pages. Keep native deflate interoperability and old-protocol rejection regressions.
+- Treat the 43 explicitly reviewed unsupported-feature test IDs as resolved parity exclusions, with required reasons. Supported behavior still requires executable parity evidence; no 100% coverage claim.
+
 ## Native transport parity follow-up (2026-09-19)
 
 - Add explicit, private-cookie `withCredentials`, WebSocket `forceBase64` and `addTrailingSlash` options.

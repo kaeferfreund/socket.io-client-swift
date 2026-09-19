@@ -86,6 +86,30 @@ class ReviewRegressions(unittest.TestCase):
             path.write_text(json.dumps(manifest))
             self.assertTrue(any("requires an executable contract" in e for e in validate(root=root)))
 
+    def test_unsupported_exclusions_are_explicit_and_do_not_hide_supported_gaps(self):
+        validate = runpy.run_path(str(ROOT / "scripts/check-parity-contracts.py"))["validate"]
+        errors = validate(strict=True)
+        self.assertTrue(any("uncertified supported rows" in e for e in errors))
+        self.assertFalse(any("JS-068" in e for e in errors))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(ROOT / "Documentation", root / "Documentation")
+            shutil.copytree(ROOT / "Tests", root / "Tests", ignore=shutil.ignore_patterns("Fixtures"))
+            path = root / "Documentation/JavaScriptParityContracts.json"
+            manifest = json.loads(path.read_text())
+            group = manifest["excluded_unsupported_features"][0]
+            group["reason"] = ""
+            path.write_text(json.dumps(manifest))
+            self.assertTrue(any("reviewed reason" in e for e in validate(root=root)))
+            group["reason"] = "Native compression controls are not exposed"
+            removed = group["upstream_ids"].pop()
+            path.write_text(json.dumps(manifest))
+            self.assertIn("Unsupported-feature rows require explicit reviewed exclusions", validate(root=root))
+            group["upstream_ids"].append(removed)
+            group["upstream_ids"].append(manifest["contracts"][0]["upstream_ids"][0])
+            path.write_text(json.dumps(manifest))
+            self.assertTrue(any("exclusion must refer" in e for e in validate(root=root)))
+
     def test_mktemp_failure_stops_before_prepare_or_compilation(self):
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)

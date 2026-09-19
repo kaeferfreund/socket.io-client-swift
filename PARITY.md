@@ -10,6 +10,18 @@ The previous 116-row matrix covered only socket.io-client, omitted Engine.IO and
 both parsers, and contained stale/generic test pointers and inconsistent totals.
 It must not be used as a coverage percentage.
 
+For this port, parity means matching the supported JavaScript behavior plus
+explicitly reviewed exclusions for features the native API does not offer.
+`unsupported-feature`, `api-difference` and `platform-specific` rows with a
+reason are resolved scope boundaries; they are not passed Swift executions.
+The 43 unsupported-feature rows are explicitly listed in
+`JavaScriptParityContracts.json` under `excluded_unsupported_features`:
+compression controls (4), public transport selection/cache APIs (9), and
+WebTransport/stream framing (30). The validator rejects new unsupported rows
+without a matching reviewed exclusion. `--strict` excludes these reviewed
+boundaries but still fails for supported behavior without certified contracts.
+Existing candidate test pointers therefore still prevent a 100% parity claim.
+
 | Upstream scope | Static runtime test declarations |
 | --- | ---: |
 | socket.io-client | 116 |

@@ -121,7 +121,7 @@ The separate malformed-input smoke harness processes **20,000 deterministic gene
 
 The legacy `emitWithAck(...).timingOut(...)` and async timeout overload do not participate in the modern ordered retry queue. The legacy API intentionally retains magic-string timeout and different disconnect behavior. JavaScript Promise acknowledgement behavior must not be declared covered solely because a Swift async overload exists.
 
-The native fork rejects `.compress`, `.selfSigned(true)` and `.enableSOCKSProxy(true)` and uses explicit `SocketTLSConfiguration` policies. It does not implement WebTransport, JS `io()` manager caching, all URL inference, custom JSON revivers or all JS transport selection options. These are visible API/feature boundaries. Swift's explicit manager/queue ownership is not the same API as the browser/Node single-event-loop client.
+The native fork removes `.compress`, `.selfSigned`, `.enableSOCKSProxy` and `.useCustomEngine`, rejects their dictionary keys, and uses explicit `SocketTLSConfiguration` policies. It does not implement WebTransport, JS `io()` manager caching, all URL inference, custom JSON revivers or all JS transport selection options. These are visible API/feature boundaries. Swift's explicit manager/queue ownership is not the same API as the browser/Node single-event-loop client.
 
 ## 5. Outstanding release gates and recommended simplifications
 

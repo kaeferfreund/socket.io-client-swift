@@ -35,9 +35,6 @@ public protocol SocketEngineSpec: AnyObject {
     /// `true` if this engine is closed.
     var closed: Bool { get }
 
-    /// If `true` the engine will attempt to use WebSocket compression.
-    var compress: Bool { get }
-
     /// `true` if this engine is connected. Connected means that the initial poll connect has succeeded.
     var connected: Bool { get }
 
@@ -106,10 +103,6 @@ public protocol SocketEngineSpec: AnyObject {
     /// The query parameter name used for the cache-busting timestamp.
     /// Default `"t"`, JS-aligned with `timestampParam` in engine.io-client.
     var timestampParam: String { get }
-
-    /// If `true`, then the engine is currently in WebSockets mode.
-    @available(*, deprecated, message: "No longer needed, if we're not polling, then we must be doing websockets")
-    var websocket: Bool { get }
 
 
     // MARK: Initializers

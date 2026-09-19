@@ -33,10 +33,12 @@ Socket.IO 4.x / Engine.IO 4 only. See the subsequent
 * `SocketEngine.ws`, `SocketEngineSpec.ws` and the Starscream event delegate
   entry point have been removed. The native transport is deliberately internal.
 * `.security(...)` now takes `SocketTLSConfiguration`, not CertificatePinning.
-* `.useCustomEngine(...)` is deprecated; both values select the sole native path.
-* `.compress`, `.selfSigned(true)` and `.enableSOCKSProxy(true)` fail connection
-  validation with an explicit error, before any request. No proxy request silently
-  becomes a direct connection. False legacy booleans remain accepted.
+* `.useCustomEngine`, `.compress`, `.selfSigned` and `.enableSOCKSProxy` are
+  removed, together with their engine properties and the obsolete `websocket`
+  property. Use `wsConnected`/`polling` for transport state and explicit TLS trust
+  anchors for private certificates.
+* Dictionary keys for removed options (including `customEngine`) fail connection
+  validation for every value, including `false`, before any request.
 * WebSocket send completions run once per complete packet after all local sends
   finish, or once on failure/cancellation. They are NOT server acknowledgements.
   A partially sent packet is never transparently replayed.

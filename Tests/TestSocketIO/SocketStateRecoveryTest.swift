@@ -667,7 +667,6 @@ final class CaptureEngine: SocketEngineSpec {
     /// which cannot show that a flushed buffer preserved its order.
     private(set) var sentPackets = [String]()
     let closed = false
-    let compress = false
     let connected = true
     var connectParams: [String: Any]? = nil
     let cookies: [HTTPCookie]? = nil
@@ -683,7 +682,6 @@ final class CaptureEngine: SocketEngineSpec {
     let urlPolling = URL(string: "http://localhost/")!
     let urlWebSocket = URL(string: "http://localhost/")!
 
-    let websocket = false
 
     required init(client: SocketEngineClient, url: URL, options: [String: Any]?) {
         self.client = client

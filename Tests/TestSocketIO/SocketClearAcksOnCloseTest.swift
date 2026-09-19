@@ -324,7 +324,6 @@ final class SocketClearAcksOnCloseTest: XCTestCase {
 private final class ClearAcksTestEngine: SocketEngineSpec {
     weak var client: SocketEngineClient?
     private(set) var closed = false
-    private(set) var compress = false
     private(set) var connected = false
     var connectParams: [String: Any]? = nil
     private(set) var cookies: [HTTPCookie]? = nil
@@ -339,7 +338,6 @@ private final class ClearAcksTestEngine: SocketEngineSpec {
     private(set) var socketPath = ""
     private(set) var urlPolling = URL(string: "http://localhost/")!
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
-    private(set) var websocket = false
 
     /// Drives the JS "throttled timer" scenario: an emit made while this is
     /// `true` is buffered instead of written.

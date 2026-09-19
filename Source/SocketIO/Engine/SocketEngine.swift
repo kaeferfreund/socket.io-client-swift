@@ -90,9 +90,6 @@ open class SocketEngine: NSObject,
     /// `true` if this engine is closed.
     public private(set) var closed = false
 
-    /// If `true` the engine will attempt to use WebSocket compression.
-    public private(set) var compress = false
-
     /// `true` if this engine is connected. Connected means that the initial poll connect has succeeded.
     public private(set) var connected = false
 
@@ -162,19 +159,6 @@ open class SocketEngine: NSObject,
     /// The url for WebSockets.
     public private(set) var urlWebSocket = URL(string: "http://localhost/")!
 
-    /// Compatibility property. The only WebSocket backend is URLSession.
-    @available(*, deprecated, message: "URLSession is always used")
-    public private(set) var useCustomEngine = false
-
-
-    /// If `true`, then the engine is currently in WebSockets mode.
-    @available(*, deprecated, message: "No longer needed, if we're not polling, then we must be doing websockets")
-    public private(set) var websocket = false
-
-    /// Requested legacy SOCKS option. `true` fails validation before any network request.
-    public private(set) var enableSOCKSProxy = false
-
-
     /// Whether or not the WebSocket is currently connected.
     public private(set) var wsConnected = false
 
@@ -200,7 +184,6 @@ open class SocketEngine: NSObject,
     private var pendingCloseReason: String?
     private var probeWait = ProbeWaitQueue()
     private var secure = false
-    private var selfSigned = false
 
     // MARK: Initializers
 
@@ -524,9 +507,6 @@ open class SocketEngine: NSObject,
     private func validateConfiguration() -> String? {
         if let error = configurationError { return error }
         if forcePolling && forceWebsockets { return "forcePolling and forceWebsockets cannot both be true" }
-        if selfSigned { return "selfSigned(true) is unsupported; use security(.customTrust(anchors:pins:))" }
-        if enableSOCKSProxy { return "enableSOCKSProxy(true) is unsupported by the native transport; refusing a direct connection" }
-        if compress { return "compress is unsupported: URLSession does not expose compression negotiation controls" }
         if tlsConfiguration.requiresTLS && !secure { return "a custom security policy requires https/wss" }
         return tlsConfiguration.validationError ?? webSocketOptions.validationError
     }
@@ -974,8 +954,6 @@ open class SocketEngine: NSObject,
                 socketPath = path
             case let .secure(secure):
                 self.secure = secure
-            case let .selfSigned(selfSigned):
-                self.selfSigned = selfSigned
             case let .security(policy):
                 tlsConfiguration = policy
             case let .webSocketOptions(options):
@@ -984,16 +962,10 @@ open class SocketEngine: NSObject,
                 bufferLimits = limits
             case let .invalidConfiguration(reason):
                 configurationError = reason
-            case .compress:
-                self.compress = true
             case let .timestampRequests(stamp):
                 timestampRequests = stamp
             case let .timestampParam(param):
                 timestampParam = param
-            case let .enableSOCKSProxy(enable):
-                self.enableSOCKSProxy = enable
-            case .useCustomEngine:
-                self.useCustomEngine = false // Deprecated compatibility option; native is the only backend.
             default:
                 continue
             }

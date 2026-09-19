@@ -228,7 +228,6 @@ final class SocketConnectTimeoutTest: XCTestCase {
 private final class TimeoutTestEngine: SocketEngineSpec {
     weak var client: SocketEngineClient?
     private(set) var closed = false
-    private(set) var compress = false
     private(set) var connected = false
     var connectParams: [String: Any]? = nil
     private(set) var cookies: [HTTPCookie]? = nil
@@ -243,7 +242,6 @@ private final class TimeoutTestEngine: SocketEngineSpec {
     private(set) var socketPath = ""
     private(set) var urlPolling = URL(string: "http://localhost/")!
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
-    private(set) var websocket = false
 
 
     var onConnect: (() -> Void)?

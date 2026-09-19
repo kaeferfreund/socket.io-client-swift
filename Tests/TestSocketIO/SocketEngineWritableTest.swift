@@ -14,7 +14,6 @@ import XCTest
 private final class StubEngine: NSObject, SocketEngineSpec {
     weak var client: SocketEngineClient?
     var closed: Bool = false
-    var compress: Bool = false
     var connected: Bool = true
     var connectParams: [String: Any]? = nil
     var cookies: [HTTPCookie]? = nil
@@ -30,7 +29,6 @@ private final class StubEngine: NSObject, SocketEngineSpec {
     var urlPolling: URL = URL(string: "http://localhost/")!
     var urlWebSocket: URL = URL(string: "ws://localhost/")!
 
-    var websocket: Bool = true
 
 
     required convenience init(client: SocketEngineClient, url: URL, options: [String: Any]?) {

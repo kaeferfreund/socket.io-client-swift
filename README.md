@@ -327,10 +327,13 @@ See [TLS configuration examples](Documentation/NativeWebSocketTransport.md#tls).
 | --- | --- |
 | `.security(CertificatePinning)` | Migrate to `SocketTLSConfiguration`. |
 | `SocketEngine.ws` / `SocketEngineSpec.ws` | Removed; the transport is internal. |
-| `.useCustomEngine(...)` | Deprecated, has no effect; remove it. |
-| `.compress` | Unsupported, produces a connection configuration error. |
-| `.selfSigned(true)` | Unsupported; configure explicit custom trust anchors instead. |
-| `.enableSOCKSProxy(true)` | Unsupported, produces a configuration error instead of silently connecting directly. |
+| `.useCustomEngine(...)` | Removed; URLSession is the only backend. |
+| `.compress` | Removed; native compression controls are not exposed. |
+| `.selfSigned(...)` | Removed; configure explicit custom trust anchors instead. |
+| `.enableSOCKSProxy(...)` | Removed; custom SOCKS routing is not supported. |
+
+Dictionary entries for removed options (including `customEngine`) are rejected
+for every value, including `false`, before any network request.
 
 External `.sessionDelegate` callbacks cannot override the configured server-trust
 policy. Native compression controls, SOCKS routing and WebTransport are not
@@ -470,8 +473,8 @@ known differences and outstanding work.
 [Native migration guide](Documentation/NativeWebSocketTransport.md) ·
 [Changelog](CHANGELOG.md) · [CodeRabbit audit](Documentation/CodeRabbitAudit.md)
 
-The generated `docs/` HTML and older upstream examples describe the historical
-16.x API. Use this checkout's Swift source and migration notes for current
+The obsolete generated 16.x API reference and historical migration guides have
+been removed. Use this checkout's Swift source and migration notes for current
 transport and security APIs.
 
 Based on [socketio/socket.io-client-swift](https://github.com/socketio/socket.io-client-swift).

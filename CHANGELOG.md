@@ -1,3 +1,12 @@
+## Unreleased: client parity follow-up
+
+- Fix same-turn incoming/outgoing multi-listener registration/removal and modern catch-all lifecycle filtering; preserve legacy `onAny`.
+- Clear sent modern acknowledgements on automatic reconnect, preserving buffered acks and reentrant successor registrations.
+- Drain ordered retries synchronously on the owner queue.
+- Treat explicit empty connection queries as overrides and protect engine-owned query keys.
+- Add exact ordering/binary/URI/remote-close regressions, bounded fixture startup, pinned dependencies, two-way encoder evidence and executable parity-contract checks.
+- Export library code coverage and run the pinned upstream Node client suites; no full-platform or 100% parity claim.
+
 ## 17.0.0-native.1 (unreleased)
 
 - Replace the WebSocket backend with URLSessionWebSocketTask; remove the third-party dependency from every build definition.

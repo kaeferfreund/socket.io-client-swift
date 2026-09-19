@@ -1,0 +1,383 @@
+{
+  "upstream_sha": "aaf2af36ec8ad05910f357a788e0e358bad32738",
+  "scope": "Selected reviewed native client contracts, NOT a complete semantic-coverage percentage.",
+  "remaining_unmapped_ids": [
+    "JS-133",
+    "JS-137",
+    "JS-138",
+    "JS-139",
+    "JS-140",
+    "JS-141",
+    "JS-142",
+    "JS-143",
+    "JS-144",
+    "JS-145",
+    "JS-146",
+    "JS-147",
+    "JS-148",
+    "JS-158",
+    "JS-163",
+    "JS-164",
+    "JS-165",
+    "JS-168",
+    "JS-169",
+    "JS-170",
+    "JS-171",
+    "JS-172",
+    "JS-178",
+    "JS-179",
+    "JS-180",
+    "JS-181",
+    "JS-182",
+    "JS-183",
+    "JS-186",
+    "JS-194",
+    "JS-195",
+    "JS-196",
+    "JS-197",
+    "JS-201",
+    "JS-202",
+    "JS-220",
+    "JS-223",
+    "JS-240",
+    "JS-241",
+    "JS-242",
+    "JS-246",
+    "JS-247",
+    "JS-248",
+    "JS-257"
+  ],
+  "contracts": [
+    {
+      "id": "JS-082",
+      "upstream_ids": [
+        "JS-082"
+      ],
+      "kind": "assertion-port",
+      "assertions": "A pre-connect buffered emit is acknowledged before an emit from the connect callback; real server, explicit polling and WebSocket cases plus upgrade enabled.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityFollowupE2ETest.swift",
+          "symbol": "JSParityFollowupE2ETest.testBufferedEmitPrecedesConnectHandlerEmitPolling"
+        },
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityFollowupE2ETest.swift",
+          "symbol": "JSParityFollowupE2ETest.testBufferedEmitPrecedesConnectHandlerEmitWebSocket"
+        },
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityFollowupE2ETest.swift",
+          "symbol": "JSParityFollowupE2ETest.testBufferedEmitPrecedesConnectHandlerEmitWithUpgradeEnabled"
+        }
+      ]
+    },
+    {
+      "id": "JS-091",
+      "upstream_ids": [
+        "JS-091"
+      ],
+      "kind": "assertion-port",
+      "assertions": "Inside connect, install an outgoing listener and immediately emit binary without an intervening queue turn; assert event name, original bytes, one call and server echo.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityFollowupE2ETest.swift",
+          "symbol": "JSParityFollowupE2ETest.testImmediateOutgoingListenerReceivesBinaryPolling"
+        },
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityFollowupE2ETest.swift",
+          "symbol": "JSParityFollowupE2ETest.testImmediateOutgoingListenerReceivesBinaryWebSocket"
+        }
+      ]
+    },
+    {
+      "id": "JS-093",
+      "upstream_ids": [
+        "JS-093"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Removing a UUID listener is effective before the immediately following emit on the owning queue; removed callback must not fire and listener count is zero.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketQueueTurnParityTest.swift",
+          "symbol": "SocketQueueTurnParityTest.testOutgoingRemovalPreventsImmediatelyFollowingEmit"
+        }
+      ]
+    },
+    {
+      "id": "JS-132",
+      "upstream_ids": [
+        "JS-132"
+      ],
+      "kind": "transferable-wire-regression",
+      "assertions": "Binary including empty and 1024-byte Data mixed with multibyte UTF-8 survives ordered round trips through the real polling transport; standalone JS ArrayBuffer API is not claimed.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityFollowupE2ETest.swift",
+          "symbol": "JSParityFollowupE2ETest.testMixedBinaryAndUnicodePollingRoundTrip"
+        }
+      ]
+    },
+    {
+      "id": "JS-136",
+      "upstream_ids": [
+        "JS-136"
+      ],
+      "kind": "transferable-wire-regression",
+      "assertions": "Binary including empty and 1024-byte Data mixed with multibyte UTF-8 survives ordered round trips through the real WebSocket transport; standalone JS ArrayBuffer API is not claimed.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityFollowupE2ETest.swift",
+          "symbol": "JSParityFollowupE2ETest.testMixedBinaryAndUnicodeWebSocketRoundTrip"
+        }
+      ]
+    },
+    {
+      "id": "JS-159",
+      "upstream_ids": [
+        "JS-159",
+        "JS-203",
+        "JS-204"
+      ],
+      "kind": "native-URI-equivalent",
+      "assertions": "Assert both generated transport schemes, host, explicit/absent port, path and protocol query for the named absolute URL. Swift URL/SocketEngine API replaces public JS transport constructors.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEngineURLParityTest.swift",
+          "symbol": "SocketEngineURLParityTest.testHTTPWithoutPort"
+        }
+      ]
+    },
+    {
+      "id": "JS-205",
+      "upstream_ids": [
+        "JS-205"
+      ],
+      "kind": "native-URI-equivalent",
+      "assertions": "Assert both generated transport schemes, host, explicit/absent port, path and protocol query for the named absolute URL. Swift URL/SocketEngine API replaces public JS transport constructors.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEngineURLParityTest.swift",
+          "symbol": "SocketEngineURLParityTest.testHTTPWithPort"
+        }
+      ]
+    },
+    {
+      "id": "JS-160",
+      "upstream_ids": [
+        "JS-160",
+        "JS-206",
+        "JS-207"
+      ],
+      "kind": "native-URI-equivalent",
+      "assertions": "Assert both generated transport schemes, host, explicit/absent port, path and protocol query for the named absolute URL. Swift URL/SocketEngine API replaces public JS transport constructors.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEngineURLParityTest.swift",
+          "symbol": "SocketEngineURLParityTest.testHTTPSWithoutPort"
+        }
+      ]
+    },
+    {
+      "id": "JS-208",
+      "upstream_ids": [
+        "JS-208"
+      ],
+      "kind": "native-URI-equivalent",
+      "assertions": "Assert both generated transport schemes, host, explicit/absent port, path and protocol query for the named absolute URL. Swift URL/SocketEngine API replaces public JS transport constructors.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEngineURLParityTest.swift",
+          "symbol": "SocketEngineURLParityTest.testHTTPSWithPort"
+        }
+      ]
+    },
+    {
+      "id": "JS-212",
+      "upstream_ids": [
+        "JS-212"
+      ],
+      "kind": "native-URI-equivalent",
+      "assertions": "Assert both generated transport schemes, host, explicit/absent port, path and protocol query for the named absolute URL. Swift URL/SocketEngine API replaces public JS transport constructors.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEngineURLParityTest.swift",
+          "symbol": "SocketEngineURLParityTest.testWSWithoutPort"
+        }
+      ]
+    },
+    {
+      "id": "JS-161",
+      "upstream_ids": [
+        "JS-161",
+        "JS-213"
+      ],
+      "kind": "native-URI-equivalent",
+      "assertions": "Assert both generated transport schemes, host, explicit/absent port, path and protocol query for the named absolute URL. Swift URL/SocketEngine API replaces public JS transport constructors.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEngineURLParityTest.swift",
+          "symbol": "SocketEngineURLParityTest.testWSSWithoutPort"
+        }
+      ]
+    },
+    {
+      "id": "JS-162",
+      "upstream_ids": [
+        "JS-162"
+      ],
+      "kind": "native-URI-equivalent",
+      "assertions": "Assert both generated transport schemes, host, explicit/absent port, path and protocol query for the named absolute URL. Swift URL/SocketEngine API replaces public JS transport constructors.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEngineURLParityTest.swift",
+          "symbol": "SocketEngineURLParityTest.testWSSWithPort"
+        }
+      ]
+    },
+    {
+      "id": "JS-166",
+      "upstream_ids": [
+        "JS-166",
+        "JS-210"
+      ],
+      "kind": "native-URI-equivalent",
+      "assertions": "Assert both generated transport schemes, host, explicit/absent port, path and protocol query for the named absolute URL. Swift URL/SocketEngine API replaces public JS transport constructors.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEngineURLParityTest.swift",
+          "symbol": "SocketEngineURLParityTest.testIPv6WithoutPort"
+        }
+      ]
+    },
+    {
+      "id": "JS-167",
+      "upstream_ids": [
+        "JS-167",
+        "JS-211"
+      ],
+      "kind": "native-URI-equivalent",
+      "assertions": "Assert both generated transport schemes, host, explicit/absent port, path and protocol query for the named absolute URL. Swift URL/SocketEngine API replaces public JS transport constructors.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEngineURLParityTest.swift",
+          "symbol": "SocketEngineURLParityTest.testIPv6WithPort"
+        }
+      ]
+    },
+    {
+      "id": "JS-215",
+      "upstream_ids": [
+        "JS-215"
+      ],
+      "kind": "native-URI-equivalent",
+      "assertions": "Assert both generated transport schemes, host, explicit/absent port, path and protocol query for the named absolute URL. Swift URL/SocketEngine API replaces public JS transport constructors.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEngineURLParityTest.swift",
+          "symbol": "SocketEngineURLParityTest.testWebSocketIPv6WithoutPort"
+        }
+      ]
+    },
+    {
+      "id": "JS-216",
+      "upstream_ids": [
+        "JS-216"
+      ],
+      "kind": "native-URI-equivalent",
+      "assertions": "Assert both generated transport schemes, host, explicit/absent port, path and protocol query for the named absolute URL. Swift URL/SocketEngine API replaces public JS transport constructors.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEngineURLParityTest.swift",
+          "symbol": "SocketEngineURLParityTest.testWebSocketIPv6WithPort"
+        }
+      ]
+    },
+    {
+      "id": "native-17",
+      "upstream_ids": [],
+      "kind": "automatic-reconnect-regression",
+      "assertions": "Drive manager.engineDidClose, retain retry order/fresh IDs and buffered acks, clear sent modern acks before retry; ignore late replies.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketReconnectEventsTest.swift",
+          "symbol": "SocketReconnectEventsTest.testAutomaticReconnectFailsSentTimedAckBeforeReconnectAttempt"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketReconnectEventsTest.swift",
+          "symbol": "SocketReconnectEventsTest.testAutomaticReconnectFailsAckTimeoutAckAndIgnoresLateReply"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketReconnectEventsTest.swift",
+          "symbol": "SocketReconnectEventsTest.testAutomaticReconnectSilentlyRemovesSentNoTimeoutCallbackAck"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketReconnectEventsTest.swift",
+          "symbol": "SocketReconnectEventsTest.testAutomaticReconnectKeepsAckBufferedByDisconnectListener"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketReconnectEventsTest.swift",
+          "symbol": "SocketReconnectEventsTest.testAutomaticReconnectRetriesHeadWithFreshAckWithoutReordering"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketReconnectEventsTest.swift",
+          "symbol": "SocketReconnectEventsTest.testAutomaticReconnectExhaustsRetryBudgetWithoutStrandingNextPacket"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketReconnectEventsTest.swift",
+          "symbol": "SocketReconnectEventsTest.testAutomaticReconnectFailsAsyncAckWithoutTimeout"
+        }
+      ]
+    },
+    {
+      "id": "native-18",
+      "upstream_ids": [],
+      "kind": "same-turn-regression",
+      "assertions": "Synchronous-on-owner-queue listener mutation; snapshot iteration; legacy/internal-event distinction; no successor ack swept by reentrant disconnect.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketQueueTurnParityTest.swift",
+          "symbol": "SocketQueueTurnParityTest.testOutgoingRegistrationAndBinaryEmitInConnectCallbackSameTurn"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketQueueTurnParityTest.swift",
+          "symbol": "SocketQueueTurnParityTest.testOutgoingRemoveAllPreventsImmediatelyFollowingEmit"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketQueueTurnParityTest.swift",
+          "symbol": "SocketQueueTurnParityTest.testOutgoingMultiplePrependsPreserveOrderInSameTurn"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketQueueTurnParityTest.swift",
+          "symbol": "SocketQueueTurnParityTest.testIncomingRegistrationAndRemovalInSameTurn"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketQueueTurnParityTest.swift",
+          "symbol": "SocketQueueTurnParityTest.testIncomingMultiplePrependsAndRemoveAllInSameTurn"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketQueueTurnParityTest.swift",
+          "symbol": "SocketQueueTurnParityTest.testIncomingSelfRemovalDoesNotDisturbCurrentSnapshot"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketQueueTurnParityTest.swift",
+          "symbol": "SocketQueueTurnParityTest.testOutgoingMutationUsesSnapshotButNextEmitSeesNewListener"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketQueueTurnParityTest.swift",
+          "symbol": "SocketQueueTurnParityTest.testModernIncomingListenersExcludeLifecycleEventsButLegacyStillSeesThem"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketQueueTurnParityTest.swift",
+          "symbol": "SocketQueueTurnParityTest.testOffQueueRegistrationStillSerializesOnTheOwnerQueue"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketQueueTurnParityTest.swift",
+          "symbol": "SocketQueueTurnParityTest.testTerminalDisconnectClearsModernAcksBeforeReturningOnOwnerQueue"
+        },
+        {
+          "path": "Tests/TestSocketIO/SocketQueueTurnParityTest.swift",
+          "symbol": "SocketQueueTurnParityTest.testReentrantDisconnectListenerCannotSweepSuccessorAck"
+        }
+      ]
+    }
+  ]
+}

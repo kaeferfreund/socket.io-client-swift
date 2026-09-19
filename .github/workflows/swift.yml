@@ -28,17 +28,29 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 26
+      - name: Install pinned fixture dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: Tests/TestSocketIO/E2E/Fixtures
       - name: Build without third-party Swift dependencies
         run: swift build -v
       - name: Run complete unit and real-server test suite
         run: |
           set -o pipefail
-          swift test 2>&1 | tee "$RUNNER_TEMP/native-swift-tests.log"
+          swift test --enable-code-coverage 2>&1 | tee "$RUNNER_TEMP/native-swift-tests.log"
+      - name: Verify reviewed contracts actually passed and export library coverage
+        run: |
+          python3 scripts/check-parity-contracts.py --swift-log "$RUNNER_TEMP/native-swift-tests.log"
+          coverage_path="$(swift test --show-codecov-path)"
+          cp "$coverage_path" "$RUNNER_TEMP/swift-coverage.json"
+          python3 scripts/report-swift-coverage.py "$coverage_path" "$RUNNER_TEMP/swift-coverage-summary.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: native-swift-test-log-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/native-swift-tests.log
+          path: |
+            ${{ runner.temp }}/native-swift-tests.log
+            ${{ runner.temp }}/swift-coverage.json
+            ${{ runner.temp }}/swift-coverage-summary.json
           retention-days: 7
 
   apple-frameworks:
@@ -66,7 +78,7 @@ jobs:
       - name: Check inventory evidence and fail-fast shell behavior
         run: python3 scripts/test-review-regressions.py
       - name: Install fixture server
-        run: npm install --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: Tests/TestSocketIO/E2E/Fixtures
       - name: Verify polling observation never overlaps timed-out GETs
         working-directory: Tests/TestSocketIO/E2E/Fixtures
@@ -113,3 +125,29 @@ jobs:
             ${{ runner.temp }}/parser-safety.log
             ${{ runner.temp }}/decoder-parity.log
             ${{ runner.temp }}/decoder-results.json
+
+  upstream-clients:
+    name: Pinned upstream Node client suites and declaration inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: socketio/socket.io
+          ref: aaf2af36ec8ad05910f357a788e0e358bad32738
+          path: upstream-reference
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Execute original Node suites (browser and WebTransport matrix excluded)
+        run: bash scripts/test-upstream-clients.sh "$GITHUB_WORKSPACE/upstream-reference" "$RUNNER_TEMP/upstream-client-results"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: upstream-client-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/upstream-client-results
+          retention-days: 7

@@ -44,7 +44,7 @@ jobs:
           swift test --enable-code-coverage 2>&1 | tee "$RUNNER_TEMP/native-swift-tests.log"
       - name: Verify reviewed contracts actually passed and export library coverage
         run: |
-          python3 scripts/check-parity-contracts.py --swift-log "$RUNNER_TEMP/native-swift-tests.log"
+          python3 scripts/check-parity-contracts.py --strict --swift-log "$RUNNER_TEMP/native-swift-tests.log"
           coverage_path="$(swift test --show-codecov-path)"
           cp "$coverage_path" "$RUNNER_TEMP/swift-coverage.json"
           python3 scripts/report-swift-coverage.py "$coverage_path" "$RUNNER_TEMP/swift-coverage-summary.json"

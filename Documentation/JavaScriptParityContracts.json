@@ -62,12 +62,12 @@
       "upstream_ids": [
         "JS-132"
       ],
-      "kind": "transferable-wire-regression",
-      "assertions": "Binary including empty and 1024-byte Data mixed with multibyte UTF-8 survives ordered round trips through the real polling transport; standalone JS ArrayBuffer API is not claimed.",
+      "kind": "native-assertion-equivalent",
+      "assertions": "Polling-only raw Engine.IO sends bytes 0...4 then cash money \u20ac\u20ac\u20ac. Assert exactly two echoes, binary Data type and bytes first, exact multibyte text second. Data replaces ArrayBuffer.",
       "tests": [
         {
-          "path": "Tests/TestSocketIO/E2E/JSParityFollowupE2ETest.swift",
-          "symbol": "JSParityFollowupE2ETest.testMixedBinaryAndUnicodePollingRoundTrip"
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testBinaryThenMultibyteTextPolling"
         }
       ]
     },
@@ -76,12 +76,12 @@
       "upstream_ids": [
         "JS-136"
       ],
-      "kind": "transferable-wire-regression",
-      "assertions": "Binary including empty and 1024-byte Data mixed with multibyte UTF-8 survives ordered round trips through the real WebSocket transport; standalone JS ArrayBuffer API is not claimed.",
+      "kind": "native-assertion-equivalent",
+      "assertions": "After real polling-to-WebSocket upgrade, send bytes 0...4 then cash money \u20ac\u20ac\u20ac. Assert exactly two echoes in original order and with original binary/text types and values; native Data replaces ArrayBuffer.",
       "tests": [
         {
-          "path": "Tests/TestSocketIO/E2E/JSParityFollowupE2ETest.swift",
-          "symbol": "JSParityFollowupE2ETest.testMixedBinaryAndUnicodeWebSocketRoundTrip"
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testBinaryThenMultibyteTextAfterActualUpgrade"
         }
       ]
     },
@@ -336,17 +336,15 @@
     },
     {
       "id": "remaining-js-133",
-      "kind": "transferable-wire-regression",
       "upstream_ids": [
         "JS-133"
       ],
-      "assertions": [
-        "Forced base64 polling returns bytes 0...4; observer sees bAAECAwQ= in the actual POST body."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Default polling/WebSocket transport list with forceBase64=true. Send bytes 0...4 on open and assert exactly one binary Data echo with identical bytes. Unlike the earlier mapping, no forced-polling-only configuration or attachment header changes the original scenario.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
-          "symbol": "EngineRemainingParityE2ETest.testForcedBase64Polling"
+          "symbol": "EngineRemainingParityE2ETest.testForcedBase64SentOnOpenWithDefaultTransports"
         }
       ]
     },
@@ -390,13 +388,11 @@
     },
     {
       "id": "remaining-js-141",
-      "kind": "transferable-wire-regression",
       "upstream_ids": [
         "JS-141"
       ],
-      "assertions": [
-        "Five payloads at the original 72/20/20/20/72-byte boundaries are echoed in order. Every actual polling POST is at most the 100-byte advertised maxPayload. Includes base64 expansion and record separators."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Polling only, advertised maxPayload=100, five raw packets in original order: 72 binary bytes, 20 binary bytes, twenty a characters, 20 binary bytes, 72 binary bytes. Assert exactly five echoes with matching types/bytes/order and every observed POST <=100 bytes. Data replaces typed-array/ArrayBuffer/Blob/Node Buffer; initialized zero bytes also make the original allocUnsafe case deterministic.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
@@ -507,65 +503,39 @@
     },
     {
       "id": "remaining-js-178",
-      "kind": "native-cookie-contract",
       "upstream_ids": [
         "JS-178"
       ],
-      "assertions": [
-        "Server-set cookies are sent on subsequent polling POSTs and on the WebSocket upgrade only when enabled. The isolated jar survives reconnect and is not shared with another engine or the application jar."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real polling-only connection with withCredentials=true. Fixture sets original cookies 1=1 and 2=2; after open, a raw message is echoed and the server-observed POST Cookie contains exactly both name/value pairs. Cookie pair order is normalized because Foundation owns serialization order; no missing or additional cookie is accepted. Original ten-millisecond sleep is replaced by the completed-open/cookie-processing barrier.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
           "symbol": "EngineRemainingParityE2ETest.testServerCookiesSentWhenEnabled"
-        },
-        {
-          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
-          "symbol": "EngineRemainingParityE2ETest.testCookiesSurvivePollingToWebSocketUpgrade"
-        },
-        {
-          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
-          "symbol": "SocketRemainingParityTest.testEnabledCredentialsUsePrivateStoreAndSurviveReconnect"
         }
       ]
     },
     {
       "id": "remaining-js-179",
-      "kind": "native-cookie-contract",
       "upstream_ids": [
         "JS-179"
       ],
-      "assertions": [
-        "Disabled credentials do not resend server cookies in polling or the WebSocket upgrade, and do not read a pre-populated engine jar. Explicit application Cookie headers remain explicit."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real polling-only connection with withCredentials=false. Fixture sets original cookies 1=1 and 2=2; send on open, await echo and assert the subsequent server-observed POST has no Cookie header. Native nil corresponds to JS undefined.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
           "symbol": "EngineRemainingParityE2ETest.testServerCookiesNotSentWhenDisabled"
-        },
-        {
-          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
-          "symbol": "EngineRemainingParityE2ETest.testDisabledCookiesStayDisabledDuringUpgrade"
-        },
-        {
-          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
-          "symbol": "SocketRemainingParityTest.testDisabledCredentialsNeverReadStoredCookiesForWebSocket"
-        },
-        {
-          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
-          "symbol": "SocketRemainingParityTest.testExplicitCookieHeaderRemainsExplicitWhenCredentialsDisabled"
         }
       ]
     },
     {
       "id": "remaining-js-180",
-      "kind": "native-cookie-contract",
       "upstream_ids": [
         "JS-180"
       ],
-      "assertions": [
-        "Foundation parses the upstream simple foo=bar cookie into the same name and value. The native cookie object and browser CORS semantics are not claimed to be identical to the Node CookieJar."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Parse original foo=bar Set-Cookie input with Foundation; assert name foo and value bar. Native HTTPCookie replaces the Node object while preserving every field asserted by this simple original scenario.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
@@ -575,13 +545,11 @@
     },
     {
       "id": "remaining-js-182",
-      "kind": "native-cookie-contract",
       "upstream_ids": [
         "JS-182"
       ],
-      "assertions": [
-        "Foundation preserves the entire upstream cookie value bar=bar&foo=foo&John=Doe&Doe=John, including equals signs and ampersands."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Parse original foo=bar=bar&foo=foo&John=Doe&Doe=John; Domain=.example.com; Path=/; HttpOnly; Secure. Assert name foo and the complete original value including embedded equals and ampersands. HTTPCookie is the native object representation.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
@@ -816,12 +784,12 @@
       "upstream_ids": [
         "JS-184"
       ],
-      "kind": "native-adaptation",
-      "assertions": "Configured polling-only operation rejects an advertised WebSocket upgrade. Native filtering regression; no claim of identical internal filter API.",
+      "kind": "native-assertion-equivalent",
+      "assertions": "Configure only polling and pass original advertised list [polling,websocket] to the same filter used by the production handshake. Assert exactly [polling], preserving the original array result rather than inferring filtering from absence of a WebSocket connection.",
       "tests": [
         {
-          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
-          "symbol": "SocketNativeEngineTest.testPollingOnlyFiltersWebSocketUpgradeAndPreservesCallerTransportList"
+          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
+          "symbol": "SocketRemainingParityTest.testFilterUpgradesReturnsOnlyAvailableTransports"
         }
       ]
     },
@@ -830,12 +798,12 @@
       "upstream_ids": [
         "JS-185"
       ],
-      "kind": "native-adaptation",
-      "assertions": "Swift value-semantic transport list stays unchanged in the polling-only scenario; upstream also constructs the reversed two-transport list, still to be audited.",
+      "kind": "native-assertion-equivalent",
+      "assertions": "Construct engines with original [websocket,polling] and [polling] lists. Assert both caller and engine lists remain equal to each original; additionally mutate the caller list and prove independent engine storage. Native explicit URL initializer replaces JS URI/no-URI overloads; Swift value semantics replace object aliasing.",
       "tests": [
         {
-          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
-          "symbol": "SocketNativeEngineTest.testPollingOnlyFiltersWebSocketUpgradeAndPreservesCallerTransportList"
+          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
+          "symbol": "SocketRemainingParityTest.testBothOriginalTransportListsRemainUnchanged"
         }
       ]
     },
@@ -844,12 +812,12 @@
       "upstream_ids": [
         "JS-187"
       ],
-      "kind": "native-adaptation",
-      "assertions": "Injected failed WebSocket opening falls back to a URLProtocol polling handshake, with one open and no intermediate error/close. Real-server scenario still to be compared.",
+      "kind": "native-assertion-equivalent",
+      "assertions": "Configure ordered [websocket,polling], tryAllTransports=true. Real server rejects the initial WebSocket request; assert fallback opens polling, application round trip succeeds, original request order is observed and no intermediate error/close reaches the client. Server-side transport denial replaces the original transport-local deny query.",
       "tests": [
         {
-          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
-          "symbol": "SocketNativeEngineTest.testRejectedWebSocketFallsBackToPollingWithoutIntermediateError"
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testRealRejectedWebSocketFallsBackToPolling"
         }
       ]
     },
@@ -858,12 +826,12 @@
       "upstream_ids": [
         "JS-188"
       ],
-      "kind": "native-adaptation",
-      "assertions": "URLProtocol polling HTTP 403 falls back to an injected WebSocket handshake, with one open and no intermediate error/close. Real-server scenario still to be compared.",
+      "kind": "native-assertion-equivalent",
+      "assertions": "Configure ordered [polling,websocket], tryAllTransports=true. Real server rejects initial polling; assert fallback opens WebSocket, application round trip succeeds, request order is observed and no intermediate error/close reaches the client. Server-side transport denial replaces the original transport-local deny query.",
       "tests": [
         {
-          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
-          "symbol": "SocketNativeEngineTest.testRejectedPollingFallsBackToWebSocketWithoutIntermediateError"
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testRealRejectedPollingFallsBackToWebSocket"
         }
       ]
     },
@@ -872,12 +840,12 @@
       "upstream_ids": [
         "JS-189"
       ],
-      "kind": "native-adaptation",
-      "assertions": "Disabling fallback emits one terminal error/close and never creates the second transport; native HTTP error representation differs from XHR/Fetch.",
+      "kind": "native-assertion-equivalent",
+      "assertions": "Ordered [polling,websocket] with default tryAllTransports=false and real polling rejection. Assert exact native polling read (HTTP 403) error and typed status/transport, transport-error close, no open and no WebSocket request. Native URLSession error replaces the original xhr poll error/fetch read error while preserving the same failure contract.",
       "tests": [
         {
-          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
-          "symbol": "SocketNativeEngineTest.testFallbackDisabledStopsAtFirstFailure"
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testRealRejectedPollingDoesNotFallbackByDefault"
         }
       ]
     },
@@ -886,12 +854,12 @@
       "upstream_ids": [
         "JS-199"
       ],
-      "kind": "native-adaptation",
-      "assertions": "A successful direct WebSocket opening seeds shared upgrade memory and makes the next engine start with WebSocket. Original polling-to-WebSocket upgrade scenario still to be compared.",
+      "kind": "native-assertion-equivalent",
+      "assertions": "First engine starts polling, completes actual WebSocket upgrade and closes. Second engine with rememberUpgrade=true starts directly with WebSocket; assert first request is UPGRADE/transport=websocket and real open succeeds. The test requires upgrade instead of accepting the original 300ms timeout escape.",
       "tests": [
         {
-          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
-          "symbol": "SocketNativeEngineTest.testRememberUpgradeStartsNextEngineWithSuccessfulWebSocket"
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testRememberUpgradeStartsWebSocketAfterARealUpgrade"
         }
       ]
     },
@@ -2502,6 +2470,314 @@
         {
           "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
           "symbol": "EngineRemainingParityE2ETest.testOversizePollingReports413AndCloseDetail"
+        }
+      ]
+    },
+    {
+      "id": "JS-049",
+      "upstream_ids": [
+        "JS-049"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Inject bad data through the manager engine-data entry point on a real connection. Assert parse-error disconnect, reconnect signal before reconnection, new engine object, retired engine closed, and different namespace SID. Listener setup uses the native namespace connect callback; the original engine identity and closed-state assertions are explicit.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testParseErrorClosesEngineAndReconnectsWithFreshSession"
+        }
+      ]
+    },
+    {
+      "id": "JS-131",
+      "upstream_ids": [
+        "JS-131"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Polling-only raw Engine.IO send of bytes 0...4 yields one binary Data echo with the same bytes, followed by an additional empty-Data regression. No Socket.IO header or synthetic extra text message. Data is the native equivalent of the original ArrayBuffer/typed bytes.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testBinaryDataPolling"
+        }
+      ]
+    },
+    {
+      "id": "JS-134",
+      "upstream_ids": [
+        "JS-134"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Polling only, advertised maxPayload=100, five raw packets in original order: 72 binary bytes, 20 binary bytes, twenty a characters, 20 binary bytes, 72 binary bytes. Assert exactly five echoes with matching types/bytes/order and every observed POST <=100 bytes. Data replaces typed-array/ArrayBuffer/Blob/Node Buffer; initialized zero bytes also make the original allocUnsafe case deterministic.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testBinaryMaxPayloadBatching"
+        }
+      ]
+    },
+    {
+      "id": "JS-177",
+      "upstream_ids": [
+        "JS-177"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Polling only, advertised maxPayload=100, five raw packets in original order: 72 binary bytes, 20 binary bytes, twenty a characters, 20 binary bytes, 72 binary bytes. Assert exactly five echoes with matching types/bytes/order and every observed POST <=100 bytes. Data replaces typed-array/ArrayBuffer/Blob/Node Buffer; initialized zero bytes also make the original allocUnsafe case deterministic.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testBinaryMaxPayloadBatching"
+        }
+      ]
+    },
+    {
+      "id": "JS-135",
+      "upstream_ids": [
+        "JS-135"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Start with default polling/WebSocket transports; await the server marker emitted after actual upgrade and assert local polling=false/wsConnected=true. Send one raw binary packet containing bytes 0...4; assert one binary Data echo with identical bytes and actual binary WebSocket frame observation. Data replaces Blob/FileReader/ArrayBuffer representation, retaining the complete byte and type contract.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testBinaryAfterActualTransportUpgrade"
+        }
+      ]
+    },
+    {
+      "id": "JS-142",
+      "upstream_ids": [
+        "JS-142"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Start with default polling/WebSocket transports; await the server marker emitted after actual upgrade and assert local polling=false/wsConnected=true. Send one raw binary packet containing bytes 0...4; assert one binary Data echo with identical bytes and actual binary WebSocket frame observation. Data replaces Blob/FileReader/ArrayBuffer representation, retaining the complete byte and type contract.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testBinaryAfterActualTransportUpgrade"
+        }
+      ]
+    },
+    {
+      "id": "JS-143",
+      "upstream_ids": [
+        "JS-143"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Start with default polling/WebSocket transports; await the server marker emitted after actual upgrade and assert local polling=false/wsConnected=true. Send one raw binary packet containing bytes 0...4; assert one binary Data echo with identical bytes and actual binary WebSocket frame observation. Data replaces Blob/FileReader/ArrayBuffer representation, retaining the complete byte and type contract.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testBinaryAfterActualTransportUpgrade"
+        }
+      ]
+    },
+    {
+      "id": "JS-137",
+      "upstream_ids": [
+        "JS-137"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Default transports with forceBase64=true, actual polling-to-WebSocket upgrade before sending. Raw bytes 0...4 and an additional empty binary packet echo as Data in order, with exact bytes and no extra header. Observe base64 text frames bAAECAwQ= and b, and no client binary frames. Data replaces ArrayBuffer/Blob.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testForcedBase64AfterActualTransportUpgrade"
+        }
+      ]
+    },
+    {
+      "id": "JS-144",
+      "upstream_ids": [
+        "JS-144"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Default transports with forceBase64=true, actual polling-to-WebSocket upgrade before sending. Raw bytes 0...4 and an additional empty binary packet echo as Data in order, with exact bytes and no extra header. Observe base64 text frames bAAECAwQ= and b, and no client binary frames. Data replaces ArrayBuffer/Blob.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testForcedBase64AfterActualTransportUpgrade"
+        }
+      ]
+    },
+    {
+      "id": "JS-139",
+      "upstream_ids": [
+        "JS-139"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Default transports, send bytes 0...4 immediately on Engine.IO open, and assert one raw binary Data echo with identical bytes. Data replaces both typed-array/Blob input and Blob/FileReader/ArrayBuffer output; no artificial forced transport or text attachment header.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testBinarySentOnOpenWithDefaultTransports"
+        }
+      ]
+    },
+    {
+      "id": "JS-140",
+      "upstream_ids": [
+        "JS-140"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Default transports, send bytes 0...4 immediately on Engine.IO open, and assert one raw binary Data echo with identical bytes. Data replaces both typed-array/Blob input and Blob/FileReader/ArrayBuffer output; no artificial forced transport or text attachment header.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testBinarySentOnOpenWithDefaultTransports"
+        }
+      ]
+    },
+    {
+      "id": "JS-153",
+      "upstream_ids": [
+        "JS-153"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Complete WebSocket probe while a polling GET remains outstanding; assert fastUpgrade=true. Queue text and raw binary, request close, assert connected and no close yet. Later writes complete locally without extending the queue or reaching the wire. Settle GET; assert exact probe, upgrade, buffered text, binary, close frame order; upgrade callback precedes the single close; both buffers empty and binary completion exactly once. Native controlled transport/pause completion replaces event-loop timing and exposes every upstream ordering/buffer/negative assertion.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
+          "symbol": "SocketNativeEngineTest.testCloseDeferredDuringUpgradeFlushesOverWebSocketAfterUpgrade"
+        }
+      ]
+    },
+    {
+      "id": "JS-155",
+      "upstream_ids": [
+        "JS-155"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Complete WebSocket probe while a polling GET remains outstanding; assert fastUpgrade=true. Queue text and raw binary, request close, assert connected and no close yet. Later writes complete locally without extending the queue or reaching the wire. Settle GET; assert exact probe, upgrade, buffered text, binary, close frame order; upgrade callback precedes the single close; both buffers empty and binary completion exactly once. Native controlled transport/pause completion replaces event-loop timing and exposes every upstream ordering/buffer/negative assertion.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
+          "symbol": "SocketNativeEngineTest.testCloseDeferredDuringUpgradeFlushesOverWebSocketAfterUpgrade"
+        }
+      ]
+    },
+    {
+      "id": "JS-156",
+      "upstream_ids": [
+        "JS-156"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Complete WebSocket probe while a polling GET remains outstanding; assert fastUpgrade=true. Queue text and raw binary, request close, assert connected and no close yet. Later writes complete locally without extending the queue or reaching the wire. Settle GET; assert exact probe, upgrade, buffered text, binary, close frame order; upgrade callback precedes the single close; both buffers empty and binary completion exactly once. Native controlled transport/pause completion replaces event-loop timing and exposes every upstream ordering/buffer/negative assertion.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
+          "symbol": "SocketNativeEngineTest.testCloseDeferredDuringUpgradeFlushesOverWebSocketAfterUpgrade"
+        }
+      ]
+    },
+    {
+      "id": "JS-154",
+      "upstream_ids": [
+        "JS-154"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Successful candidate probe with outstanding polling GET; request deferred close, then fail the active polling transport using the engine error entry point. Assert upgradeError before close, transport-error close exactly once, candidate aborted, queue empty, and no duplicate callbacks from late candidate failure. This follows the original active-transport failure rather than substituting a candidate-only fallback.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
+          "symbol": "SocketNativeEngineTest.testActivePollingFailureReportsUpgradeErrorBeforeDeferredClose"
+        }
+      ]
+    },
+    {
+      "id": "JS-198",
+      "upstream_ids": [
+        "JS-198"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Assert hasPingExpired=false before open and immediately after. Use controlled monotonic clock to expire deadline; three successive reads return true with no synchronous close, then exactly one deferred ping timeout close. Additional ping-reset checks retain the original repeated-expiry and close-reason assertions.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
+          "symbol": "SocketNativeEngineTest.testOnlyPingResetsTheDeadlineAndExpiredChecksCloseOnce"
+        }
+      ]
+    },
+    {
+      "id": "JS-209",
+      "upstream_ids": [
+        "JS-209"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original localhost, /engine.io, timestampRequests=true, timestampParam=t. Assert http scheme, host, default port omission, exact no-trailing-slash path, one nonempty t value matching original [0-9A-Za-z_-]+ alphabet. Native engine transport/EIO query fields are additional required handshake fields; query item ordering is not treated as semantic.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
+          "symbol": "SocketRemainingParityTest.testOriginalPollingTimestampURI"
+        }
+      ]
+    },
+    {
+      "id": "JS-214",
+      "upstream_ids": [
+        "JS-214"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original localhost, /engine.io, timestampRequests=true, timestampParam=woot. Assert ws scheme, host, default port omission, exact no-trailing-slash path, one nonempty woot value matching original alphabet. Native required transport/EIO query fields are retained; query ordering is normalized.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketRemainingParityTest.swift",
+          "symbol": "SocketRemainingParityTest.testOriginalWebSocketTimestampURI"
+        }
+      ]
+    },
+    {
+      "id": "JS-219",
+      "upstream_ids": [
+        "JS-219"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Pass the complete original custom-header and explicit Cookie dictionary. Assert engine retains the exact value dictionary and the real WebSocket upgrade request contains every original header/value unchanged. Swift dictionary value equality replaces JS object identity; public upstream fixture strings are not credentials.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testOriginalExtraHeadersReachWebSocket"
+        }
+      ]
+    },
+    {
+      "id": "JS-220",
+      "upstream_ids": [
+        "JS-220"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Polling configured with the complete original custom-header and explicit Cookie dictionary. Assert retained dictionary equality and every original header/value on actual GET and POST. Native engine options/URLSession replace nested JS polling options/XHR and object identity; browser CORS is outside this native representation contract.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testExtraHeadersReachPollingGETAndPOST"
+        }
+      ]
+    },
+    {
+      "id": "JS-223",
+      "upstream_ids": [
+        "JS-223"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Polling configured with the complete original custom-header and explicit Cookie dictionary. Assert retained dictionary equality and every original header/value on actual GET and POST. Native engine options/URLSession replace nested JS polling options/XHR and object identity; browser CORS is outside this native representation contract.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/EngineRemainingParityE2ETest.swift",
+          "symbol": "EngineRemainingParityE2ETest.testExtraHeadersReachPollingGETAndPOST"
+        }
+      ]
+    },
+    {
+      "id": "JS-285",
+      "upstream_ids": [
+        "JS-285"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Encode original [open(no data),close(no data),ping probe,pong probe,message test] into exact 0 RS 1 RS 2probe RS 3probe RS 4test. Decode all five packet types/data with the shared production codec, including packets after CLOSE. Transport lifecycle suppression after CLOSE remains a separate tested rule, no longer an excuse to omit parser assertions.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEnginePacketCodecTest.swift",
+          "symbol": "SocketEnginePacketCodecTest.testOriginalAllPacketTypesRoundTripIndependentlyOfLifecycle"
         }
       ]
     }

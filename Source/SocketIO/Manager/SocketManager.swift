@@ -284,7 +284,10 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             return
         }
 
-        if engine == nil || forceNew || parserFailed {
+        // A native parser failure retires the complete transport engine. Custom
+        // SocketEngineSpec implementations retain control of their own lifecycle;
+        // silently replacing one with the built-in engine would discard it.
+        if engine == nil || forceNew || (parserFailed && engine is SocketEngine) {
             addEngine()
         }
 

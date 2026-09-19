@@ -313,10 +313,10 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             // session's actual POST completions, even though their engine
             // callbacks are now stale. Never read the replacement session here.
             let sender = RetiringPollingSender(session: oldSession, queue: engineQueue,
-                                               requests: retiringRequests, timeout: 1)
+                                               requests: retiringRequests, timeout: pollingRetirementDeadline)
             retiringSender = sender
             retiringPostGroup.notify(queue: engineQueue) { sender.start() }
-            engineQueue.asyncAfter(deadline: .now() + 1) {
+            engineQueue.asyncAfter(deadline: .now() + pollingRetirementDeadline) {
                 // A write stalled at close time must not retain the session
                 // forever or send a close after invalidation when its barrier
                 // eventually drains. Requests this sender starts itself are
@@ -585,6 +585,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         guard canSendUpgradePacket, wsConnected, !closed else { return }
         DefaultSocketLogger.Logger.log("Switching to WebSockets", type: SocketEngine.logType)
         polling = false
+        retirePollingSession()
         fastUpgrade = false
         probing = false
         // Queue the upgrade packet before anything held by the polling transport.
@@ -1126,9 +1127,15 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             engineQueue.async { self.stopPolling() }
             return
         }
+        invalidated = true
+        retirePollingSession()
+    }
+
+    /// Detach the polling resources without invalidating a live WebSocket engine.
+    /// The upgrade barrier has drained before the successful handoff calls this.
+    private func retirePollingSession() {
         waitingForPoll = false
         waitingForPost = false
-        invalidated = true
         let retiring = session
         session = nil
         pollingPostGroup = DispatchGroup()
@@ -1142,6 +1149,12 @@ open class SocketEngine: NSObject, URLSessionDelegate,
                               withData datas: [Data], completion: (() -> ())?) {
         performPollingWrite(message, withType: type, withData: datas, completion: completion)
     }
+
+    /// Internal test seam; production polling retirement remains bounded to one second.
+    internal var pollingRetirementDeadline: TimeInterval = 1
+
+    /// Supplies an isolated session for lifecycle tests without opening a network request.
+    internal func setTestSession(_ value: URLSession?) { session = value }
 
     // Test Properties
 

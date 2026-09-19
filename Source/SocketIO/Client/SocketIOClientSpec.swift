@@ -361,7 +361,8 @@ public enum SocketClientEvent : String {
     /// ```
     case connect
 
-    /// Emitted when the socket has disconnected and will not attempt to try to reconnect.
+    /// Emitted for each socket close, including closes the manager will retry.
+    /// `reconnectFailed` reports that the reconnection attempt budget is exhausted.
     ///
     /// Usage:
     ///

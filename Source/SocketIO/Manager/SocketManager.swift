@@ -433,6 +433,15 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     ///
     /// - parameter socket: The socket to disconnect.
     open func disconnectSocket(_ socket: SocketIOClient) {
+        disconnectSocket(socket, removeFromManager: true)
+    }
+
+    /// Client namespace cleanup preserves the JS-compatible cache. The active flag
+    /// distinguishes explicit client disconnect from a reconnectable namespace timeout.
+    internal func disconnectSocket(_ socket: SocketIOClient, removeFromManager: Bool) {
+        if removeFromManager, nsps[socket.nsp] === socket {
+            nsps.removeValue(forKey: socket.nsp)
+        }
         pendingConnectPayloads.removeValue(forKey: socket.nsp)
         engine?.send("1\(socket.nsp),", withData: [])
 

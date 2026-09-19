@@ -133,6 +133,11 @@ Acceptance: blocked consumer, never-connected socket, never-acked retry head, re
 
 ### R2. Replace the silent outgoing JSON fallback, high priority
 
+**Status (2026-09-19): OPEN.** Round 2 removed the fallback from emit paths; the
+follow-up adds cycle detection and finite traversal budgets. The historical
+source observation below predates those changes. Full encoder/release acceptance
+is still pending; see section 8.2 for the current implementation and tests.
+
 **Confirmed source behavior.** `SocketPacket.completeMessage` still returns an empty-array packet when JSON serialization fails. An unsupported custom `SocketData` representation or non-finite number can thus change the intended operation into a different wire packet rather than producing a typed encoding failure. The outgoing binary shredder recursively traverses graphs; the review has not established bounded behavior for deep or cyclic Foundation object graphs.
 
 Required next implementation: one throwing, depth/node/byte-bounded encoder used before any retry/buffer registration or wire send. Define finite-number, Date, custom representation and Foundation collection behavior explicitly; detect cycles without first triggering recursive bridging. Complete the user's local operation and acknowledgement exactly once on an encoding error and emit no partial header. Remove or deprecate the nonthrowing fallback only under a documented API migration.
@@ -256,7 +261,7 @@ Ported from `socket.io-parser/test/parser.js`:
 - **`SocketParserOptions` limits.** JS's `Decoder` has exactly one limit,
   `maxAttachments` (default 10), and `maximumAttachments` matches it. The byte
   limits (`maximumTextPacketBytes`, `maximumBinaryPacketBytes`) default to
-  unlimited so the defaults decode everything JS decodes; set them via
+  unlimited, while the default nesting limit still differs from JS; set them via
   `.parserOptions(SocketParserOptions(maximumTextPacketBytes: 1 << 20))` to opt
   into hardening against a hostile peer. `maximumNestingDepth` is the one limit
   that stays on by default (512, hard cap 1024): `JSONSerialization` can
@@ -271,10 +276,9 @@ Ported from `socket.io-parser/test/parser.js`:
 ## 8. Round 2 (2026-09-18): JavaScript-aligned reconnect events and a throwing encoder
 
 Round 1 (section 7) closed the Engine.IO close/upgrade and parser-leniency gaps.
-Round 2 closes the two behavioural gaps sections 4 and 5 named as still open —
-the reconnect-event stream and review gate **R2**, the silent outgoing JSON
-fallback — and ports the remaining `socket.io-client` and `engine.io-parser`
-rows that had no mapping. Where the sections above still describe the old
+Round 2 updates the reconnect-event stream and removes the silent outgoing JSON
+fallback; it does not by itself close review gate **R2**. It also ports the
+remaining `socket.io-client` and `engine.io-parser` rows that had no mapping. Where the sections above still describe the old
 behaviour, this section is current. Every change is a **breaking** change and is
 listed in `README.md` ("Breaking changes in 17.0.0") and `CHANGELOG.md`.
 
@@ -340,7 +344,7 @@ packet. JS `JSON.stringify` never does that: it produces the value or throws.
   entry point — before `_addToQueue`, before the send buffer, before any ack
   registration — and again in the internal emit funnel as the single choke point
   for the paths that build `[Any]` directly (`rawEmitView`, the Objective-C ack
-  views). Re-running it on an already-normalized array is a no-op.
+  views). Re-running it preserves values but repeats validation and allocation.
 - **`Date` → ISO-8601.** `Date.prototype.toJSON()` is `toISOString()`, so a
   `Date` at any depth becomes `"2024-01-02T03:04:05.678Z"` (UTC, exactly three
   fractional digits). `Date`/`NSDate` now conform to `SocketData`.
@@ -348,9 +352,11 @@ packet. JS `JSON.stringify` never does that: it produces the value or throws.
   boolean is an `NSNumber` too and is filtered out by the existing
   `isJSONNumber` helper before the finiteness check.
 - **Everything else throws `SocketPacketError`** (`unsupportedValue`,
-  `nonStringKey`, `nestingTooDeep`, `unserializablePayload`). The `.error`
-  client event carries the error, any acknowledgement the caller asked for
-  settles exactly once with it, and no packet is written, buffered or queued.
+  `nonStringKey`, `nestingTooDeep`, `cyclicPayload`, `tooManyNodes`,
+  `payloadTooLarge`, `unserializablePayload`). The `.error`
+  client event carries the error; modern error-first and async acknowledgements
+  settle with it. Legacy `OnAckCallback` retains its separate no-ack contract.
+  No rejected packet is written, buffered or queued.
 - **`SocketPacket.encodedPacketString()`** is the throwing encoder;
   `packetString` keeps its signature for code that builds packets by hand, and
   logs when it falls back. No client path can reach that fallback any more.
@@ -374,14 +380,18 @@ packet. JS `JSON.stringify` never does that: it produces the value or throws.
   dictionaries in the same sorted order, so attachment numbering is stable too.
   JSON object order carries no meaning, and the reproducibility is what makes
   the exact wire strings testable.
-- **Cycles remain out of scope.** A self-referencing Foundation container
-  (`NSMutableDictionary` holding itself) overflows the stack inside Swift's
-  `as? [String: Any]` bridging, before any code in this package runs — this was
-  verified, not assumed: the ported test crashed the suite and was removed in
-  favour of this note. `SocketPacket.maximumEmitNestingDepth` (512, the
-  decoder's default) bounds deep graphs only. `socket.io-parser/test/parser.js`
-  "throws an error when encoding circular objects" therefore stays
-  `known-divergence` in the inventory, now for a narrower reason than before.
+- **Bounded Foundation normalization (2026-09-19 follow-up).** Foundation
+  arrays/dictionaries are traversed by identity through CoreFoundation before
+  recursive bridging. Ancestor cycles throw `cyclicPayload`; shared acyclic
+  subgraphs remain valid. The normalizer also enforces depth 512, 1,000,000
+  nodes (including keys and repeated occurrences) and a conservative 64 MiB
+  escaped-JSON/binary budget (64 bytes per attachment placeholder). These
+  finite encoding bounds deliberately differ from JS and do not bound queue
+  retention or total process memory. Hand-built packets are normalized before
+  JSONSerialization too; error logging never describes the rejected graph.
+  `SocketPacketEncoderTest` covers cycles, shared containers, public error/ack
+  delivery and limit boundaries. Gate **R2 stays open** for full encoder parity
+  and broader release validation; removing the silent fallback was not closure.
 - **Extended years.** `Date.toISOString()` writes years outside 0000–9999 in an
   expanded `±YYYYYY` form; the Swift formatter does not.
 

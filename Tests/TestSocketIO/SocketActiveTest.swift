@@ -75,3 +75,34 @@ final class SocketActiveTest: XCTestCase {
         XCTAssertFalse(socket.active, "CONNECT_ERROR packet must flip active false (matches JS destroy())")
     }
 }
+
+
+extension SocketActiveTest {
+    func testExplicitManagerDisconnectRemovesNamespaceAndStopsManager() {
+        manager.engine = MockEngine()
+        socket.connect()
+        manager.disconnectSocket(socket)
+        XCTAssertNil(manager.nsps[socket.nsp])
+        XCTAssertEqual(manager.status, .disconnected)
+    }
+
+    func testExplicitClientDisconnectKeepsCacheForManualReconnect() {
+        manager.engine = MockEngine()
+        socket.connect()
+        socket.disconnect()
+        XCTAssertFalse(socket.active)
+        XCTAssertTrue(manager.nsps[socket.nsp] === socket)
+        XCTAssertEqual(manager.status, .disconnected)
+        socket.connect()
+        XCTAssertTrue(socket.active)
+        XCTAssertTrue(manager.nsps[socket.nsp] === socket)
+    }
+
+    func testActiveNamespaceTimeoutCleanupPreservesRegistration() {
+        manager.engine = MockEngine()
+        socket.connect()
+        socket.leaveNamespace()
+        XCTAssertTrue(socket.active)
+        XCTAssertTrue(manager.nsps[socket.nsp] === socket)
+    }
+}

@@ -392,7 +392,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     }
 
     private func dispatchEvent(_ event: String, data: [Any], withAck ack: Int) {
-        DefaultSocketLogger.Logger.log("Handling event: \(event) with data: \(data)", type: logType)
+        DefaultSocketLogger.Logger.log("Handling event: \(event) with \(data.count) data item(s)", type: logType)
 
         anyHandler?(SocketAnyEvent(event: event, items: data))
 
@@ -520,8 +520,9 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
 
     /// Disconnects the socket.
     ///
-    /// This will cause the socket to leave the namespace it is associated to, as well as remove itself from the
-    /// `manager`.
+    /// Leaves this namespace and deactivates automatic reconnection. The manager keeps
+    /// the cached socket so a later connect() can reuse this instance. Use the manager
+    /// disconnectSocket(_:) API when the namespace must also be removed from its cache.
     open func disconnect() {
         self.active = false
         DefaultSocketLogger.Logger.log("Closing socket", type: logType)
@@ -565,7 +566,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
 
             emit(mapped, completion: completion)
         } catch {
-            DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event), \(items)",
+            DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event): \(error)",
                                              type: logType)
 
             handleClientEvent(.error, data: [event, items, error])
@@ -643,7 +644,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
                 self.emit(mapped, ack: id)
             }
         } catch {
-            DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event), \(items)",
+            DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event): \(error)",
                                              type: logType)
 
             handleClientEvent(.error, data: [event, items, error])
@@ -702,7 +703,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
                 [event] + (try items.map({ try $0.socketRepresentation() })), allowBinary: true
             ))
         } catch {
-            DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event), \(items)",
+            DefaultSocketLogger.Logger.error("Error creating socketRepresentation for emit: \(event): \(error)",
                                              type: logType)
 
             handleClientEvent(.error, data: [event, items, error])
@@ -1233,7 +1234,14 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
 
     /// Call when you wish to leave a namespace and disconnect this socket.
     open func leaveNamespace() {
-        manager?.disconnectSocket(self)
+        if let manager = manager as? SocketManager {
+            // JS keeps its namespace cache across a client disconnect so connect()
+            // can reuse the same instance. Explicit manager removal is a separate API.
+            // The active flag still determines whether the engine must stay alive.
+            manager.disconnectSocket(self, removeFromManager: false)
+        } else {
+            manager?.disconnectSocket(self)
+        }
     }
 
     /// Joins `nsp`. You shouldn't need to call this directly, instead call `connect`.

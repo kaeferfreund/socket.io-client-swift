@@ -9,14 +9,14 @@
   },
   "typescript_type_declarations": 14,
   "review_statuses": {
-    "candidate-existing-test": 82,
+    "candidate-existing-test": 75,
     "api-difference": 15,
-    "mapping-gap": 12,
-    "known-divergence": 4,
-    "platform-specific": 22,
-    "focused-regression": 16,
+    "mapping-gap": 0,
+    "known-divergence": 0,
+    "platform-specific": 33,
+    "focused-regression": 67,
     "unsupported-feature": 43,
     "typescript-only": 14,
-    "unmapped": 103
+    "unmapped": 64
   }
 }

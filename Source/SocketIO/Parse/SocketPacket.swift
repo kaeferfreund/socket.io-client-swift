@@ -190,7 +190,11 @@ public struct SocketPacket : CustomStringConvertible {
     /// reproducible encoder is what makes the wire strings testable and the
     /// encoder differential deterministic.
     static func jsonString(from value: Any, fragmentsAllowed: Bool) throws -> String {
-        guard JSONSerialization.isValidJSONObject(fragmentsAllowed ? [value] : value) else {
+        // This entry also serves hand-built packets and CONNECT auth payloads.
+        // Never pass an uninspected Foundation graph into JSONSerialization.
+        var normalizer = SocketEmitNormalizer(allowBinary: false)
+        let normalized = try normalizer.normalize(value)
+        guard JSONSerialization.isValidJSONObject(fragmentsAllowed ? [normalized] : normalized) else {
             throw SocketPacketError.unserializablePayload(String(describing: Swift.type(of: value)))
         }
 
@@ -201,7 +205,7 @@ public struct SocketPacket : CustomStringConvertible {
 
         let json: Data
         do {
-            json = try JSONSerialization.data(withJSONObject: value, options: options)
+            json = try JSONSerialization.data(withJSONObject: normalized, options: options)
         } catch {
             throw SocketPacketError.unserializablePayload(error.localizedDescription)
         }
@@ -324,6 +328,15 @@ public enum SocketPacketError : Error, LocalizedError, CustomStringConvertible {
     /// The object graph is nested deeper than `SocketPacket.maximumEmitNestingDepth`.
     case nestingTooDeep(path: String, limit: Int)
 
+    /// A Foundation array or dictionary refers to an ancestor in the payload.
+    case cyclicPayload(path: String)
+
+    /// The encoder's per-payload traversal budget was exceeded.
+    case tooManyNodes(limit: Int)
+
+    /// Escaped JSON plus binary attachment allowance exceeds the payload budget.
+    case payloadTooLarge(limit: Int)
+
     /// `JSONSerialization` rejected the payload after normalization.
     case unserializablePayload(String)
 
@@ -338,6 +351,12 @@ public enum SocketPacketError : Error, LocalizedError, CustomStringConvertible {
             return "\(path) is a dictionary with a non-String key; JSON objects are string-keyed"
         case let .nestingTooDeep(path, limit):
             return "\(path) is nested deeper than the \(limit) level encoder limit"
+        case let .cyclicPayload(path):
+            return "\(path) contains a cyclic Foundation container"
+        case let .tooManyNodes(limit):
+            return "the payload exceeds the \(limit) node encoder limit"
+        case let .payloadTooLarge(limit):
+            return "the payload exceeds the \(limit) byte encoder budget"
         case let .unserializablePayload(reason):
             return "the payload cannot be serialized: \(reason)"
         }
@@ -365,15 +384,15 @@ extension SocketPacket {
         }
     }
 
-    /// Maximum object-graph depth the outgoing encoder accepts.
-    ///
-    /// Mirrors the decoder's `SocketParserOptions.maximumNestingDepth` default.
-    ///
-    /// **Cycles are out of scope.** A self-referencing Foundation container
-    /// overflows the stack inside Swift's `as? [String: Any]` / `as? [Any]`
-    /// bridging, before any code here runs, so this limit bounds deep graphs
-    /// only. See `Documentation/ProtocolParityReview.md` §8.
+    /// Maximum outgoing object-graph depth, matching the decoder's default.
     public static let maximumEmitNestingDepth = 512
+
+    /// Maximum nodes per payload, including repeated values and dictionary keys.
+    public static let maximumEmitNodeCount = 1_000_000
+
+    /// Conservative per-payload byte budget: escaped JSON plus binary bytes and
+    /// 64 bytes per attachment placeholder. This is not a total queue/RSS limit.
+    public static let maximumEmitPayloadBytes = 64 * 1024 * 1024
 
     /// `Date.prototype.toJSON()` — `toISOString()`, i.e. UTC with exactly three
     /// fractional-second digits and a `Z` suffix (`2024-01-02T03:04:05.678Z`).
@@ -413,59 +432,11 @@ extension SocketPacket {
     /// - parameter items: The emitted items, after `socketRepresentation()`.
     /// - parameter allowBinary: Whether `Data` will be shredded into attachments.
     public static func jsonSafeEmitData(_ items: [Any], allowBinary: Bool) throws -> [Any] {
-        return try items.enumerated().map { index, item in
-            try jsonSafeValue(item, allowBinary: allowBinary, depth: 0, path: "item \(index)")
+        var normalizer = SocketEmitNormalizer(allowBinary: allowBinary)
+        guard let normalized = try normalizer.normalize(items) as? [Any] else {
+            throw SocketPacketError.unserializablePayload("expected an argument array")
         }
-    }
-
-    private static func jsonSafeValue(_ value: Any, allowBinary: Bool, depth: Int, path: String) throws -> Any {
-        guard depth <= maximumEmitNestingDepth else {
-            throw SocketPacketError.nestingTooDeep(path: path, limit: maximumEmitNestingDepth)
-        }
-
-        switch value {
-        case is NSNull:
-            return value
-        case let date as Date:
-            return iso8601String(from: date)
-        case let number as NSNumber:
-            // Keep everything except a non-finite number: a JSON boolean is an
-            // NSNumber too (`isJSONNumber` filters it out), and every finite
-            // value encodes as-is.
-            guard isJSONNumber(number), !number.doubleValue.isFinite else { return number }
-
-            return NSNull()
-        case let double as Double:
-            // Only reached where Swift numerics do not bridge to NSNumber.
-            return double.isFinite ? double : NSNull()
-        case let float as Float:
-            return float.isFinite ? float : NSNull()
-        case is String, is NSString, is Bool, is Int, is UInt:
-            return value
-        case let data as Data:
-            guard allowBinary else {
-                throw SocketPacketError.unsupportedValue(path: path, type: "Data")
-            }
-
-            return data
-        case let array as [Any]:
-            return try array.enumerated().map { index, element in
-                try jsonSafeValue(element, allowBinary: allowBinary, depth: depth + 1,
-                                  path: "\(path)[\(index)]")
-            }
-        case let dictionary as JSON:
-            var out = JSON(minimumCapacity: dictionary.count)
-            for (key, element) in dictionary {
-                out[key] = try jsonSafeValue(element, allowBinary: allowBinary, depth: depth + 1,
-                                             path: "\(path).\(key)")
-            }
-
-            return out
-        case is [AnyHashable: Any]:
-            throw SocketPacketError.nonStringKey(path: path)
-        default:
-            throw SocketPacketError.unsupportedValue(path: path, type: String(describing: Swift.type(of: value)))
-        }
+        return normalized
     }
 
     static func packetFromEmit(_ items: [Any], id: Int, nsp: String, ack: Bool, checkForBinary: Bool = true) -> SocketPacket {
@@ -511,5 +482,218 @@ private extension SocketPacket {
         var binary = [Data]()
 
         return (data.map({ shred($0, binary: &binary) }), binary)
+    }
+}
+
+
+/// Per-encoding traversal state. Foundation containers are visited by identity
+/// through CoreFoundation, never by recursively bridging them to Swift values.
+/// Only ancestors are retained in `ancestors`, so shared acyclic subgraphs are
+/// legal. Counts include repeated occurrences (and object keys), not identities.
+internal struct SocketEmitNormalizer {
+    private let maximumNodes: Int
+    private let maximumBytes: Int
+    private var nodesLeft: Int
+    private var bytesLeft: Int
+    private var ancestors = Set<ObjectIdentifier>()
+    let allowBinary: Bool
+
+    init(allowBinary: Bool,
+         maximumNodes: Int = SocketPacket.maximumEmitNodeCount,
+         maximumBytes: Int = SocketPacket.maximumEmitPayloadBytes) {
+        self.allowBinary = allowBinary
+        self.maximumNodes = max(0, maximumNodes)
+        self.maximumBytes = max(0, maximumBytes)
+        self.nodesLeft = max(0, maximumNodes)
+        self.bytesLeft = max(0, maximumBytes)
+    }
+
+    private mutating func consumeNode() throws {
+        guard nodesLeft > 0 else { throw SocketPacketError.tooManyNodes(limit: maximumNodes) }
+        nodesLeft -= 1
+    }
+
+    private mutating func consumeBytes(_ count: Int) throws {
+        guard count >= 0, count <= bytesLeft else {
+            throw SocketPacketError.payloadTooLarge(limit: maximumBytes)
+        }
+        bytesLeft -= count
+    }
+
+    private func checkChildren(_ count: Int, dictionary: Bool = false) throws {
+        // Check before allocating output capacity or a dictionary's pointer table.
+        guard count <= nodesLeft / (dictionary ? 2 : 1) else {
+            throw SocketPacketError.tooManyNodes(limit: maximumNodes)
+        }
+    }
+
+    /// Charges an upper bound for JSONSerialization's escaped UTF-8 spelling,
+    /// stopping at the first over-budget scalar, before serializing a whole graph.
+    private mutating func string(_ value: String) throws -> String {
+        try consumeBytes(2) // quotes
+        for scalar in value.unicodeScalars {
+            switch scalar.value {
+            case 8, 9, 10, 12, 13, 34, 47, 92: try consumeBytes(2)
+            case 0...31, 0x2028, 0x2029: try consumeBytes(6)
+            case 0...0x7F: try consumeBytes(1)
+            case 0x80...0x7FF: try consumeBytes(2)
+            case 0x800...0xFFFF: try consumeBytes(3)
+            default: try consumeBytes(4)
+            }
+        }
+        return value
+    }
+
+    private mutating func foundationString(_ value: NSString) throws -> String {
+        // UTF-16 length is a lower bound for JSON's UTF-8 spelling. Refuse a
+        // huge mutable Foundation string before bridging/copying it into Swift.
+        guard value.length <= bytesLeft else {
+            throw SocketPacketError.payloadTooLarge(limit: maximumBytes)
+        }
+        return try string(value as String)
+    }
+
+    private mutating func number(_ value: NSNumber) throws -> Any {
+        if CFGetTypeID(value) != CFBooleanGetTypeID(), !value.doubleValue.isFinite {
+            try consumeBytes(4)
+            return NSNull()
+        }
+        // Leaf-only serialization cannot recurse into a Foundation container.
+        // It also accounts for booleans, full-width integers and decimal numbers.
+        let encoded: Data
+        do {
+            encoded = try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])
+        } catch {
+            throw SocketPacketError.unserializablePayload(error.localizedDescription)
+        }
+        try consumeBytes(encoded.count)
+        return value
+    }
+
+    private mutating func binary(_ value: Data, depth: Int, path: String) throws -> Data {
+        guard allowBinary else { throw SocketPacketError.unsupportedValue(path: path, type: "Data") }
+        // Reserve the eventual placeholder's two keys and two scalar values now,
+        // before ack registration. Its dictionary replaces the already-counted
+        // Data node; its children need one further nesting level at serialization.
+        guard depth < SocketPacket.maximumEmitNestingDepth else {
+            throw SocketPacketError.nestingTooDeep(path: path, limit: SocketPacket.maximumEmitNestingDepth)
+        }
+        for _ in 0..<4 { try consumeNode() }
+        try consumeBytes(value.count)
+        // Conservative allowance for the attachment placeholder and index. The
+        // node limit bounds the index; 64 bytes exceeds its largest JSON spelling.
+        try consumeBytes(64)
+        return value
+    }
+
+    mutating func normalize(_ value: Any, depth: Int = -1, path: String = "payload") throws -> Any {
+        guard depth <= SocketPacket.maximumEmitNestingDepth else {
+            throw SocketPacketError.nestingTooDeep(path: path, limit: SocketPacket.maximumEmitNestingDepth)
+        }
+        try consumeNode()
+
+        // `value is AnyObject` is NOT this check: Swift values bridge to
+        // AnyObject too. Inspect the dynamic metatype before any collection cast.
+        if Swift.type(of: value) is AnyClass {
+            let object = value as AnyObject
+            if let array = object as? NSArray {
+                return try foundationArray(array, depth: depth, path: path)
+            }
+            if let dictionary = object as? NSDictionary {
+                return try foundationDictionary(dictionary, depth: depth, path: path)
+            }
+            if object is NSNull { try consumeBytes(4); return NSNull() }
+            if let text = object as? NSString { return try foundationString(text) }
+            if let numeric = object as? NSNumber { return try number(numeric) }
+            if let date = object as? NSDate { return try string(SocketPacket.iso8601String(from: date as Date)) }
+            if let data = object as? NSData {
+                guard allowBinary else { throw SocketPacketError.unsupportedValue(path: path, type: "Data") }
+                guard data.length <= bytesLeft else { throw SocketPacketError.payloadTooLarge(limit: maximumBytes) }
+                return try binary(data as Data, depth: depth, path: path)
+            }
+            throw SocketPacketError.unsupportedValue(path: path, type: String(describing: Swift.type(of: value)))
+        }
+
+        // Only native values reach these casts; Foundation collection casts
+        // above never bridge their children recursively.
+        switch value {
+        case let text as String: return try string(text)
+        case let date as Date: return try string(SocketPacket.iso8601String(from: date))
+        case let data as Data: return try binary(data, depth: depth, path: path)
+        case let numeric as NSNumber: return try number(numeric)
+        case let array as [Any]:
+            try checkChildren(array.count)
+            try consumeBytes(2 + max(0, array.count - 1))
+            var result = [Any]()
+            result.reserveCapacity(array.count)
+            for (index, child) in array.enumerated() {
+                result.append(try normalize(child, depth: depth + 1, path: "\(path)[\(index)]"))
+            }
+            return result
+        case let dictionary as [String: Any]:
+            try checkChildren(dictionary.count, dictionary: true)
+            try consumeBytes(2 + max(0, dictionary.count - 1))
+            var result = [String: Any](minimumCapacity: dictionary.count)
+            for (index, entry) in dictionary.enumerated() {
+                try consumeNode()
+                let key = try string(entry.key)
+                try consumeBytes(1) // colon
+                // Do not copy an unbounded key into every error-path string.
+                result[key] = try normalize(entry.value, depth: depth + 1, path: "\(path).value[\(index)]")
+            }
+            return result
+        case is [AnyHashable: Any]: throw SocketPacketError.nonStringKey(path: path)
+        default: throw SocketPacketError.unsupportedValue(path: path, type: String(describing: Swift.type(of: value)))
+        }
+    }
+
+    private mutating func foundationArray(_ array: NSArray, depth: Int, path: String) throws -> [Any] {
+        let identity = ObjectIdentifier(array)
+        guard ancestors.insert(identity).inserted else { throw SocketPacketError.cyclicPayload(path: path) }
+        defer { ancestors.remove(identity) }
+        return try withExtendedLifetime(array) {
+            let cf = unsafeBitCast(array, to: CFArray.self)
+            let count = CFArrayGetCount(cf)
+            try checkChildren(count)
+            try consumeBytes(2 + max(0, count - 1))
+            var result = [Any]()
+            result.reserveCapacity(count)
+            for index in 0..<count {
+                guard let pointer = CFArrayGetValueAtIndex(cf, index) else {
+                    throw SocketPacketError.unserializablePayload("null Foundation array entry")
+                }
+                let child = Unmanaged<AnyObject>.fromOpaque(pointer).takeUnretainedValue()
+                result.append(try normalize(child, depth: depth + 1, path: "\(path)[\(index)]"))
+            }
+            return result
+        }
+    }
+
+    private mutating func foundationDictionary(_ dictionary: NSDictionary, depth: Int, path: String) throws -> [String: Any] {
+        let identity = ObjectIdentifier(dictionary)
+        guard ancestors.insert(identity).inserted else { throw SocketPacketError.cyclicPayload(path: path) }
+        defer { ancestors.remove(identity) }
+        return try withExtendedLifetime(dictionary) {
+            let cf = unsafeBitCast(dictionary, to: CFDictionary.self)
+            let count = CFDictionaryGetCount(cf)
+            try checkChildren(count, dictionary: true)
+            try consumeBytes(2 + max(0, count - 1))
+            var keys = [UnsafeRawPointer?](repeating: nil, count: count)
+            var values = [UnsafeRawPointer?](repeating: nil, count: count)
+            CFDictionaryGetKeysAndValues(cf, &keys, &values)
+            var result = [String: Any](minimumCapacity: count)
+            for index in 0..<count {
+                guard let keyPointer = keys[index], let valuePointer = values[index],
+                      let keyObject = Unmanaged<AnyObject>.fromOpaque(keyPointer).takeUnretainedValue() as? NSString else {
+                    throw SocketPacketError.nonStringKey(path: path)
+                }
+                try consumeNode()
+                let key = try foundationString(keyObject)
+                try consumeBytes(1)
+                let child = Unmanaged<AnyObject>.fromOpaque(valuePointer).takeUnretainedValue()
+                result[key] = try normalize(child, depth: depth + 1, path: "\(path).value[\(index)]")
+            }
+            return result
+        }
     }
 }

@@ -78,9 +78,10 @@ independent of Engine.IO's polling `maxPayload`. Queue overflow is surfaced as a
 transport failure rather than silently dropping a nonvolatile application packet.
 
 `.parserOptions(SocketParserOptions(...))` is a separate, Socket.IO-level policy
-and is **not** part of these transport limits. Its defaults decode everything the
-JavaScript parser decodes — only `maximumAttachments` (10, JS `maxAttachments`)
-bounds a well-formed packet — so the byte limits there are opt-in. See the
+and is **not** part of these transport limits. `maximumAttachments` defaults to
+10, matching JS `maxAttachments`; the byte limits are opt-in. The nesting-depth
+limit remains enabled by default at 512 and may reject packets accepted by the
+JavaScript parser. See the
 "Deliberate deviations" section of `PARITY.md`.
 
 ## Distribution and release

@@ -28,8 +28,10 @@ See [the full inventory](Documentation/JavaScriptTestInventory.csv),
 Inventory labels distinguish focused regressions, candidate old pointers,
 unmapped rows, API differences and unsupported features. A candidate is not a
 proof that all assertions of an upstream test have been ported. The round-2 pass
-(2026-09-18) closed every `mapping-gap` row; 66 rows are now focused
-regressions and one `known-divergence` remains (encoding a cyclic object graph).
+(2026-09-18) closed every `mapping-gap` row. The 2026-09-19 cycle-safety follow-up
+adds the remaining circular-object regression: 67 rows are focused regressions,
+with zero `mapping-gap` and zero `known-divergence` rows. These inventory labels
+do not remove the deliberate encoding bounds or close release gate R2.
 
 The local decoder comparison exercised 5,000 generated valid text/binary vectors
 against the actual pinned JavaScript decoder and current Swift decoder, with zero
@@ -52,8 +54,9 @@ focused tests. Compression, WebTransport and several JavaScript-specific APIs ar
 not implemented. Reconnect-event semantics now match the JavaScript manager
 (`reconnect` means success and carries the attempt number; `reconnect_error` and
 `reconnect_failed` exist) — a breaking change in 17.0.0, see the README. The
-outgoing encoder throws instead of substituting an empty payload, but still does
-not detect cyclic object graphs. Legacy and async acknowledgement contracts
+outgoing encoder throws instead of substituting an empty payload and rejects
+cyclic Foundation graphs before bridging. Its finite node/byte/depth budgets
+are deliberate deviations; full encoder parity remains an open release gate. Legacy and async acknowledgement contracts
 still differ; see the review rather than treating these as browser-only
 exceptions. Runtime tests, SDK builds, API compatibility and device validation
 are different acceptance gates.

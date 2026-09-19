@@ -343,6 +343,7 @@ final class SocketPollingCloseTest: XCTestCase {
     /// A stuck POST is cancelled at the teardown deadline without a late close POST.
     func testStalledPostIsCancelledWithoutSendingAfterTheDeadline() {
         connect()
+        engine.engineQueue.sync { engine.pollingRetirementDeadline = 0.05 }
         let started = expectation(description: "stalled POST started")
         let cancelled = expectation(description: "stalled POST cancelled")
         fixture.observePosts { post in
@@ -365,6 +366,7 @@ final class SocketPollingCloseTest: XCTestCase {
     /// Retired POST/close callbacks must not mutate or close a replacement session.
     func testRetiredCloseUsesOnlyTheOldSessionAfterReconnect() {
         connect()
+        engine.engineQueue.sync { engine.pollingRetirementDeadline = 30 }
         let started = expectation(description: "old POST started")
         let oldClosedOnWire = expectation(description: "old SID closed")
         fixture.observePosts { post in
@@ -394,6 +396,7 @@ final class SocketPollingCloseTest: XCTestCase {
     /// while a completely independent replacement handshake finishes.
     func testReconnectCannotCancelDetachedRetiringPostBeforeBarrierRelease() {
         connect()
+        engine.engineQueue.sync { engine.pollingRetirementDeadline = 30 }
         let started = expectation(description: "retiring POST held")
         let closedOnWire = expectation(description: "retiring close delivered")
         let prematurelyCancelled = expectation(description: "old POST not cancelled by reset")

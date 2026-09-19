@@ -604,3 +604,44 @@ final class SocketNativeEngineTest: XCTestCase {
         manager.disconnect()
     }
 }
+
+
+extension SocketNativeEngineTest {
+    func testSuccessfulUpgradeRetiresOnlyThePollingSession() {
+        let client = NativeEngineClient()
+        let engine = NativePollingTestEngine(client: client, url: url, config: [])
+        let candidate = NativeEngineTransport()
+        engine.webSocketTransportFactory = { _ in candidate }
+        let retired = expectation(description: "polling session invalidated after handoff")
+        let delegate = PollingRetirementDelegate { retired.fulfill() }
+        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+        engine.engineQueue.sync {
+            engine.setTestSession(session)
+            engine.parseEngineMessage(upgradeHandshake)
+        }
+        let barrier = engine.engineQueue.sync { engine.pollingPostGroup }
+        candidate.onEvent?(.opened(protocol: nil)); drain(engine)
+        candidate.onEvent?(.message(.text("3probe"))); drain(engine)
+        wait(for: [retired], timeout: 5)
+        engine.engineQueue.sync {
+            XCTAssertNil(engine.session)
+            XCTAssertFalse(engine.pollingPostGroup === barrier)
+            XCTAssertFalse(engine.invalidated)
+            XCTAssertFalse(engine.polling)
+            XCTAssertTrue(engine.connected)
+            XCTAssertFalse(engine.closed)
+        }
+        XCTAssertEqual(candidate.batches.flatMap { $0 }, [.text("2probe"), .text("5")])
+        XCTAssertTrue(client.closes.isEmpty)
+        engine.disconnect(reason: "test"); drain(engine)
+    }
+}
+
+private final class PollingRetirementDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
+    let onInvalidation: () -> Void
+    init(_ callback: @escaping () -> Void) { onInvalidation = callback }
+    func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        XCTAssertNil(error)
+        onInvalidation()
+    }
+}

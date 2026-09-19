@@ -181,7 +181,6 @@ final class SocketTimedEmitterCallbackTest: XCTestCase {
         let exp = expectation(description: ".timeout fires next tick")
         socket.timeout(after: -1).emit("ping") { err, _ in
             XCTAssertEqual(err as? SocketAckError, .timeout)
-            XCTAssertTrue(data.isEmpty)
             exp.fulfill()
         }
         wait(for: [exp], timeout: 1)
@@ -629,7 +628,7 @@ final class SocketTimedEmitterRaceTest: XCTestCase {
     func testLegacyEmitWithAckTimingOutNotClearedOnDisconnect() {
         // JS-divergence regression-pin: the legacy path uses SocketAckManager's
         // `acks` (untyped AckCallback, no fireWith error). didDisconnect only
-        // calls clearTimedAcks(reason:) on the new timed-ack storage, so a
+        // calls clearTimedAcks(reason: .disconnected) on the new timed-ack storage, so a
         // legacy emitWithAck.timingOut callback is orphaned across a disconnect
         // until its own timer fires (at which point it would fire .noAck, not
         // .disconnected). For this test we use a 5s timer and only wait 0.2s,

@@ -183,6 +183,20 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// thread while the flush runs on `handleQueue`.
     private var sendBuffer = [BufferedEmit]()
     private let sendBufferLock = NSLock()
+    /// Accumulated estimated payload bytes of `sendBuffer`, maintained with it
+    /// so the limit check does not re-walk every buffered payload.
+    private var sendBufferBytes = 0
+    /// Same accounting for `retryQueue`, guarded by `retryQueueLock`.
+    private var retryQueueBytes = 0
+    /// Same accounting for `bufferedRecoveryReplayEvents`, `handleQueue`-confined
+    /// like the buffer itself.
+    private var recoveryReplayBytes = 0
+
+    /// The pipeline-wide resource policy. Unlimited unless `.bufferLimits` was
+    /// configured, which keeps the default behaviour JavaScript-equal.
+    var bufferLimits: SocketBufferLimits {
+        (manager as? SocketManager)?.bufferLimits ?? .unlimited
+    }
 
     // MARK: Auth provider state
 
@@ -411,6 +425,32 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     }
 
     private func bufferRecoveryReplayEvent(_ packet: SocketPacket) {
+        // Gate R1: these are peer-controlled packets replayed into a buffer the
+        // application has not drained yet, so a flood is the one overflow with
+        // no caller to report to. It closes the connection instead, the way
+        // engine.io-client's `_onError` → `_onClose("transport error")` does.
+        let limits = bufferLimits
+        if !limits.isUnlimited {
+            let bytes = SocketBufferLimits.retainedBytes(of: packet.args)
+            let packets = bufferedRecoveryReplayEvents.count + 1
+            let total = recoveryReplayBytes + bytes
+            if packets > limits.maximumRecoveryReplayPackets || total > limits.maximumRecoveryReplayBytes {
+                let measuringBytes = total > limits.maximumRecoveryReplayBytes
+                let error = SocketBufferLimitError(
+                    buffer: .recoveryReplay,
+                    limit: measuringBytes ? limits.maximumRecoveryReplayBytes : limits.maximumRecoveryReplayPackets,
+                    attempted: measuringBytes ? total : packets,
+                    measuringBytes: measuringBytes
+                )
+                DefaultSocketLogger.Logger.error(error.description, type: logType)
+                clearBufferedRecoveryReplayEvents()
+                handleClientEvent(.error, data: [error])
+                manager?.engine?.disconnect(reason: "transport error")
+
+                return
+            }
+            recoveryReplayBytes = total
+        }
         bufferedRecoveryReplayEvents.append((event: packet.event, data: packet.args, ack: packet.id))
     }
 
@@ -419,6 +459,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
 
         let bufferedEvents = bufferedRecoveryReplayEvents
         bufferedRecoveryReplayEvents.removeAll(keepingCapacity: false)
+        recoveryReplayBytes = 0
 
         for event in bufferedEvents {
             guard status == .connected else { break }
@@ -429,6 +470,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
 
     private func clearBufferedRecoveryReplayEvents() {
         bufferedRecoveryReplayEvents.removeAll(keepingCapacity: false)
+        recoveryReplayBytes = 0
     }
 
     func createOnAck(_ items: [Any], binary: Bool = true) -> OnAckCallback {
@@ -836,9 +878,13 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
 
             DefaultSocketLogger.Logger.log("Buffering emit until connected: \(data)", type: logType)
 
-            sendBufferLock.lock()
-            sendBuffer.append(BufferedEmit(data: data, ack: ack, binary: binary, completion: wrappedCompletion))
-            sendBufferLock.unlock()
+            // Gate R1: the *new* emit is what fails when the buffer is full.
+            // Evicting an already-buffered packet would silently drop an emit
+            // the caller believes is on its way.
+            if let error = appendToSendBuffer(BufferedEmit(data: data, ack: ack,
+                                                           binary: binary, completion: wrappedCompletion)) {
+                failOverflowingEmit(error, ack: ack, completion: wrappedCompletion)
+            }
 
             return
         }
@@ -896,6 +942,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         sendBufferLock.lock()
         let buffered = sendBuffer
         sendBuffer.removeAll(keepingCapacity: false)
+        sendBufferBytes = 0
         sendBufferLock.unlock()
 
         guard !buffered.isEmpty else { return }
@@ -929,13 +976,71 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         defer { sendBufferLock.unlock() }
 
         sendBuffer.removeAll(keepingCapacity: false)
+        sendBufferBytes = 0
     }
 
     func dropBufferedEmit(ack: Int) {
         sendBufferLock.lock()
         defer { sendBufferLock.unlock() }
 
+        for entry in sendBuffer where entry.ack == ack {
+            sendBufferBytes = max(0, sendBufferBytes - SocketBufferLimits.retainedBytes(of: entry.data))
+        }
         sendBuffer.removeAll(where: { $0.ack == ack })
+    }
+
+    // MARK: - Gate R1 — bounded application buffers
+
+    /// Appends under the configured bound, returning the error when the buffer
+    /// is full. Nothing is ever evicted to make room.
+    private func appendToSendBuffer(_ entry: BufferedEmit) -> SocketBufferLimitError? {
+        let limits = bufferLimits
+        let bytes = limits.isUnlimited ? 0 : SocketBufferLimits.retainedBytes(of: entry.data)
+
+        sendBufferLock.lock()
+        if !limits.isUnlimited {
+            let packets = sendBuffer.count + 1
+            let total = sendBufferBytes + bytes
+            if packets > limits.maximumSendBufferPackets || total > limits.maximumSendBufferBytes {
+                sendBufferLock.unlock()
+                let measuringBytes = total > limits.maximumSendBufferBytes
+
+                return SocketBufferLimitError(
+                    buffer: .sendBuffer,
+                    limit: measuringBytes ? limits.maximumSendBufferBytes : limits.maximumSendBufferPackets,
+                    attempted: measuringBytes ? total : packets,
+                    measuringBytes: measuringBytes
+                )
+            }
+            sendBufferBytes = total
+        }
+        sendBuffer.append(entry)
+        sendBufferLock.unlock()
+
+        return nil
+    }
+
+    /// Settles a rejected emit exactly once: the local write completion runs,
+    /// the acknowledgement (if the caller asked for one) settles with the typed
+    /// error, and the `.error` client event carries the same error. No packet
+    /// is buffered, queued or written.
+    private func failOverflowingEmit(_ error: SocketBufferLimitError,
+                                     ack: Int?,
+                                     completion: (() -> ())?) {
+        DefaultSocketLogger.Logger.error(error.description, type: logType)
+
+        completion?()
+        if let ack = ack {
+            // `cancelTimedAck(fireWith:)` is the one-shot fire site the timeout
+            // and disconnect paths use, so the caller cannot be notified twice.
+            // Every acknowledgement-carrying emit reaches this funnel from
+            // inside `performOnHandleQueue`, i.e. already on the owning
+            // `handleQueue`; the hop is only for a caller that built its own id.
+            performOnHandleQueue { [weak self] in
+                self?.ackHandlers.cancelTimedAck(ack, fireWith: error)
+            }
+        }
+        handleClientEvent(.error, data: [error])
     }
 
     // MARK: - Retry queue (JS `retries` option)
@@ -985,7 +1090,35 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         }
         DefaultSocketLogger.Logger.log("Queueing retriable emit: \(data)", type: logType)
 
+        // Gate R1: a never-acknowledged head blocks the queue, so without a
+        // bound the entries behind it accumulate forever. The *new* emit is
+        // what fails; the head keeps its place and its retry budget.
+        let limits = bufferLimits
+        let bytes = limits.isUnlimited ? 0 : SocketBufferLimits.retainedBytes(of: data)
+
         retryQueueLock.lock()
+        if !limits.isUnlimited {
+            let packets = retryQueue.count + 1
+            let total = retryQueueBytes + bytes
+            if packets > limits.maximumRetryQueuePackets || total > limits.maximumRetryQueueBytes {
+                retryQueueLock.unlock()
+                let measuringBytes = total > limits.maximumRetryQueueBytes
+                let error = SocketBufferLimitError(
+                    buffer: .retryQueue,
+                    limit: measuringBytes ? limits.maximumRetryQueueBytes : limits.maximumRetryQueuePackets,
+                    attempted: measuringBytes ? total : packets,
+                    measuringBytes: measuringBytes
+                )
+                DefaultSocketLogger.Logger.error(error.description, type: logType)
+                if let completion = completion { manager?.handleQueue.async(execute: completion) }
+                userAck?(error, [])
+                handleClientEvent(.error, data: [error])
+
+                // Consume the rejected emit so the caller cannot buffer or send it.
+                return true
+            }
+            retryQueueBytes = total
+        }
         retryQueueSeq += 1
         let queueId = retryQueueSeq
         retryQueue.append(RetriableEmit(queueId: queueId, data: data, userAck: userAck,
@@ -1081,13 +1214,13 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             DefaultSocketLogger.Logger.log(
                 "Retriable emit [\(queueId)] discarded after \(head.tryCount) tries", type: logType
             )
-            retryQueue.removeFirst()
+            removeRetryQueueHeadLocked()
             let userAck = head.userAck
             retryQueueLock.unlock()
 
             userAck?(err, [])
         } else {
-            retryQueue.removeFirst()
+            removeRetryQueueHeadLocked()
             let userAck = head.userAck
             retryQueueLock.unlock()
 
@@ -1116,6 +1249,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         retryQueueLock.lock()
         let dropped = retryQueue
         retryQueue.removeAll(keepingCapacity: false)
+        retryQueueBytes = 0
         retryQueueLock.unlock()
 
         // `cancelTimedAck` must run on the owning handleQueue; the public
@@ -1131,6 +1265,16 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             entry.writeCompletion?()
             entry.userAck?(SocketAckError.disconnected, [])
         }
+    }
+
+    /// Removes the head and its byte accounting. Caller holds `retryQueueLock`.
+    private func removeRetryQueueHeadLocked() {
+        guard !retryQueue.isEmpty else { return }
+
+        if !bufferLimits.isUnlimited {
+            retryQueueBytes = max(0, retryQueueBytes - SocketBufferLimits.retainedBytes(of: retryQueue[0].data))
+        }
+        retryQueue.removeFirst()
     }
 
     /// Returns `true` if the first element of `data` is a reserved event name.
@@ -1485,11 +1629,28 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// `.reconnect` now means a *successful* reconnection and carries the
     /// attempt number, exactly as in JS.
     ///
+    /// **Changed in 17.0.0**: acknowledgements are cleared here too. JS
+    /// `Socket.onclose` ends with `_clearAcks()` on *every* close, including one
+    /// that will be retried, so a pending ack cannot survive a reconnect and
+    /// later match an id the new session re-issues.
+    ///
     /// - parameter reason: The reason this socket is reconnecting.
     open func setReconnecting(reason: String) {
         clearBufferedRecoveryReplayEvents()
         status = .connecting
         sid = ""
+        // JS `Socket.onclose` → `_clearAcks()`. The same three rules apply as on
+        // the terminal path: an ack whose packet is still in the send buffer is
+        // kept (that packet has not reached the server and goes out on the next
+        // CONNECT), a `withError` registration is settled with the disconnect
+        // error, and a plain callback is dropped silently
+        // (`notifyOnDisconnect == false`).
+        //
+        // The retry queue's per-attempt ack is one of these registrations. JS
+        // re-registers a fresh one per attempt from `_drainQueue`, and the
+        // appended `_addToQueue` callback decides what the disconnect means for
+        // the entry: the head stays queued unless its budget is already spent,
+        // and `drainRetriableQueueOnConnect` re-sends it under a new id.
         notifyDisconnectAndClearAcks(reason: reason)
     }
 
@@ -1509,6 +1670,26 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         retryQueueLock.lock()
         defer { retryQueueLock.unlock() }
         return retryQueue.count
+    }
+
+    /// What the bounded buffers currently retain. Test accessor only: gate R1
+    /// requires proof that the counts and bytes go back to zero after a reset
+    /// or a disconnect, not only that the limits hold while they fill.
+    var testRetainedBuffers: (sendPackets: Int, sendBytes: Int,
+                              retryPackets: Int, retryBytes: Int,
+                              replayPackets: Int, replayBytes: Int) {
+        sendBufferLock.lock()
+        let sendPackets = sendBuffer.count
+        let sendBytes = sendBufferBytes
+        sendBufferLock.unlock()
+
+        retryQueueLock.lock()
+        let retryPackets = retryQueue.count
+        let retryBytes = retryQueueBytes
+        retryQueueLock.unlock()
+
+        return (sendPackets, sendBytes, retryPackets, retryBytes,
+                bufferedRecoveryReplayEvents.count, recoveryReplayBytes)
     }
 
     func setTestStatus(_ status: SocketIOStatus) {

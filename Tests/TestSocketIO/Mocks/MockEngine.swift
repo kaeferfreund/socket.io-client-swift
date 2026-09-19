@@ -55,9 +55,13 @@ final class MockEngine: NSObject, SocketEngineSpec {
         super.init()
     }
 
+    /// Every `disconnect(reason:)` the client asked for, in order. Gate R1's
+    /// incoming overflows are observable only as a close with a reason.
+    var disconnectReasons: [String] = []
+
     func connect() {}
     func didError(reason: String) {}
-    func disconnect(reason: String) {}
+    func disconnect(reason: String) { disconnectReasons.append(reason) }
     func doFastUpgrade() {}
     func flushWaitingForPostToWebSocket() {}
     func parseEngineData(_ data: Data) {}

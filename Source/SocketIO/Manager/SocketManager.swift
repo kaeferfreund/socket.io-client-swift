@@ -167,6 +167,26 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     public private(set) var parserOptions = SocketParserOptions()
     private var parserFailed = false
 
+    /// Pipeline-wide buffer/queue limits. Set via `.bufferLimits` before
+    /// connecting; unlimited by default, which is the JavaScript behaviour.
+    public private(set) var bufferLimits = SocketBufferLimits.unlimited
+
+    /// Packets handed to `handleQueue` that have not finished parsing.
+    ///
+    /// The permit is taken on the engine queue before the dispatch and released
+    /// on `handleQueue` after `_parseEngineMessage`/`_parseEngineBinaryData`
+    /// returns, so a consumer that cannot keep up applies backpressure to the
+    /// transport instead of letting the queue grow without bound. Written from
+    /// both queues, hence the lock.
+    private var unparsedPackets = 0
+    private var unparsedBytes = 0
+    private var receiveBacklogOverflowed = false
+    private let receiveBacklogLock = NSLock()
+
+    /// Fires when a half-reconstructed binary packet outlives
+    /// `bufferLimits.binaryReconstructionTimeout`.
+    private var binaryReconstructionTimer: DispatchWorkItem?
+
     /// A list of packets that are waiting for binary data.
     ///
     /// The way that socket.io works all data should be sent directly after each packet.
@@ -257,9 +277,16 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         status = .connecting
         parserFailed = false
         waitingPackets.removeAll()
+        cancelBinaryReconstructionTimer()
+        resetReceiveBacklog()
         guard parserOptions.isValid else {
             status = .disconnected
             emitAll(clientEvent: .connectError, data: ["Invalid parser limits"])
+            return
+        }
+        guard bufferLimits.isValid else {
+            status = .disconnected
+            emitAll(clientEvent: .connectError, data: ["Invalid buffer limits"])
             return
         }
         engine?.connect()
@@ -526,6 +553,10 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         cancelConnectTimeout()
 
         waitingPackets.removeAll()
+        // Gate R1: the closed session retains nothing. The backlog permits and
+        // the reconstruction deadline belong to the transport that just died.
+        cancelBinaryReconstructionTimer()
+        resetReceiveBacklog()
 
         if status != .disconnected {
             status = .notConnected
@@ -724,7 +755,12 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     ///
     /// - parameter msg: The message that needs parsing.
     open func parseEngineMessage(_ msg: String) {
+        let size = msg.utf8.count
+        guard reserveReceivePermit(bytes: size) else { return }
+
         handleQueue.async {
+            defer { self.releaseReceivePermit(bytes: size) }
+
             self._parseEngineMessage(msg)
         }
     }
@@ -744,6 +780,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         }
         guard !packet.type.isBinary else {
             waitingPackets.append(packet)
+            startBinaryReconstructionTimerIfNeeded()
 
             return
         }
@@ -755,7 +792,12 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     ///
     /// - parameter data: The data the engine received.
     open func parseEngineBinaryData(_ data: Data) {
+        let size = data.count
+        guard reserveReceivePermit(bytes: size) else { return }
+
         handleQueue.async {
+            defer { self.releaseReceivePermit(bytes: size) }
+
             self._parseEngineBinaryData(data)
         }
     }
@@ -774,7 +816,107 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             return
         }
 
+        cancelBinaryReconstructionTimer()
         nsps[packet.nsp]?.handlePacket(packet)
+    }
+
+    // MARK: Gate R1 — receive backpressure and reconstruction deadline
+
+    /// Takes a permit for one packet the engine is about to hand to
+    /// `handleQueue`. Runs on the engine queue. Returns `false` when the
+    /// backlog is full, in which case the packet is not dispatched and the
+    /// connection is closed — dispatching it anyway would be the unbounded
+    /// growth this gate exists to prevent.
+    private func reserveReceivePermit(bytes: Int) -> Bool {
+        let limits = bufferLimits
+        guard limits.boundsReceive else { return true }
+
+        receiveBacklogLock.lock()
+        if receiveBacklogOverflowed {
+            receiveBacklogLock.unlock()
+
+            return false
+        }
+
+        let packets = unparsedPackets + 1
+        let total = unparsedBytes + bytes
+        if packets > limits.maximumUnparsedPackets || total > limits.maximumUnparsedBytes {
+            let measuringBytes = total > limits.maximumUnparsedBytes
+            receiveBacklogOverflowed = true
+            receiveBacklogLock.unlock()
+
+            let error = SocketBufferLimitError(
+                buffer: .receiveBacklog,
+                limit: measuringBytes ? limits.maximumUnparsedBytes : limits.maximumUnparsedPackets,
+                attempted: measuringBytes ? total : packets,
+                measuringBytes: measuringBytes
+            )
+            DefaultSocketLogger.Logger.error(error.description, type: SocketManager.logType)
+            // Closed straight from the engine queue: the consumer that cannot
+            // keep up owns `handleQueue`, so a close dispatched there would sit
+            // behind exactly the backlog it is meant to stop.
+            engine?.disconnect(reason: "transport error")
+
+            return false
+        }
+
+        unparsedPackets = packets
+        unparsedBytes = total
+        receiveBacklogLock.unlock()
+
+        return true
+    }
+
+    /// Releases the permit after parsing has finished, not after the dispatch.
+    private func releaseReceivePermit(bytes: Int) {
+        guard bufferLimits.boundsReceive else { return }
+
+        receiveBacklogLock.lock()
+        unparsedPackets = max(0, unparsedPackets - 1)
+        unparsedBytes = max(0, unparsedBytes - bytes)
+        receiveBacklogLock.unlock()
+    }
+
+    private func resetReceiveBacklog() {
+        receiveBacklogLock.lock()
+        unparsedPackets = 0
+        unparsedBytes = 0
+        receiveBacklogOverflowed = false
+        receiveBacklogLock.unlock()
+    }
+
+    /// Arms the deadline for a packet that is waiting for its attachments. JS
+    /// waits forever; a peer that announces attachments and never sends them
+    /// would otherwise pin the reconstruction buffer for the life of the
+    /// session.
+    private func startBinaryReconstructionTimerIfNeeded() {
+        let timeout = bufferLimits.binaryReconstructionTimeout
+        guard timeout.isFinite, binaryReconstructionTimer == nil else { return }
+
+        let timer = DispatchWorkItem { [weak self] in
+            guard let self = self, !self.waitingPackets.isEmpty else { return }
+
+            self.binaryReconstructionTimer = nil
+            let error = SocketBufferLimitError(buffer: .binaryReconstruction,
+                                               limit: Int(min(timeout * 1000, Double(Int.max))),
+                                               attempted: Int(min(timeout * 1000, Double(Int.max))),
+                                               measuringBytes: false)
+            DefaultSocketLogger.Logger.error(
+                "\(error.description) — a binary packet waited longer than \(timeout)s for its attachments",
+                type: SocketManager.logType
+            )
+            // A partial packet is a decoder failure: JS `Decoder.destroy()`
+            // drops it and the manager reports `parse error`. Nothing is
+            // replayed from what did arrive.
+            self.engineDidReceiveUndecodableData("Binary reconstruction deadline exceeded")
+        }
+        binaryReconstructionTimer = timer
+        handleQueue.asyncAfter(deadline: .now() + timeout, execute: timer)
+    }
+
+    private func cancelBinaryReconstructionTimer() {
+        binaryReconstructionTimer?.cancel()
+        binaryReconstructionTimer = nil
     }
 
     /// Closes the engine after undecodable data arrived, JS-aligned with
@@ -788,6 +930,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         guard status != .disconnected, !parserFailed else { return }
         parserFailed = true
         waitingPackets.removeAll()
+        cancelBinaryReconstructionTimer()
         DefaultSocketLogger.Logger.error(description, type: SocketManager.logType)
         engine?.disconnect(reason: "parse error")
     }
@@ -940,6 +1083,8 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             switch option {
             case let .parserOptions(options):
                 parserOptions = options
+            case let .bufferLimits(limits):
+                bufferLimits = limits
             case let .ackTimeout(value):
                 ackTimeout = max(0, value)
             case let .retries(count):
@@ -1024,4 +1169,15 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     func setTestStatus(_ status: SocketIOStatus) {
         self.status = status
     }
+
+    /// Packets dispatched to `handleQueue` that have not finished parsing, and
+    /// their accumulated bytes. Proves the permits are released again.
+    var testReceiveBacklog: (packets: Int, bytes: Int) {
+        receiveBacklogLock.lock()
+        defer { receiveBacklogLock.unlock() }
+
+        return (unparsedPackets, unparsedBytes)
+    }
+
+    var testHasBinaryReconstructionTimer: Bool { binaryReconstructionTimer != nil }
 }

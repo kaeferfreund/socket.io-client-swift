@@ -90,6 +90,16 @@ public enum SocketIOClientOption : ClientOption {
     /// An array of cookies that will be sent during the initial connection.
     case cookies([HTTPCookie])
 
+    /// Accept and resend server cookies in an isolated, engine-owned cookie jar.
+    /// Default false, like JS withCredentials. Explicit cookies/headers remain explicit.
+    case withCredentials(Bool)
+
+    /// Encode binary WebSocket messages as Engine.IO base64 text. Polling always does so.
+    case forceBase64(Bool)
+
+    /// Append a trailing slash to the transport path. Default true, like JS.
+    case addTrailingSlash(Bool)
+
     /// Any extra HTTP headers that should be sent during the initial connection.
     case extraHeaders([String: String])
 
@@ -213,6 +223,12 @@ public enum SocketIOClientOption : ClientOption {
             description = "connectParams"
         case .connectTimeout:
             description = "connectTimeout"
+        case .withCredentials:
+            description = "withCredentials"
+        case .forceBase64:
+            description = "forceBase64"
+        case .addTrailingSlash:
+            description = "addTrailingSlash"
         case .cookies:
             description = "cookies"
         case .extraHeaders:
@@ -288,6 +304,12 @@ public enum SocketIOClientOption : ClientOption {
             value = count
         case let .connectTimeout(timeout):
             value = timeout
+        case let .withCredentials(enabled):
+            value = enabled
+        case let .forceBase64(enabled):
+            value = enabled
+        case let .addTrailingSlash(enabled):
+            value = enabled
         case let .cookies(cookies):
             value = cookies
         case let .extraHeaders(headers):

@@ -60,6 +60,9 @@ public protocol SocketEngineSpec: AnyObject {
     /// An array of HTTPCookies that are sent during the connection.
     var cookies: [HTTPCookie]? { get }
 
+    /// Whether binary WebSocket payloads must use Engine.IO base64 text.
+    var forceBase64: Bool { get }
+
     /// The queue that all engine actions take place on.
     var engineQueue: DispatchQueue { get }
 
@@ -126,6 +129,9 @@ public protocol SocketEngineSpec: AnyObject {
     /// Called when an error happens during execution. Causes a disconnection.
     func didError(reason: String)
 
+    /// Structured native details, with a source-compatible fallback for custom engines.
+    func didError(reason: String, error: SocketTransportError)
+
     /// Disconnects from the server.
     ///
     /// - parameter reason: The reason for the disconnection. This is communicated up to the client.
@@ -163,6 +169,10 @@ public protocol SocketEngineSpec: AnyObject {
 }
 
 extension SocketEngineSpec {
+    /// Existing custom engines retain their historical binary transport behaviour.
+    public var forceBase64: Bool { false }
+    public func didError(reason: String, error: SocketTransportError) { didError(reason: reason) }
+
     /// Default fail-safe — conformers that don't override drop all volatile
     /// packets. See protocol declaration for rationale.
     public var writable: Bool { return false }
@@ -250,7 +260,7 @@ extension SocketEngineSpec {
     }
 
     func createBinaryDataForSend(using data: Data) -> Either<Data, String> {
-        if polling { return .right("b" + data.base64EncodedString()) }
+        if polling || forceBase64 { return .right("b" + data.base64EncodedString()) }
         return .left(data)
     }
 

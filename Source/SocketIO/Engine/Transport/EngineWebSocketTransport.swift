@@ -54,10 +54,16 @@ internal enum EngineWebSocketError: Error, LocalizedError {
 /// Callbacks may arrive on any queue, including after cancellation. The transport
 /// marshals them onto engineQueue and validates both generation and identity.
 internal protocol EngineWebSocketConnection: AnyObject {
+    /// Snapshot before cancellation: a receive failure can precede the close delegate callback.
+    var closeDetails: (code: Int?, reason: Data?) { get }
     var onEvent: ((EngineWebSocketEvent) -> Void)? { get set }
     func start()
     func send(_ message: EngineWebSocketMessage, completion: @escaping (Error?) -> Void)
     func receive(completion: @escaping (Result<EngineWebSocketMessage, Error>) -> Void)
     func close(code: Int, reason: Data?)
     func cancel()
+}
+
+extension EngineWebSocketConnection {
+    var closeDetails: (code: Int?, reason: Data?) { (nil, nil) }
 }

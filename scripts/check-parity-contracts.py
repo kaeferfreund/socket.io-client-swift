@@ -68,6 +68,30 @@ def validate(root=ROOT, swift_log=None, upstream_inventory=None, strict=False):
                 errors.append(name + ': missing test method ' + symbol)
             if swift_log is not None and symbol not in passed:
                 errors.append(name + ': XCTest did not report a PASS for ' + symbol)
+    review = manifest.get('remaining_review')
+    if review is None:
+        errors.append('Missing explicit remaining-client review')
+    else:
+        original = review.get('original_unmapped_ids', [])
+        dispositions = review.get('dispositions', [])
+        seen = [entry.get('id') for entry in dispositions]
+        if len(original) != 44 or len(set(original)) != 44 or sorted(seen) != sorted(original):
+            errors.append('Remaining-client review must account for all 44 original IDs exactly once')
+        contracts = {entry['id']: entry for entry in manifest['contracts']}
+        for entry in dispositions:
+            id = entry.get('id')
+            row = by_id.get(id)
+            if row is None or entry.get('status') != row['status']:
+                errors.append(str(id) + ': disposition disagrees with inventory status')
+            if not entry.get('reason', '').strip():
+                errors.append(str(id) + ': disposition requires a reviewed reason')
+            status = entry.get('status')
+            if status == 'focused-regression':
+                contract = contracts.get(entry.get('contract'))
+                if contract is None or id not in contract['upstream_ids']:
+                    errors.append(str(id) + ': native disposition requires an executable contract')
+            elif status not in ('api-difference', 'platform-specific'):
+                errors.append(str(id) + ': unreviewed disposition category')
     for row in rows:
         if row['status'] in ('candidate-existing-test', 'focused-regression') and row['swift_tests'].strip() == 'browser-only type':
             errors.append(row['id'] + ': platform description is not test evidence')

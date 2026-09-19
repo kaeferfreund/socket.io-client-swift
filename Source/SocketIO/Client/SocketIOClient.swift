@@ -496,6 +496,17 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         handleClientEvent(.connect, data: connectData)
     }
 
+    private var pendingTransportCloseError: SocketTransportError?
+
+    /// Preserves existing public close overrides while attaching detail only to
+    /// this notification. Consume it before callbacks, so reentrancy cannot leak it.
+    internal func handleTransportClose(reason: String, error: SocketTransportError?, reconnecting: Bool) {
+        pendingTransportCloseError = error
+        defer { pendingTransportCloseError = nil }
+        if reconnecting { setReconnecting(reason: reason) }
+        else { didDisconnect(reason: reason) }
+    }
+
     /// Called when the client has disconnected from socket.io.
     ///
     /// - parameter reason: The reason for the disconnection.
@@ -517,7 +528,9 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     private func notifyDisconnectAndClearAcks(reason: String) {
         let retiringAckIDs = ackHandlers.pendingTimedAckIDs
         let stillBuffered = bufferedAckIds
-        handleClientEvent(.disconnect, data: [reason])
+        let error = pendingTransportCloseError
+        pendingTransportCloseError = nil
+        handleClientEvent(.disconnect, data: error.map { [reason, $0] } ?? [reason])
         performOnHandleQueue { [weak self] in
             self?.ackHandlers.clearTimedAcks(reason: .disconnected,
                                              keeping: stillBuffered, only: retiringAckIDs)

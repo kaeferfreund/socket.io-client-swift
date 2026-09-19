@@ -282,23 +282,21 @@ final class SocketClearAcksOnCloseTest: XCTestCase {
     /// inside a main-actor job cannot drain the main queue the manager runs on.
     @MainActor
     func testAsyncEmitWithAckThrowsDisconnectedOnATransportDropThatReconnects() async {
-        let config: SocketIOClientConfiguration = [.log(false), .reconnects(true), .reconnectWait(0), .ackTimeout(10)]
-        manager = SocketManager(socketURL: URL(string: "http://localhost/")!, config: config)
+        let initial = expectation(description: "initial connect")
+        let registered = expectation(description: "emit reached the fake transport")
+        let rejoined = expectation(description: "namespace re-joined")
+        let thrown = expectation(description: "await throws the disconnect error")
+        manager = SocketManager(socketURL: URL(string: "http://localhost/")!,
+            config: [.log(false), .reconnects(true), .reconnectWait(0), .ackTimeout(10)])
         engine = ClearAcksTestEngine(client: manager, url: manager.socketURL, options: nil)
         manager.engine = engine
         socket = manager.defaultSocket
-
-        let connected = expectation(description: "initial connect")
-        connected.assertForOverFulfill = false
-        let connectID = socket.on(clientEvent: .connect) { _, _ in connected.fulfill() }
+        socket.once(clientEvent: .connect) { _, _ in initial.fulfill() }
+        engine.onEventWrite = { registered.fulfill() }
         socket.connect()
-        await fulfillment(of: [connected], timeout: 5)
-        socket.off(id: connectID)
+        await fulfillment(of: [initial], timeout: 5)
 
-        let socket = self.socket!
-        // The socket is used again after the Task; box it so the closure can be sent.
-        let boxed = SocketUncheckedSendableBox(socket)
-        let thrown = expectation(description: "await throws the disconnect error")
+        let boxed = SocketUncheckedSendableBox(socket!)
         let task = Task {
             do {
                 _ = try await boxed.value.emitWithAck("echo", "a")
@@ -308,20 +306,16 @@ final class SocketClearAcksOnCloseTest: XCTestCase {
             }
             thrown.fulfill()
         }
-
-        // Let the emit reach registration before the transport dies.
-        let registered = expectation(description: "handle queue barrier")
-        manager.handleQueue.socketAsync { registered.fulfill() }
-        await fulfillment(of: [registered], timeout: 3)
-
-        let reconnected = expectation(description: "namespace re-joined")
-        reconnected.assertForOverFulfill = false
-        let reconnectID = socket.on(clientEvent: .connect) { _, _ in reconnected.fulfill() }
+        defer { task.cancel() }
+        await fulfillment(of: [registered], timeout: 5)
+        socket.once(clientEvent: .connect) { _, _ in rejoined.fulfill() }
         engine.dropTransport(reason: "transport close")
-        await fulfillment(of: [thrown, reconnected], timeout: 5)
-        socket.off(id: reconnectID)
+        await fulfillment(of: [thrown, rejoined], timeout: 5)
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+        XCTAssertEqual(socket.status, .connected)
         _ = await task.value
     }
+
 }
 
 /// Fake transport for the tests above: it opens on demand, answers the
@@ -351,6 +345,7 @@ private final class ClearAcksTestEngine: SocketEngineSpec {
     /// `true` is buffered instead of written.
     var hasPingExpired = false
 
+    var onEventWrite: (() -> Void)?
     private var sessions = 0
     /// Every non-CONNECT frame handed to the transport.
     private(set) var sent = [String]()
@@ -383,6 +378,7 @@ private final class ClearAcksTestEngine: SocketEngineSpec {
 
         guard msg.hasPrefix("0") else {
             sent.append(msg)
+            onEventWrite?()
             return
         }
 

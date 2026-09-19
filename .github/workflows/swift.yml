@@ -2,9 +2,9 @@ name: Swift
 
 on:
   push:
-    branches: [ "master", "development" ]
+    branches: [ "master", "development", "feat/socketio4-swift6.4" ]
   pull_request:
-    branches: [ "master", "development", "feat/connect-timeout" ]
+    branches: [ "master", "development", "feat/connect-timeout", "feat/socketio4-swift6.4" ]
   workflow_dispatch:
 
 env:
@@ -152,7 +152,7 @@ jobs:
         working-directory: Tests/TestSocketIO/E2E/Fixtures
       - name: Verify polling observation never overlaps timed-out GETs
         working-directory: Tests/TestSocketIO/E2E/Fixtures
-        run: node --test polling-proof-observer.test.mjs server-socket-id.test.mjs
+        run: node --test polling-proof-observer.test.mjs server-socket-id.test.mjs engine-parity-observer.test.mjs
       - name: Prove the upgrade must wait for a pending POST
         run: node upgrade-race-proof.mjs
         working-directory: Tests/TestSocketIO/E2E/Fixtures

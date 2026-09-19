@@ -54,9 +54,37 @@ class ReviewRegressions(unittest.TestCase):
             shutil.copytree(ROOT / "Tests", root / "Tests", ignore=shutil.ignore_patterns("Fixtures"))
             path = root / "Documentation/JavaScriptParityContracts.json"
             manifest = json.loads(path.read_text())
-            manifest["remaining_unmapped_ids"] = []
+            manifest["remaining_unmapped_ids"] = ["JS-999"]
             path.write_text(json.dumps(manifest))
             self.assertIn("Unmapped backlog changed without explicit review", validate(root=root))
+
+    def test_disposition_requires_reason_and_complete_original_id_set(self):
+        validate = runpy.run_path(str(ROOT / "scripts/check-parity-contracts.py"))["validate"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(ROOT / "Documentation", root / "Documentation")
+            shutil.copytree(ROOT / "Tests", root / "Tests", ignore=shutil.ignore_patterns("Fixtures"))
+            path = root / "Documentation/JavaScriptParityContracts.json"
+            manifest = json.loads(path.read_text())
+            manifest["remaining_review"]["dispositions"][0]["reason"] = ""
+            path.write_text(json.dumps(manifest))
+            self.assertTrue(any("requires a reviewed reason" in e for e in validate(root=root)))
+            manifest["remaining_review"]["dispositions"].pop()
+            path.write_text(json.dumps(manifest))
+            self.assertTrue(any("all 44 original IDs" in e for e in validate(root=root)))
+
+    def test_native_disposition_requires_matching_executable_contract(self):
+        validate = runpy.run_path(str(ROOT / "scripts/check-parity-contracts.py"))["validate"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(ROOT / "Documentation", root / "Documentation")
+            shutil.copytree(ROOT / "Tests", root / "Tests", ignore=shutil.ignore_patterns("Fixtures"))
+            path = root / "Documentation/JavaScriptParityContracts.json"
+            manifest = json.loads(path.read_text())
+            entry = next(e for e in manifest["remaining_review"]["dispositions"] if e["status"] == "focused-regression")
+            entry["contract"] = "missing-contract"
+            path.write_text(json.dumps(manifest))
+            self.assertTrue(any("requires an executable contract" in e for e in validate(root=root)))
 
     def test_mktemp_failure_stops_before_prepare_or_compilation(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -2,6 +2,10 @@
 <h1 align="center">Socket.IO Client for Swift</h1>
 
 <p align="center">
+  <img src="Documentation/Assets/swift-swallow.svg" width="180" alt="Stylized swallow in flight">
+</p>
+
+<p align="center">
   <strong>Real-time events. Native Apple networking.</strong><br>
   Socket.IO 4 for iOS, macOS, tvOS and watchOS, built on URLSession.<br>
   No third-party Swift dependencies.
@@ -42,13 +46,13 @@ implementation.
 | Why we continued the project | What changes here |
 | --- | --- |
 | **Development had stalled while production bugs remained** | [socketio/socket.io-client-swift](https://github.com/socketio/socket.io-client-swift) has not received a default-branch commit since October 2024. This fork continues development, pairs fixes with regression tests and keeps them in the library rather than in application-specific workarounds. |
-| **Starscream was another inactive dependency with recurring problems** | Its default branch has not advanced since March 2024. We replaced the Starscream-based transport with Apple's native `URLSessionWebSocketTask`, alongside `URLSession` polling. No third-party Swift dependencies. |
+| **[daltoniam/Starscream](https://github.com/daltoniam/Starscream) was another inactive dependency with recurring problems** | Its default branch has not advanced since March 2024. We replaced the Starscream-based transport with Apple's native `URLSessionWebSocketTask`, alongside `URLSession` polling. No third-party Swift dependencies. |
 | **Web and native clients need consistent behavior** | Reconnection events, acknowledgement cleanup, buffering and delivery should not unexpectedly change with the client language. Supported behavior is checked against a pinned JavaScript reference, with remaining API and platform differences documented. |
 | **Important client features were missing** | Connection state recovery, per-connection dynamic authentication, ordered acknowledgement retries and cancellable async/await acknowledgements are implemented in this fork. |
 
 Maintenance snapshot, checked **2026-09-19**: the latest default-branch commits are
 [2024-10-01 for socketio/socket.io-client-swift](https://github.com/socketio/socket.io-client-swift/commit/42da871d9369f290d6ec4930636c40672143905b)
-and [2024-03-07 for Starscream](https://github.com/daltoniam/Starscream/commit/c6bfd1af48efcc9a9ad203665db12375ba6b145a).
+and [2024-03-07 for daltoniam/Starscream](https://github.com/daltoniam/Starscream/commit/c6bfd1af48efcc9a9ad203665db12375ba6b145a).
 These are dated observations, not a statement about the maintainers' future plans.
 
 [socketio/socket.io-client-swift](https://github.com/socketio/socket.io-client-swift)

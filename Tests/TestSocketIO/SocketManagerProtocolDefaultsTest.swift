@@ -23,7 +23,7 @@ private final class DefaultContractManager: NSObject, SocketManagerSpec {
     func disconnect() { backing.disconnect() }
     func disconnectSocket(_ socket: SocketIOClient) { disconnected.append(socket); backing.disconnectSocket(socket) }
     func disconnectSocket(forNamespace nsp: String) { backing.disconnectSocket(forNamespace: nsp) }
-    func emitAll(_ event: String, _ items: SocketData...) { backing.nsps.values.forEach { $0.emit(event, with: items) } }
+    func emitAll(_ event: String, _ items: SocketData...) { backing.nsps.values.forEach { $0.emit(event, with: items, completion: nil) } }
     func reconnect() { backing.reconnect() }
     func removeSocket(_ socket: SocketIOClient) -> SocketIOClient? { backing.removeSocket(socket) }
     func socket(forNamespace nsp: String) -> SocketIOClient { backing.socket(forNamespace: nsp) }

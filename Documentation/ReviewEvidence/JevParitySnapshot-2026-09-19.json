@@ -27,5 +27,11 @@
     "backlog.csv": "c3403bbc849d05a4a0e56ae4749f04a6d680d5302d1658db2df5f2a38af99c00",
     "backlog.json": "292822147718099884d4995ffbff90c3948cd3ef387f44416d6de50a05317e61",
     "summary.json": "91fbdbe6858d63a5253b38acdf75320dd38be2071cf10177071f537aeb55941d"
+  },
+  "repository_backlog": {
+    "path": "JevParityBacklog-2026-09-19.csv",
+    "normalization": "CRLF to LF only; snapshot_sha256 retains the original evidence hashes",
+    "original_sha256": "c3403bbc849d05a4a0e56ae4749f04a6d680d5302d1658db2df5f2a38af99c00",
+    "sha256": "06dcc030871a767460ec5bc42a63db36d355e239b7dfa9e96386663034102848"
   }
 }

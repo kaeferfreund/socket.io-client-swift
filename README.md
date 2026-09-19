@@ -24,7 +24,7 @@ migration changes some 16.x APIs; see [migration notes](Documentation/NativeWebS
 | Swift tools / compiler | 6.4, using Swift 6 language mode (Xcode 27) |
 | iOS / tvOS | 15 |
 | macOS | 12 |
-| watchOS | 8 |
+| watchOS | 9 |
 
 The package and framework targets use **Swift 6 language mode** with complete
 concurrency checking. The public API remains queue-based, not actor-based:

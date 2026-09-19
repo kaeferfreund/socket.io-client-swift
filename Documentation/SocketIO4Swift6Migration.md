@@ -8,8 +8,9 @@ Use Swift 6.4 or newer (Xcode 27 for the Apple SDKs). `Package.swift` requires
 `swift-tools-version:6.4` and explicitly selects `swiftLanguageModes: [.v6]`.
 Xcode and CocoaPods use `SWIFT_VERSION = 6.0`: compiler versions and language
 modes are different settings; `SWIFT_VERSION = 6.4` is not a valid language mode.
-Deployment targets remain iOS/tvOS 15, macOS 12 and watchOS 8. The new SDK warns
-that watchOS 8 is deprecated; the manifest has not silently raised that floor.
+Deployment targets remain iOS/tvOS 15 and macOS 12. The watchOS minimum is
+raised from 8 to 9 consistently in the package, Xcode project and podspec because
+Xcode 27 rejects a watchOS 8 deployment target.
 
 ## Server and configuration
 

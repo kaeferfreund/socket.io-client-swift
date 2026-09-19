@@ -4,6 +4,27 @@ This work follows the 406 uncovered library lines at `43bbe47` (6,326/6,732,
 93.97%). Coverage is measured over every `Source/SocketIO` file, without adding
 exclusions. It is separate from the pinned JavaScript scenario inventory.
 
+## Verified result
+
+[CI for fdf9280](https://github.com/kaeferfreund/socket.io-client-swift/actions/runs/35442518457)
+passed all seven jobs: **842 Swift tests, zero failures**, Thread Sanitizer,
+strict concurrency, four Apple SDK builds, pinned JavaScript suites, parser
+comparison and wire proofs. The strict contract checker passed against the
+actual XCTest log; all nine checker self-tests passed.
+
+| Metric | Baseline 43bbe47 | Validated fdf9280 |
+| --- | ---: | ---: |
+| Library lines | 6,326 / 6,732 (93.97%) | 6,605 / 6,701 (98.57%) |
+| Functions | 980 / 1,092 (89.74%) | 1,029 / 1,084 (94.93%) |
+| Regions | 2,410 / 2,754 (87.51%) | 2,585 / 2,745 (94.17%) |
+| Uncovered lines | 406 | 96 |
+
+The suite gained 41 tests; executed library lines increased by 279 and the
+line denominator decreased by 31 after dead-code removal. Branch coverage is
+not emitted by this toolchain. The denominator still includes every library
+source file. [Machine-readable evidence](ReviewEvidence/NativeCoverageValidation-2026-09-19.json)
+records the residual file counts and SHA-256 hashes of the downloaded artifacts.
+
 ## Changes and observable contracts
 
 - Dictionary-based configuration now honors `ackTimeout` and `retries`; wrong
@@ -62,3 +83,17 @@ tests. Defensive code was retained:
 Other residual lines must remain described as uncovered until measured or
 individually justified. A high line percentage is not complete branch coverage,
 full JavaScript equivalence, or satisfaction of the separate release gates.
+
+## Remaining measurement gaps
+
+The 96 remaining lines stay in the denominator. They include defensive
+serialization/codec fallbacks, stale timer or lifecycle exits, future Foundation
+cases, and diagnostic expressions that the exercised failure paths did not
+need to evaluate. Pure logging-format assertions or deliberately corrupted
+Foundation containers were not added just to turn those lines green. The
+existing failure, cancellation and exactly-once contracts remain tested.
+
+This is a practical stopping point, not a proof that every remaining line is
+unreachable. A new supported scenario or a reported bug can justify additional
+coverage. Neither the measurement nor this disposition changes the JavaScript
+inventory's feature exclusions or the separate release gates.

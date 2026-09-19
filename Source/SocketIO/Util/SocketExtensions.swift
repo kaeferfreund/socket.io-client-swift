@@ -50,6 +50,10 @@ extension Dictionary where Key == String, Value == Any {
             return .retries(count)
         case ("ackTimeout", _), ("retries", _):
             return .invalidConfiguration("Invalid acknowledgement option: " + key)
+        case let ("requestTimeout", timeout as Double):
+            return .requestTimeout(timeout)
+        case ("requestTimeout", _):
+            return .invalidConfiguration("invalid value for requestTimeout; expected a positive finite number of seconds")
         case let ("connectTimeout", timeout as Double):
             return .connectTimeout(timeout)
         case let ("autoConnect", autoConnect as Bool):

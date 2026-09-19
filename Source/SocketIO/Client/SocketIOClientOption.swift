@@ -80,6 +80,12 @@ public enum SocketIOClientOption : ClientOption {
     /// (`socket.io-client/lib/manager.ts`). `.infinity` disables the timeout.
     case connectTimeout(Double)
 
+    /// Maximum seconds for each polling HTTP request (handshake, GET and POST).
+    /// Must be finite and greater than zero. Also limits the total transfer duration.
+    /// Omitted: retain Foundation defaults (60 seconds idle, 7 days total).
+    /// Unlike JavaScript's milliseconds, this value uses seconds. Does not affect WebSocket.
+    case requestTimeout(Double)
+
     /// An array of cookies that will be sent during the initial connection.
     case cookies([HTTPCookie])
 
@@ -212,6 +218,8 @@ public enum SocketIOClientOption : ClientOption {
             description = "retries"
         case .connectParams:
             description = "connectParams"
+        case .requestTimeout:
+            description = "requestTimeout"
         case .connectTimeout:
             description = "connectTimeout"
         case .withCredentials:
@@ -291,6 +299,8 @@ public enum SocketIOClientOption : ClientOption {
             value = params
         case let .retries(count):
             value = count
+        case let .requestTimeout(timeout):
+            value = timeout
         case let .connectTimeout(timeout):
             value = timeout
         case let .withCredentials(enabled):

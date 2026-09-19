@@ -898,3 +898,37 @@ extension SocketNativeEngineTest {
         second.disconnect(reason: "test"); drain(second)
     }
 }
+
+
+extension SocketNativeEngineTest {
+    func testInvalidRequestTimeoutFailsBeforeOpeningTransport() {
+        for value in [0.0, -1, .infinity, -.infinity, .nan] {
+            let (engine, client, transport) = make([.forceWebsockets(true), .requestTimeout(value)])
+            XCTAssertTrue(engine.closed)
+            XCTAssertEqual(transport.connects, 0)
+            XCTAssertEqual(client.errors, ["requestTimeout must be a positive finite number of seconds"])
+        }
+    }
+
+    func testRequestTimeoutDictionaryRoundTripAndInvalidType() {
+        let config = (["requestTimeout": 120.5] as [String: Any]).toSocketConfiguration()
+        XCTAssertEqual(config.first?.getSocketIOOptionValue() as? Double, 120.5)
+        XCTAssertEqual(config.first?.description, "requestTimeout")
+        let invalid = (["requestTimeout": "120"] as [String: Any]).toSocketConfiguration()
+        XCTAssertTrue(invalid.contains(.invalidConfiguration("")))
+    }
+
+    func testPollingRequestTimeoutDoesNotAlterWebSocketRequest() {
+        let client = NativeEngineClient()
+        let engine = SocketEngine(client: client, url: url,
+                                  config: [.forceWebsockets(true), .requestTimeout(125)])
+        let transport = NativeEngineTransport()
+        engine.webSocketTransportFactory = { request in
+            XCTAssertEqual(request.timeoutInterval, 60)
+            return transport
+        }
+        engine.connect(); drain(engine)
+        XCTAssertEqual(transport.connects, 1)
+        engine.disconnect(reason: "test"); drain(engine)
+    }
+}

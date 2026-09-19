@@ -10,6 +10,7 @@ private final class PollingCloseFixture {
         let body: String
         let sid: String?
         let authorization: String?
+        let timeout: TimeInterval
     }
     let host = UUID().uuidString.lowercased() + ".polling.test"
     private let lock = NSLock()
@@ -20,6 +21,11 @@ private final class PollingCloseFixture {
     private var stopObserver: ((String) -> Void)?
     private var pollObserver: (() -> Void)?
     private var holdPosts = true
+
+    var requests: [Request] {
+        lock.lock(); defer { lock.unlock() }
+        return recorded
+    }
 
     var posts: [Request] {
         lock.lock(); defer { lock.unlock() }
@@ -78,7 +84,8 @@ private final class PollingCloseFixture {
         let method = request.request.httpMethod ?? "GET"
         let body = request.body()
         let observed = Request(method: method, body: body, sid: sid,
-                               authorization: request.request.value(forHTTPHeaderField: "Authorization"))
+                               authorization: request.request.value(forHTTPHeaderField: "Authorization"),
+                               timeout: request.request.timeoutInterval)
         lock.lock()
         recorded.append(observed)
         if method == "GET" && sid == nil { handshakes += 1 }
@@ -615,6 +622,43 @@ extension SocketPollingCloseTest {
             let request = engine.createRequestForPost(with: ["1"])
             XCTAssertEqual(request.httpBody, Data("1".utf8))
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Length"), "1")
+        }
+    }
+}
+
+
+extension SocketPollingCloseTest {
+    func testRequestTimeoutReachesHandshakePollPostAndRetiringClose() {
+        engine.setConfigs([.requestTimeout(125)])
+        let polling = expectation(description: "poll with configured timeout")
+        fixture.observePolls { polling.fulfill() }
+        connect()
+        wait(for: [polling], timeout: 5)
+        let posted = expectation(description: "POST with configured timeout")
+        fixture.observePosts { _ in posted.fulfill() }
+        engine.send("payload", withData: [])
+        wait(for: [posted], timeout: 5)
+        fixture.observePosts { _ in }
+        let requests = fixture.requests
+        XCTAssertTrue(requests.contains { $0.method == "GET" && $0.sid == nil })
+        XCTAssertTrue(requests.contains { $0.method == "GET" && $0.sid != nil })
+        XCTAssertTrue(requests.contains { $0.method == "POST" })
+        XCTAssertTrue(requests.allSatisfy { $0.timeout == 125 })
+        engine.engineQueue.sync {
+            XCTAssertEqual(engine.session?.configuration.timeoutIntervalForRequest, 125)
+            XCTAssertEqual(engine.session?.configuration.timeoutIntervalForResource, 125)
+            XCTAssertEqual(engine.createRequestForPost(with: ["1"]).timeoutInterval, 125)
+            XCTAssertEqual(engine.createRequestForPost(with: ["1"]).httpMethod, "POST")
+        }
+    }
+
+    func testOmittedRequestTimeoutPreservesNativeDefaults() {
+        connect()
+        engine.engineQueue.sync {
+            XCTAssertNil(engine.requestTimeout)
+            XCTAssertEqual(engine.createRequestForPost(with: ["1"]).timeoutInterval, 60)
+            XCTAssertEqual(engine.session?.configuration.timeoutIntervalForRequest, 60)
+            XCTAssertEqual(engine.session?.configuration.timeoutIntervalForResource, 7 * 24 * 60 * 60)
         }
     }
 }

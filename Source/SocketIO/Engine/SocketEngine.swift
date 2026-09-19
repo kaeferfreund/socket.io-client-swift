@@ -46,6 +46,8 @@ open class SocketEngine: NSObject,
     internal private(set) var pollingPostGroup = DispatchGroup()
     /// Internal test seam; production polling retains the default session configuration.
     internal var pollingSessionConfigurationFactory: () -> URLSessionConfiguration = { .default }
+    /// Explicit per-request polling timeout; nil preserves native URLSession defaults.
+    public private(set) var requestTimeout: TimeInterval?
     private var clientCertificate: URLCredential?
     private var tlsConfiguration: SocketTLSConfiguration = .systemDefault
     private var webSocketOptions = SocketWebSocketOptions()
@@ -419,8 +421,8 @@ open class SocketEngine: NSObject,
         if transport == .websocket {
             createWebSocketAndConnect()
         } else {
-            var request = URLRequest(url: urlPollingHandshake, cachePolicy: .reloadIgnoringLocalCacheData,
-                                     timeoutInterval: 60)
+            var request = createPollingRequest(for: urlPollingHandshake)
+            request.cachePolicy = .reloadIgnoringLocalCacheData
             addHeaders(to: &request)
             doLongPoll(for: request)
         }
@@ -544,6 +546,9 @@ open class SocketEngine: NSObject,
 
     private func validateConfiguration() -> String? {
         if let error = configurationError { return error }
+        if let requestTimeout, !requestTimeout.isFinite || requestTimeout <= 0 {
+            return "requestTimeout must be a positive finite number of seconds"
+        }
         if transports.isEmpty { return "No transports available" }
         if configuredTransports.isEmpty { return "Forced transport is absent from transports" }
         if Set(transports).count != transports.count { return "Duplicate transport names" }
@@ -973,6 +978,10 @@ open class SocketEngine: NSObject,
         }
         pollingPostGroup = DispatchGroup()
         let configuration = pollingSessionConfigurationFactory()
+        if let requestTimeout, requestTimeout.isFinite, requestTimeout > 0 {
+            configuration.timeoutIntervalForRequest = requestTimeout
+            configuration.timeoutIntervalForResource = requestTimeout
+        }
         configuration.httpCookieStorage = withCredentials ? credentialCookieStorage : nil
         configuration.httpShouldSetCookies = withCredentials
         configuration.httpCookieAcceptPolicy = withCredentials ? .always : .never
@@ -990,6 +999,8 @@ open class SocketEngine: NSObject,
         configurationError = nil
         for option in config {
             switch option {
+            case let .requestTimeout(timeout):
+                requestTimeout = timeout
             case let .connectParams(params):
                 connectParams = params
             case let .cookies(cookies):

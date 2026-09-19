@@ -43,6 +43,9 @@ public protocol SocketEnginePollable: SocketEngineSpec {
     /// **You should not touch this directly**
     var postWait: [Post] { get set }
 
+    /// An explicit polling request timeout in seconds; nil uses native defaults.
+    var requestTimeout: TimeInterval? { get }
+
     /// The URLSession that will be used for polling.
     var session: URLSession? { get }
 
@@ -80,6 +83,18 @@ public protocol SocketEnginePollable: SocketEngineSpec {
 
 // Default polling methods
 extension SocketEnginePollable {
+    /// Existing custom engines retain their session/request defaults.
+    public var requestTimeout: TimeInterval? { nil }
+
+    /// All polling paths, including retiring-session POSTs, share this setting.
+    func createPollingRequest(for url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        if let requestTimeout, requestTimeout.isFinite, requestTimeout > 0 {
+            request.timeoutInterval = requestTimeout
+        }
+        return request
+    }
+
     /// A server that advertises no limit imposes none on us.
     public var maxPayload: Int? {
         return nil
@@ -144,7 +159,7 @@ extension SocketEnginePollable {
         let postStr = SocketEnginePacketCodec.join(messages)
         DefaultSocketLogger.Logger.log("Created POST string: \(postStr)", type: "SocketEnginePolling")
         let postData = Data(postStr.utf8)
-        var req = URLRequest(url: urlPollingWithSid)
+        var req = createPollingRequest(for: urlPollingWithSid)
         addHeaders(to: &req)
         req.httpMethod = "POST"
         req.setValue("text/plain; charset=UTF-8", forHTTPHeaderField: "Content-Type")
@@ -174,7 +189,7 @@ extension SocketEnginePollable {
     func performPollingRead() {
         guard polling && !waitingForPoll && connected && !closed && !fastUpgrade else { return }
 
-        var req = URLRequest(url: urlPollingWithSid)
+        var req = createPollingRequest(for: urlPollingWithSid)
         addHeaders(to: &req)
 
         doLongPoll(for: req)

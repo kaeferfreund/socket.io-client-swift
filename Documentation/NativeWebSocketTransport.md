@@ -117,6 +117,42 @@ replaces them and encodes keys and values using `encodeURIComponent` semantics.
 is canceled on success, explicit disconnection, or a replacement `connect()` call,
 so it cannot terminate a later reconnect.
 
+
+### Polling request timeout
+
+Use `.requestTimeout(120)` to allow up to 120 seconds for each polling HTTP
+request: initial handshake, subsequent GETs, POSTs and retiring-session close
+POSTs. The value must be finite and greater than zero; invalid values produce a
+configuration error before opening a transport. Configure this option before
+connecting; the total timeout is captured when the polling session is created.
+
+The explicit value sets both Foundation's idle timeout and total resource
+transfer timeout, so receiving occasional bytes cannot extend an HTTP request
+indefinitely. A timeout follows the normal transport error/close/reconnect path
+and retains `URLError.timedOut` in `SocketTransportError.underlyingError`.
+Existing graceful-close deadlines may end retiring requests sooner.
+
+```swift
+let manager = SocketManager(socketURL: URL(string: "https://example.com")!, config: [
+    .connectTimeout(150),  // Whole Engine.IO connection attempt.
+    .requestTimeout(120)  // Each polling HTTP request, including after connecting.
+])
+```
+
+`requestTimeout` does not change WebSocket timeouts, the manager's
+`connectTimeout` (20 seconds by default), or the Engine.IO heartbeat deadline.
+Whichever applicable deadline expires first ends the operation.
+
+The JavaScript client's XHR polling transport has the same configurable timeout
+concept, measured in **milliseconds**; Swift uses **seconds**. Native defaults
+are deliberately preserved when the option is omitted: 60 seconds without new
+data and Foundation's seven-day resource timeout. This differs from JavaScript's
+unset/zero XHR timeout. Swift requires a positive finite value and does not use
+zero or infinity to disable Foundation timeouts. See Apple's
+[request timeout](https://developer.apple.com/documentation/foundation/urlsessionconfiguration/timeoutintervalforrequest)
+and [resource timeout](https://developer.apple.com/documentation/foundation/urlsessionconfiguration/timeoutintervalforresource)
+definitions. Addresses upstream `socketio/socket.io-client-swift#681`.
+
 ## Resource limits
 
 `.webSocketOptions(SocketWebSocketOptions(...))` configures complete incoming

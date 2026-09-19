@@ -225,3 +225,113 @@ final class SocketRetrySafetyTest: XCTestCase {
         XCTAssertEqual(newCalls, 1)
     }
 }
+
+extension SocketRetrySafetyTest {
+    func testAsyncRegistrationSharesRetryQueueAndIgnoresLateAcknowledgements() throws {
+        make([.retries(1), .ackTimeout(100)])
+        let state = SocketAsyncAckState()
+        var results: [String] = []
+        socket.emit("first", ack: { error, _ in XCTAssertNil(error); results.append("first") })
+        socket.emitTimed(event: "async", items: [], timeout: 100, cancellation: state) { error, data in
+            XCTAssertNil(error)
+            XCTAssertEqual(data.first as? String, "ok")
+            results.append("async")
+        }
+        socket.emit("last", ack: { error, _ in XCTAssertNil(error); results.append("last") })
+        XCTAssertEqual(engine.sentPackets.count, 1)
+        let first = try ackID(0)
+        socket.ackHandlers.cancelTimedAck(first, fireWith: SocketAckError.timeout)
+        XCTAssertEqual(engine.sentPackets.count, 2)
+        socket.handleAck(first, data: ["late"])
+        XCTAssertTrue(results.isEmpty)
+        socket.handleAck(try ackID(1), data: ["ok"])
+        XCTAssertEqual(results, ["first"])
+        let asyncFirst = try ackID(2)
+        socket.ackHandlers.cancelTimedAck(asyncFirst, fireWith: SocketAckError.timeout)
+        socket.handleAck(asyncFirst, data: ["late"])
+        socket.handleAck(try ackID(3), data: ["ok"])
+        socket.handleAck(try ackID(4), data: ["ok"])
+        XCTAssertEqual(results, ["first", "async", "last"])
+        XCTAssertEqual(try engine.sentPackets.map { try manager.parseString($0.0).event },
+                       ["first", "first", "async", "async", "last"])
+        XCTAssertEqual(socket.testRetryQueueCount, 0)
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+    }
+
+    func testCancellationRemovesWaitingInflightAndReconnectingRetryEntries() throws {
+        for phase in ["waiting", "inflight", "reconnecting"] {
+            make([.retries(2), .ackTimeout(100)])
+            if phase == "waiting" { socket.emit("head", ack: { _, _ in }) }
+            let state = SocketAsyncAckState()
+            var calls = 0
+            socket.emitTimed(event: "cancel", items: [], timeout: 100, cancellation: state) { error, _ in
+                XCTAssertTrue(error is CancellationError)
+                calls += 1
+            }
+            socket.emit("next", ack: { _, _ in })
+            let stale = phase == "waiting" ? nil : try ackID(0)
+            if phase == "reconnecting" { socket.setReconnecting(reason: "transport close") }
+            state.cancel()
+            socket.cancelAsyncEmit(state)
+            socket.cancelAsyncEmit(state)
+            if let stale { socket.handleAck(stale, data: ["late"]) }
+            XCTAssertEqual(calls, 1, phase)
+            if phase == "waiting" { socket.handleAck(try ackID(0), data: []) }
+            if phase == "reconnecting" {
+                socket.didConnect(toNamespace: "/", payload: ["sid": "replacement"])
+            }
+            let last = try ackID(engine.sentPackets.count - 1)
+            XCTAssertEqual(try manager.parseString(engine.sentPackets.last!.0).event, "next", phase)
+            socket.handleAck(last, data: [])
+            XCTAssertEqual(socket.testRetryQueueCount, 0, phase)
+            XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty, phase)
+            socket.clearRecoveryState()
+        }
+    }
+
+    func testNamespaceDeliveryOverridesDoNotChangeSiblingOrManager() {
+        make([.retries(2), .ackTimeout(10)])
+        let sibling = manager.socket(forNamespace: "/sibling")
+        socket.retries = 0
+        socket.ackTimeout = 3
+        XCTAssertEqual(sibling.retries, 2)
+        XCTAssertEqual(sibling.ackTimeout, 10)
+        XCTAssertEqual(manager.retries, 2)
+        XCTAssertEqual(manager.ackTimeout, 10)
+        XCTAssertEqual(socket.retries, 0)
+        XCTAssertEqual(socket.ackTimeout, 3)
+        socket.resetDeliveryOptions()
+        XCTAssertEqual(socket.retries, 2)
+        XCTAssertEqual(socket.ackTimeout, 10)
+    }
+
+    @MainActor
+    func testAwaitEmitWithAckRetriesBeforeTheFollowingCallbackEmit() async throws {
+        make([.retries(1), .ackTimeout(100)])
+        let socket = self.socket!
+        let manager = self.manager!
+        let engine = self.engine!
+        let boxed = SocketUncheckedSendableBox(socket)
+        let firstWrite = expectation(description: "async first attempt registered")
+        engine.onWrite = { _, _ in firstWrite.fulfill() }
+        let task = Task {
+            let data = try await boxed.value.emitWithAck("async")
+            return data.first as? String
+        }
+        defer { task.cancel() }
+        await fulfillment(of: [firstWrite], timeout: 3)
+        engine.onWrite = nil
+        socket.emit("following", ack: { error, _ in XCTAssertNil(error) })
+        XCTAssertEqual(engine.sentPackets.count, 1)
+        let first = try manager.parseString(engine.sentPackets[0].0).id
+        socket.ackHandlers.cancelTimedAck(first, fireWith: SocketAckError.timeout)
+        let second = try manager.parseString(engine.sentPackets[1].0).id
+        socket.handleAck(second, data: ["success"])
+        let result = try await task.value
+        XCTAssertEqual(result, "success")
+        XCTAssertEqual(try engine.sentPackets.map { try manager.parseString($0.0).event },
+                       ["async", "async", "following"])
+        socket.handleAck(try manager.parseString(engine.sentPackets[2].0).id, data: [])
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+    }
+}

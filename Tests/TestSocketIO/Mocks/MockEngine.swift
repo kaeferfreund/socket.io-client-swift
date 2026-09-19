@@ -41,6 +41,7 @@ final class MockEngine: NSObject, SocketEngineSpec {
     /// method on `SocketEngineSpec` that routes through `write` (the protocol
     /// requirement), so all sent packets are captured here.
     var sentPackets: [(String, [Data])] = []
+    var onWrite: ((String, [Data]) -> Void)?
 
     required convenience init(client: SocketEngineClient, url: URL, options: [String: Any]?) {
         self.init()
@@ -68,6 +69,7 @@ final class MockEngine: NSObject, SocketEngineSpec {
                withData data: [Data],
                completion: (() -> ())?) {
         sentPackets.append((msg, data))
+        onWrite?(msg, data)
         completion?()
     }
 }

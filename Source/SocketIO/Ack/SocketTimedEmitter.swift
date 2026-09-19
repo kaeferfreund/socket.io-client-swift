@@ -101,9 +101,7 @@ public struct SocketTimedEmitter {
         } onCancel: {
             state.cancel()
             queue?.socketAsync {
-                if let id = state.registeredID {
-                    boxed.value.ackHandlers.cancelTimedAck(id, fireWith: CancellationError())
-                }
+                boxed.value.cancelAsyncEmit(state)
             }
         }
         return snapshot.map { $0.value }
@@ -116,8 +114,11 @@ internal final class SocketAsyncAckState {
     private let lock = NSLock()
     private var cancelled = false
     private var id: Int?
+    private var queueID: Int?
     var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
     var registeredID: Int? { lock.lock(); defer { lock.unlock() }; return id }
+    var registeredQueueID: Int? { lock.lock(); defer { lock.unlock() }; return queueID }
+    func registerQueue(_ id: Int) { lock.lock(); queueID = id; lock.unlock() }
     func cancel() { lock.lock(); cancelled = true; lock.unlock() }
     func register(_ id: Int) { lock.lock(); self.id = id; lock.unlock() }
 }

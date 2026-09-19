@@ -41,7 +41,7 @@ import Foundation
 ///   message and the native send queue.
 /// * `.bufferLimits(SocketBufferLimits)` bounds everything that accumulates
 ///   *across* packets: the application send buffer, the retry queue, the
-///   connection-state-recovery replay buffer, the engine-to-manager handoff,
+///   pre-connect receive buffer (including recovery), the engine-to-manager handoff,
 ///   one incoming polling HTTP body, and how long a half-reconstructed binary
 ///   packet may stay outstanding.
 ///
@@ -82,12 +82,12 @@ public struct SocketBufferLimits : Equatable, Sendable {
     /// `Int.max` (the default) imposes no limit.
     public var maximumRetryQueueBytes: Int
 
-    /// Maximum number of connection-state-recovery replay events buffered while
-    /// the socket waits for the CONNECT acknowledgement of a resumed session.
+    /// Maximum number of received events buffered before CONNECT, including
+    /// initial connections and recovery replay. The historical name is retained.
     /// `Int.max` (the default) imposes no limit.
     public var maximumRecoveryReplayPackets: Int
 
-    /// Maximum estimated payload bytes held in the recovery replay buffer.
+    /// Maximum estimated payload bytes held in the pre-connect receive buffer.
     /// `Int.max` (the default) imposes no limit.
     public var maximumRecoveryReplayBytes: Int
 

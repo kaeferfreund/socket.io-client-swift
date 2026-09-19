@@ -1729,9 +1729,9 @@ public extension SocketIOClient {
     /// Async/throws variant of `setAuth(_:)`. The async closure is invoked on
     /// every CONNECT (initial + reconnect) and its return value is used as the
     /// CONNECT payload. If the closure throws, a `.error` client event fires
-    /// with the localized error description and the CONNECT packet is NOT sent
-    /// (fail-closed). Pure Swift addition — JS callback-form has no
-    /// thrown-error analog.
+    /// with the localized error description, the CONNECT packet is NOT sent,
+    /// and the pending connect is aborted (fail-closed). Pure Swift addition —
+    /// JS callback-form has no thrown-error analog.
     func setAuth(_ provider: @escaping @Sendable () async throws -> sending [String: Any]?) {
         let wrapped: SocketAuthProvider = { [weak self] cb in
             guard let self = self else { cb(nil); return }
@@ -1764,6 +1764,9 @@ public extension SocketIOClient {
                         client.handleClientEvent(.error, data: [
                             "auth provider failed: \(error.localizedDescription)"
                         ])
+                        // Fail-closed: CONNECT is not sent, so settle the
+                        // in-flight attempt instead of leaving `.connecting`.
+                        client.abortPendingConnect()
                     }
                 }
             }

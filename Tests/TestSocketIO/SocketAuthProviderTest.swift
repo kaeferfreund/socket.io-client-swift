@@ -275,12 +275,17 @@ final class SocketAuthProviderTest: XCTestCase {
         wait(for: [errorFired], timeout: 2)
         // Brief inverted wait — give the wrong path a chance to fire.
         wait(for: [noCompletion], timeout: 0.4)
+        // `.error` fulfills before abortPendingConnect() in the same hop;
+        // drain so the status assertion cannot race that remaining work.
+        drain()
 
         XCTAssertNotNil(errorMessage)
         XCTAssertTrue(errorMessage?.contains("auth provider failed") ?? false,
                       "expected localized failure message; got: \(errorMessage ?? "<nil>")")
         XCTAssertTrue(errorMessage?.contains("fetch failed") ?? false,
                       "expected error.localizedDescription to be included")
+        XCTAssertEqual(socket.status, .notConnected,
+                       "async auth throw must abort the pending connect instead of leaving .connecting")
     }
 
     // MARK: U-A10 — provider returning nil produces a CONNECT byte-identical

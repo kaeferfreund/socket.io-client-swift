@@ -56,11 +56,14 @@ final class SocketPacketEncoderTest: XCTestCase {
     private func roundTrip(_ packet: SocketPacket) throws -> SocketPacket {
         var decoded = try XCTUnwrap(parser.parseSocketMessage(packet.encodedPacketString()))
 
-        for attachment in packet.binary {
-            _ = decoded.addData(attachment)
+        for (index, attachment) in packet.binary.enumerated() {
+            XCTAssertEqual(decoded.addData(attachment), index == packet.binary.count - 1)
         }
 
         XCTAssertFalse(decoded.reconstructionFailed)
+        XCTAssertEqual(decoded.type, packet.type)
+        XCTAssertEqual(decoded.nsp, packet.nsp)
+        XCTAssertEqual(decoded.id, packet.id)
 
         return decoded
     }
@@ -84,6 +87,7 @@ final class SocketPacketEncoderTest: XCTestCase {
         drain()
 
         XCTAssertEqual(engine.sentPackets.last?.0, "0/woot,{\"token\":\"123\"}")
+        XCTAssertTrue(isEqual(try roundTrip(packet).data, packet.data))
     }
 
     // MARK: socket.io-parser/test/parser.js — "encodes disconnection"
@@ -98,6 +102,7 @@ final class SocketPacketEncoderTest: XCTestCase {
         drain()
 
         XCTAssertEqual(engine.sentPackets.last?.0, "1/woot,")
+        XCTAssertTrue(isEqual(try roundTrip(packet).data, packet.data))
     }
 
     // MARK: socket.io-parser/test/parser.js — "encodes an event"
@@ -107,6 +112,7 @@ final class SocketPacketEncoderTest: XCTestCase {
 
         XCTAssertEqual(packet.type, .event)
         XCTAssertEqual(try packet.encodedPacketString(), "2[\"a\",1,{}]")
+        XCTAssertTrue(isEqual(try roundTrip(packet).data, packet.data))
     }
 
     // MARK: socket.io-parser/test/parser.js — "encodes an event (with an integer as event name)"
@@ -115,6 +121,7 @@ final class SocketPacketEncoderTest: XCTestCase {
         let packet = SocketPacket.packetFromEmit([1, "a", [String: Any]()], id: -1, nsp: "/", ack: false)
 
         XCTAssertEqual(try packet.encodedPacketString(), "2[1,\"a\",{}]")
+        XCTAssertTrue(isEqual(try roundTrip(packet).data, packet.data))
     }
 
     // MARK: socket.io-parser/test/parser.js — "encodes an event (with ack)"
@@ -123,6 +130,7 @@ final class SocketPacketEncoderTest: XCTestCase {
         let packet = SocketPacket.packetFromEmit(["a", 1, [String: Any]()], id: 1, nsp: "/test", ack: false)
 
         XCTAssertEqual(try packet.encodedPacketString(), "2/test,1[\"a\",1,{}]")
+        XCTAssertTrue(isEqual(try roundTrip(packet).data, packet.data))
     }
 
     // MARK: socket.io-parser/test/parser.js — "encodes an ack"
@@ -132,6 +140,7 @@ final class SocketPacketEncoderTest: XCTestCase {
 
         XCTAssertEqual(packet.type, .ack)
         XCTAssertEqual(try packet.encodedPacketString(), "3123[\"a\",1,{}]")
+        XCTAssertTrue(isEqual(try roundTrip(packet).data, packet.data))
     }
 
     // MARK: socket.io-parser/test/parser.js — "encodes an connect error"
@@ -143,6 +152,7 @@ final class SocketPacketEncoderTest: XCTestCase {
         let packet = SocketPacket(type: .error, data: ["Unauthorized"], nsp: "/")
 
         XCTAssertEqual(try packet.encodedPacketString(), "4\"Unauthorized\"")
+        XCTAssertTrue(isEqual(try roundTrip(packet).data, packet.data))
     }
 
     // MARK: socket.io-parser/test/parser.js — "encodes an connect error (with object)"
@@ -151,6 +161,7 @@ final class SocketPacketEncoderTest: XCTestCase {
         let packet = SocketPacket(type: .error, data: [["message": "Unauthorized"]], nsp: "/")
 
         XCTAssertEqual(try packet.encodedPacketString(), "4{\"message\":\"Unauthorized\"}")
+        XCTAssertTrue(isEqual(try roundTrip(packet).data, packet.data))
     }
 
     // MARK: socket.io-parser/test/buffer.js — "encodes a Buffer"
@@ -225,12 +236,16 @@ final class SocketPacketEncoderTest: XCTestCase {
 
     // MARK: socket.io-parser/test/arraybuffer.js — "should not modify the input packet"
 
-    func testShouldNotModifyTheInputPacket() {
+    func testShouldNotModifyTheInputPacket() throws {
         let first = Data([1, 2, 3])
         let second = Data([4, 5, 6])
         let items: [Any] = ["a", first, second]
 
-        _ = SocketPacket.packetFromEmit(items, id: -1, nsp: "/", ack: false)
+        let packet = SocketPacket.packetFromEmit(items, id: -1, nsp: "/", ack: false)
+        _ = try packet.encodedPacketString()
+        XCTAssertEqual(packet.type, .binaryEvent)
+        XCTAssertEqual(packet.nsp, "/")
+        XCTAssertEqual(packet.id, -1)
 
         XCTAssertTrue(isEqual(items, ["a", first, second]),
                       "Shredding must not replace the caller's data with placeholders")

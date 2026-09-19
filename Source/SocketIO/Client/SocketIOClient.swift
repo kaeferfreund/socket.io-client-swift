@@ -474,7 +474,16 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     }
 
     func createOnAck(_ items: [Any], binary: Bool = true) -> OnAckCallback {
-        return OnAckCallback(ackNumber: allocateAckId(), items: items, socket: self)
+        guard !failIfReserved(items) else {
+            return OnAckCallback(ackNumber: -1, items: [], socket: self, binary: binary)
+        }
+        do {
+            let safe = try SocketPacket.jsonSafeEmitData(items, allowBinary: binary)
+            return OnAckCallback(ackNumber: allocateAckId(), items: safe, socket: self, binary: binary)
+        } catch {
+            handleClientEvent(.error, data: [error])
+            return OnAckCallback(ackNumber: -1, items: [], socket: self, binary: binary)
+        }
     }
 
     /// Called when the client connects to a namespace. If the client was created with a namespace upfront,

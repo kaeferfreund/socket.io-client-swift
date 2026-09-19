@@ -675,14 +675,12 @@
       ]
     },
     {
-      "id": "remaining-js-240",
-      "kind": "native-data-regression",
+      "id": "JS-240",
       "upstream_ids": [
         "JS-240"
       ],
-      "assertions": [
-        "Original two-zero-byte ArrayBuffer payload is represented by Data at namespace /, id 0. Exact header and attachment bytes also have an independent assertion; native encode/decode preserves the payload."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "EVENT [a,two zero bytes], root namespace, id 0; encode then decode all attachments, assert type, namespace, id, full deep data equality and reconstruction only completing on the final attachment. JS ArrayBuffer/TypedArray/Blob maps to native Data; native binaryEvent/binaryAck retains its wire type after reconstruction.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/SocketRemainingBinaryParserTest.swift",
@@ -691,14 +689,12 @@
       ]
     },
     {
-      "id": "remaining-js-242",
-      "kind": "native-data-regression",
+      "id": "JS-242",
       "upstream_ids": [
         "JS-242"
       ],
-      "assertions": [
-        "Original typed-array bytes 0...4 survive Data encoding at namespace / and id 0. A sliced buffer excludes sentinel prefix/suffix bytes without modifying its source."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "EVENT [a,bytes 0 through 4], root namespace, id 0; encode then decode all attachments, assert type, namespace, id, full deep data equality and reconstruction only completing on the final attachment. JS ArrayBuffer/TypedArray/Blob maps to native Data; native binaryEvent/binaryAck retains its wire type after reconstruction.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/SocketRemainingBinaryParserTest.swift",
@@ -707,14 +703,12 @@
       ]
     },
     {
-      "id": "remaining-js-246",
-      "kind": "native-data-regression",
+      "id": "JS-246",
       "upstream_ids": [
         "JS-246"
       ],
-      "assertions": [
-        "Original two-zero-byte Blob payload is adapted to native Data at namespace / and id 0; empty and high-bit byte payloads also round-trip."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "EVENT [a,two zero bytes], root namespace, id 0; encode then decode all attachments, assert type, namespace, id, full deep data equality and reconstruction only completing on the final attachment. JS ArrayBuffer/TypedArray/Blob maps to native Data; native binaryEvent/binaryAck retains its wire type after reconstruction.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/SocketRemainingBinaryParserTest.swift",
@@ -723,14 +717,12 @@
       ]
     },
     {
-      "id": "remaining-js-247",
-      "kind": "native-data-regression",
+      "id": "JS-247",
       "upstream_ids": [
         "JS-247"
       ],
-      "assertions": [
-        "The original nested hi/why/binary/bye event at /deep with id 999 encodes and reconstructs unchanged using Data instead of Blob. Additional null/nested inputs remain intact."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "EVENT [a,{a:hi,b:{why:two zero bytes},c:bye}], /deep, id 999; encode then decode all attachments, assert type, namespace, id, full deep data equality and reconstruction only completing on the final attachment. JS ArrayBuffer/TypedArray/Blob maps to native Data; native binaryEvent/binaryAck retains its wire type after reconstruction.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/SocketRemainingBinaryParserTest.swift",
@@ -739,14 +731,12 @@
       ]
     },
     {
-      "id": "remaining-js-248",
-      "kind": "native-data-regression",
+      "id": "JS-248",
       "upstream_ids": [
         "JS-248"
       ],
-      "assertions": [
-        "The original hi ack/why/binary/bye ack payload at /deep with id 999 encodes as a binary ACK and reconstructs unchanged using Data instead of Blob."
-      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "ACK [{a:hi ack,b:{why:two zero bytes},c:bye ack}], /deep, id 999; encode then decode all attachments, assert type, namespace, id, full deep data equality and reconstruction only completing on the final attachment. JS ArrayBuffer/TypedArray/Blob maps to native Data; native binaryEvent/binaryAck retains its wire type after reconstruction.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/SocketRemainingBinaryParserTest.swift",
@@ -928,6 +918,216 @@
         {
           "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
           "symbol": "SocketNativeEngineTest.testRememberUpgradeDisabledStillStartsWithPolling"
+        }
+      ]
+    },
+    {
+      "id": "JS-243",
+      "upstream_ids": [
+        "JS-243"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original nested 3-byte and 6-byte zero buffers, /deep, id 999; assert exact encoded header then decode and assert full data equality, type, namespace and id, including ordered complete binary reconstruction. Missing id is native -1; single-value payloads use a one-element native data array; native binary types retain their wire discriminator.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testEncodesArrayBuffersDeepInJSON"
+        }
+      ]
+    },
+    {
+      "id": "JS-244",
+      "upstream_ids": [
+        "JS-244"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original null nested under e.g plus nine zero bytes, root, id 600; assert exact encoded header then decode and assert full data equality, type, namespace and id, including ordered complete binary reconstruction. Missing id is native -1; single-value payloads use a one-element native data array; native binary types retain their wire discriminator.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testEncodesDeepBinaryJSONWithNullValues"
+        }
+      ]
+    },
+    {
+      "id": "JS-249",
+      "upstream_ids": [
+        "JS-249"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original [a,UTF8 abc], /cool, id 23; assert exact encoded header then decode and assert full data equality, type, namespace and id, including ordered complete binary reconstruction. Missing id is native -1; single-value payloads use a one-element native data array; native binary types retain their wire discriminator.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testEncodesABuffer"
+        }
+      ]
+    },
+    {
+      "id": "JS-250",
+      "upstream_ids": [
+        "JS-250"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original [a,{b:[c,UTF8 abc]}], /cool, id 23; assert exact encoded header then decode and assert full data equality, type, namespace and id, including ordered complete binary reconstruction. Missing id is native -1; single-value payloads use a one-element native data array; native binary types retain their wire discriminator.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testEncodesANestedBuffer"
+        }
+      ]
+    },
+    {
+      "id": "JS-251",
+      "upstream_ids": [
+        "JS-251"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original ACK [a,UTF8 xxx,{}], /back, id 127; assert exact encoded header then decode and assert full data equality, type, namespace and id, including ordered complete binary reconstruction. Missing id is native -1; single-value payloads use a one-element native data array; native binary types retain their wire discriminator.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testEncodesABinaryAckWithBuffer"
+        }
+      ]
+    },
+    {
+      "id": "JS-258",
+      "upstream_ids": [
+        "JS-258"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original CONNECT {token:123}, /woot; assert exact encoded header then decode and assert full data equality, type, namespace and id, including ordered complete binary reconstruction. Missing id is native -1; single-value payloads use a one-element native data array; native binary types retain their wire discriminator.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testEncodesConnection"
+        }
+      ]
+    },
+    {
+      "id": "JS-259",
+      "upstream_ids": [
+        "JS-259"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original DISCONNECT without data, /woot; assert exact encoded header then decode and assert full data equality, type, namespace and id, including ordered complete binary reconstruction. Missing id is native -1; single-value payloads use a one-element native data array; native binary types retain their wire discriminator.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testEncodesDisconnection"
+        }
+      ]
+    },
+    {
+      "id": "JS-260",
+      "upstream_ids": [
+        "JS-260"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original EVENT [a,1,{}], root, no id; assert exact encoded header then decode and assert full data equality, type, namespace and id, including ordered complete binary reconstruction. Missing id is native -1; single-value payloads use a one-element native data array; native binary types retain their wire discriminator.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testEncodesAnEvent"
+        }
+      ]
+    },
+    {
+      "id": "JS-261",
+      "upstream_ids": [
+        "JS-261"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original EVENT [1,a,{}], root, no id; assert exact encoded header then decode and assert full data equality, type, namespace and id, including ordered complete binary reconstruction. Missing id is native -1; single-value payloads use a one-element native data array; native binary types retain their wire discriminator.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testEncodesAnEventWithAnIntegerAsEventName"
+        }
+      ]
+    },
+    {
+      "id": "JS-262",
+      "upstream_ids": [
+        "JS-262"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original EVENT [a,1,{}], /test, id 1; assert exact encoded header then decode and assert full data equality, type, namespace and id, including ordered complete binary reconstruction. Missing id is native -1; single-value payloads use a one-element native data array; native binary types retain their wire discriminator.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testEncodesAnEventWithAck"
+        }
+      ]
+    },
+    {
+      "id": "JS-263",
+      "upstream_ids": [
+        "JS-263"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original ACK [a,1,{}], root, id 123; assert exact encoded header then decode and assert full data equality, type, namespace and id, including ordered complete binary reconstruction. Missing id is native -1; single-value payloads use a one-element native data array; native binary types retain their wire discriminator.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testEncodesAnAck"
+        }
+      ]
+    },
+    {
+      "id": "JS-264",
+      "upstream_ids": [
+        "JS-264"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original CONNECT_ERROR string Unauthorized, root; assert exact encoded header then decode and assert full data equality, type, namespace and id, including ordered complete binary reconstruction. Missing id is native -1; single-value payloads use a one-element native data array; native binary types retain their wire discriminator.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testEncodesAConnectError"
+        }
+      ]
+    },
+    {
+      "id": "JS-265",
+      "upstream_ids": [
+        "JS-265"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original CONNECT_ERROR {message:Unauthorized}, root; assert exact encoded header then decode and assert full data equality, type, namespace and id, including ordered complete binary reconstruction. Missing id is native -1; single-value payloads use a one-element native data array; native binary types retain their wire discriminator.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testEncodesAConnectErrorWithObject"
+        }
+      ]
+    },
+    {
+      "id": "JS-245",
+      "upstream_ids": [
+        "JS-245"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Encode the original a plus Data(1,2,3) and Data(4,5,6); caller data remains deeply equal, namespace root and absent-id sentinel stay unchanged. Swift packet construction chooses binaryEvent rather than mutating a caller-owned EVENT object.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testShouldNotModifyTheInputPacket"
+        }
+      ]
+    },
+    {
+      "id": "JS-266",
+      "upstream_ids": [
+        "JS-266"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Self-referential dictionary encoding throws cyclicPayload before JSON serialization; additionally arrays and mixed cycles fail. Foundation reference containers represent the JS object cycle, with explicit test cleanup.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketPacketEncoderTest.swift",
+          "symbol": "SocketPacketEncoderTest.testRejectsCyclicFoundationContainers"
         }
       ]
     }
@@ -1193,7 +1393,7 @@
         "id": "JS-240",
         "status": "focused-regression",
         "reason": "Original two-zero-byte ArrayBuffer payload is represented by Data at namespace /, id 0. Exact header and attachment bytes also have an independent assertion; native encode/decode preserves the payload.",
-        "contract": "remaining-js-240"
+        "contract": "JS-240"
       },
       {
         "id": "JS-241",
@@ -1204,25 +1404,25 @@
         "id": "JS-242",
         "status": "focused-regression",
         "reason": "Original typed-array bytes 0...4 survive Data encoding at namespace / and id 0. A sliced buffer excludes sentinel prefix/suffix bytes without modifying its source.",
-        "contract": "remaining-js-242"
+        "contract": "JS-242"
       },
       {
         "id": "JS-246",
         "status": "focused-regression",
         "reason": "Original two-zero-byte Blob payload is adapted to native Data at namespace / and id 0; empty and high-bit byte payloads also round-trip.",
-        "contract": "remaining-js-246"
+        "contract": "JS-246"
       },
       {
         "id": "JS-247",
         "status": "focused-regression",
         "reason": "The original nested hi/why/binary/bye event at /deep with id 999 encodes and reconstructs unchanged using Data instead of Blob. Additional null/nested inputs remain intact.",
-        "contract": "remaining-js-247"
+        "contract": "JS-247"
       },
       {
         "id": "JS-248",
         "status": "focused-regression",
         "reason": "The original hi ack/why/binary/bye ack payload at /deep with id 999 encodes as a binary ACK and reconstructs unchanged using Data instead of Blob.",
-        "contract": "remaining-js-248"
+        "contract": "JS-248"
       },
       {
         "id": "JS-257",

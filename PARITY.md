@@ -50,7 +50,7 @@ against each original setup, data, order and negative assertion; see
 [the final audit](Documentation/FinalParityAssertions-2026-09-19.md).
 CI now requires the strict completeness check **and** passed executions of the
 mapped tests in the current run. A static mapping is not a test-run certificate.
-These labels do not remove the deliberate encoding bounds or close release gate R2.
+These labels do not remove the deliberate encoding bounds; release gate R2 is closed with those bounds recorded as documented deviations.
 
 The local decoder comparison exercised 5,000 generated valid text/binary vectors
 against the actual pinned JavaScript decoder and current Swift decoder, with zero

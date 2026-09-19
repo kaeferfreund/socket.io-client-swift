@@ -63,9 +63,11 @@ Stream-Codec bleiben ausdrücklich ausgeschlossen.
   standardmäßig false, eine gemeinsame Manager-Queue bleibt das Threading-Modell.
   Der Wunsch nach abstrakteren Manager-Typen ist Architekturarbeit, kein
   nachgewiesener Fehler und keine Voraussetzung für das Wire-Protokoll.
-- R2 (vollständige Assertion-Nachweise), R3 (einheitliches Ack-/Zustandsmodell)
-  und R4 (kontrollierbare Timer/Traceability) nicht allein anhand grüner Einzeltests
-  als erledigt markieren.
+- R2 (Encoder) ist am 19.09.2026 mit dokumentierten Abweichungen geschlossen:
+  endliche Budgets, sortierte Schlüssel, `\/`-Escaping, erweiterte Jahreszahlen.
+  R3 (einheitliches Ack-/Zustandsmodell) und der Scheduling-Teil von R4
+  (injizierbare Timer) sind bewusst auf nach 17.0.0 verschoben: Architekturarbeit
+  ohne nachgewiesenen Fehler, kein Freigabeblocker.
 
 ## Weiterhin echte manuelle oder Release-Aufgaben
 

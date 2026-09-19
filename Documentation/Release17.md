@@ -79,8 +79,9 @@ behavior or a device/release certificate. See [PARITY.md](../PARITY.md).
 - [ ] All seven CI jobs pass on the release commit: native suite, TSan, strict
   concurrency, four Apple SDK framework builds, pinned upstream suites,
   parser differential and wire proofs.
-- [ ] Close the resource/encoder/acknowledgement/timer release gates documented
-  in [ProtocolParityReview.md](ProtocolParityReview.md) with actual evidence.
+- [x] Encoder gate R2 closed with documented deviations (2026-09-19); R3 and
+  the scheduling half of R4 deferred to after 17.0.0 as architecture work
+  without a demonstrated defect; see [ProtocolParityReview.md](ProtocolParityReview.md).
 - [ ] Record the outstanding TimeMonkey/Bun upgrade and Apple-device runtime
   checks from [REMAINING-WORK.md](../REMAINING-WORK.md).
 - [ ] Validate independent Swift Package, framework and CocoaPods consumers

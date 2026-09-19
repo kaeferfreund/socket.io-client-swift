@@ -144,10 +144,14 @@ Acceptance: blocked consumer, never-connected socket, never-acked retry head, re
 
 ### R2. Replace the silent outgoing JSON fallback, high priority
 
-**Status (2026-09-19): OPEN.** Round 2 removed the fallback from emit paths; the
-follow-up adds cycle detection and finite traversal budgets. The historical
-source observation below predates those changes. Full encoder/release acceptance
-is still pending; see section 8.2 for the current implementation and tests.
+**Status (2026-09-19): CLOSED with documented deviations.** Round 2 removed the
+fallback from emit paths; the follow-up added cycle detection and finite
+traversal budgets, and the encode differential (1,000 packets read back by the
+pinned JavaScript decoder, zero differences) is a CI job. The remaining
+differences to `JSON.stringify` — finite depth/node/byte budgets, sorted object
+keys, `\/` slash escaping and extended-year `Date` formatting — were reviewed on
+2026-09-19 and accepted as documented deviations rather than defects; see
+section 8.2. The historical source observation below predates those changes.
 
 **Confirmed source behavior.** `SocketPacket.completeMessage` still returns an empty-array packet when JSON serialization fails. An unsupported custom `SocketData` representation or non-finite number can thus change the intended operation into a different wire packet rather than producing a typed encoding failure. The outgoing binary shredder recursively traverses graphs; the review has not established bounded behavior for deep or cyclic Foundation object graphs.
 
@@ -157,11 +161,25 @@ Acceptance: NaN/infinity, unsupported objects, cyclic NSMutableArray/NSDictionar
 
 ### R3. Unify lifecycle and acknowledgement contracts instead of maintaining parallel paths
 
+**Status (2026-09-19): DEFERRED to after 17.0.0.** This is architecture work
+without a demonstrated defect: the acknowledgement paths share ordered retry
+delivery and are covered by `SocketClearAcksOnCloseTest`, `SocketRetrySafetyTest`
+and the ported JS scenarios; the reconnect-event migration it asks for was
+decided and shipped as a documented breaking change (section 8.1). It is not a
+publication gate for 17.0.0.
+
 There are multiple acknowledgement APIs/registries and multiple buffering paths. This increases the number of cancellation, identity-reset and reconnect combinations that must remain consistent. Introduce one internal acknowledgement record with explicit timeout/disconnect/retry policy, keep public compatibility adapters at the edge, and express connection/namespace transitions as a small documented state machine.
 
 Decide separately whether the public reconnect-event API should migrate to JavaScript semantics. A silent event rename would break existing consumers. Provide an explicit compatibility/version strategy, then run a differential trace suite for disconnect, retry, middleware refusal, successful recovery, identity change and reconnect exhaustion. The current code review is not permission to silently change TimeMonkey's event handling.
 
 ### R4. Finish test traceability and deterministic scheduling
+
+**Status (2026-09-19): traceability CLOSED, scheduling DEFERRED to after
+17.0.0.** Every applicable upstream runtime declaration now has a gated
+assertion contract that CI checks against the real test log (section 8 and
+`FinalParityAssertions-2026-09-19.md`). Injectable schedulers and a nonblocking
+fixture-process harness remain desirable test-infrastructure work without a
+demonstrated production defect; they are not a publication gate for 17.0.0.
 
 Treat the 297 upstream runtime declarations as a worklist, not as a count to equal by adding unrelated Swift tests. Each applicable row needs an exact assertion mapping and its transport/protocol parameterization. Missing positive async/query/binary-listener cases should be ported before claiming full client-level coverage.
 
@@ -429,8 +447,9 @@ packet. JS `JSON.stringify` never does that: it produces the value or throws.
   retention or total process memory. Hand-built packets are normalized before
   JSONSerialization too; error logging never describes the rejected graph.
   `SocketPacketEncoderTest` covers cycles, shared containers, public error/ack
-  delivery and limit boundaries. Gate **R2 stays open** for full encoder parity
-  and broader release validation; removing the silent fallback was not closure.
+  delivery and limit boundaries. Gate **R2 is closed with documented
+  deviations** (decision 2026-09-19); the deviations are the budgets above,
+  the key order and slash escaping below, and extended-year dates.
 - **Extended years.** `Date.toISOString()` writes years outside 0000–9999 in an
   expanded `±YYYYYY` form; the Swift formatter does not.
 
@@ -692,6 +711,7 @@ CI jobs.
 
 The 57 unmapped `engine.io-client` rows and the 7 `socket.io-parser` encoder
 rows were untouched in round 3. The package now uses Swift 6 language mode.
-Gates **R2** (full encoder parity and release acceptance), **R3** (one internal acknowledgement record and
-a documented state machine) and **R4** (injectable schedulers, full
-traceability) remain open.
+Gate **R2** is closed with documented deviations; **R3** (one internal
+acknowledgement record and a documented state machine) and the scheduling half
+of **R4** (injectable schedulers) are deferred to after 17.0.0 as architecture
+work without a demonstrated defect. See the status lines under each gate.

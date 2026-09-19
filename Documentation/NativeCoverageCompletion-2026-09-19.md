@@ -56,8 +56,8 @@ tests. Defensive code was retained:
 - Null CoreFoundation array entries and byte-count integer overflow require
   invalid object graphs or allocations outside the supported input profile.
 - `@unknown default` protects future Foundation enum cases; precondition failures
-  protect internal codec invariants; the wrong-queue assertion deliberately
-  traps outside XCTest. These guards are not removed for the percentage.
+  protect internal codec invariants; the reserved-event assertion deliberately
+  traps in debug builds outside XCTest. These guards are not removed for the percentage.
 
 Other residual lines must remain described as uncovered until measured or
 individually justified. A high line percentage is not complete branch coverage,

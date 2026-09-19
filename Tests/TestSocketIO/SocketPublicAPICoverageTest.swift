@@ -48,6 +48,36 @@ final class SocketPublicAPICoverageTest: XCTestCase {
         super.tearDown()
     }
 
+    func testRetryDiagnosticsDescribeActualAttemptsAndFinalDiscard() throws {
+        try queue.sync {
+            socket.retries = 1
+            var results: [String] = []
+            socket.emit("first", ack: { error, _ in
+                XCTAssertEqual(error as? SocketAckError, .timeout)
+                results.append("discarded")
+            })
+            socket.emit("second", ack: { error, data in
+                XCTAssertNil(error)
+                XCTAssertEqual(data as NSArray, ["ok"] as NSArray)
+                results.append("acknowledged")
+            })
+            for attempt in 0..<2 {
+                let packet = try manager.parseString(engine.sentPackets[attempt].0)
+                XCTAssertEqual(packet.event, "first")
+                socket.ackHandlers.cancelTimedAck(packet.id, fireWith: SocketAckError.timeout)
+            }
+            let second = try manager.parseString(engine.sentPackets[2].0)
+            XCTAssertEqual(second.event, "second")
+            socket.handleAck(second.id, data: ["ok"])
+            XCTAssertEqual(results, ["discarded", "acknowledged"])
+            XCTAssertEqual(socket.testRetryQueueCount, 0)
+            XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+            XCTAssertEqual(logger.entries.filter { $0.contains("Queueing retriable emit:") }.count, 2)
+            XCTAssertEqual(logger.entries.filter { $0.contains("Sending retriable emit [") }.count, 3)
+            XCTAssertEqual(logger.entries.filter { $0.contains("discarded after 2 tries") }.count, 1)
+        }
+    }
+
     func testReservedEventsFailEveryAcknowledgementEntryBeforeAllocatingIDs() {
         queue.sync {
             var errors = 0

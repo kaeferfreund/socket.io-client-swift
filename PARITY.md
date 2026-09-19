@@ -5,7 +5,9 @@ Reference: official `socketio/socket.io` commit
 The checked-out client package declares 4.8.3; the commit, not a moving version
 label, identifies the reviewed implementation.
 
-**Full behavioral equivalence and complete upstream-test porting are not established.**
+**All 195 applicable runtime declarations now have complete native assertion
+mappings and passed execution evidence (801 Swift tests, zero failures). This is
+scoped test parity, not proof of every possible JavaScript behavior.**
 The previous 116-row matrix covered only socket.io-client, omitted Engine.IO and
 both parsers, and contained stale/generic test pointers and inconsistent totals.
 It must not be used as a coverage percentage.
@@ -20,10 +22,8 @@ compression controls (4), custom per-transport constructors (2), and
 WebTransport/stream framing (30). The validator rejects new unsupported rows
 without a matching reviewed exclusion. `--strict` excludes these reviewed
 boundaries but still fails for supported behavior without certified contracts.
-Existing candidate test pointers therefore still prevent a 100% parity claim.
-Transport selection, fallback and remembered upgrades are now implemented.
-Their seven former exclusions are limited native regressions pending full
-original-scenario verification, not certificates of complete parity.
+Transport selection, fallback and remembered upgrades are implemented and now
+have complete original-scenario assertions, including real transport failures.
 
 | Upstream scope | Static runtime test declarations |
 | --- | ---: |
@@ -43,11 +43,13 @@ See [the full inventory](Documentation/JavaScriptTestInventory.csv),
 Inventory labels distinguish focused regressions, candidate old pointers,
 unmapped rows, API differences and unsupported features. A candidate is not a
 proof that all assertions of an upstream test have been ported. The current
-inventory contains 8 candidate mappings and 187 focused regressions, with no
-unmapped declarations. The assertion audit adds complete mappings for 124 previously
-uncertified scenarios (31 initially, then 55 and 38); 36 supported
-declarations still need full certification. Static mappings require passed CI
-executions and do not establish complete runtime parity.
+inventory contains 195 focused regressions with complete native assertion contracts,
+28 API differences, 38 platform differences and 36 unsupported-feature entries.
+There are no candidate or unmapped declarations. The final 36 were checked
+against each original setup, data, order and negative assertion; see
+[the final audit](Documentation/FinalParityAssertions-2026-09-19.md).
+CI now requires the strict completeness check **and** passed executions of the
+mapped tests in the current run. A static mapping is not a test-run certificate.
 These labels do not remove the deliberate encoding bounds or close release gate R2.
 
 The local decoder comparison exercised 5,000 generated valid text/binary vectors
@@ -73,9 +75,8 @@ not implemented. Reconnect-event semantics now match the JavaScript manager
 `reconnect_failed` exist) — a breaking change in 17.0.0, see the README. The
 outgoing encoder throws instead of substituting an empty payload and rejects
 cyclic Foundation graphs before bridging. Its finite node/byte/depth budgets
-are deliberate deviations; full encoder parity remains an open release gate. Legacy and async acknowledgement contracts
-still differ; see the review rather than treating these as browser-only
-exceptions. Runtime tests, SDK builds, API compatibility and device validation
+are deliberate deviations; full encoder parity remains an open release gate. Callback, async and legacy acknowledgement entry points now share ordered
+retry delivery; native API representations remain documented separately. Runtime tests, SDK builds, API compatibility and device validation
 are different acceptance gates.
 
 Acknowledgements are now cleared on **every** close, including a drop the

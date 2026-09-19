@@ -1,6 +1,6 @@
 {
   "upstream_sha": "aaf2af36ec8ad05910f357a788e0e358bad32738",
-  "scope": "Selected reviewed native client contracts, NOT a complete semantic-coverage percentage.",
+  "scope": "Complete assertion mappings for applicable native client runtime declarations at the pinned reference, with explicit reviewed boundaries; not exhaustive behavioral equivalence.",
   "remaining_unmapped_ids": [],
   "contracts": [
     {
@@ -2834,7 +2834,7 @@
       {
         "id": "JS-133",
         "status": "focused-regression",
-        "reason": "Forced base64 polling returns bytes 0...4; observer sees bAAECAwQ= in the actual POST body.",
+        "reason": "Default polling/WebSocket transport list with forceBase64=true. Send bytes 0...4 on open and assert exactly one binary Data echo with identical bytes. Unlike the earlier mapping, no forced-polling-only configuration or attachment header changes the original scenario.",
         "contract": "remaining-js-133"
       },
       {
@@ -2863,7 +2863,7 @@
       {
         "id": "JS-141",
         "status": "focused-regression",
-        "reason": "Five payloads at the original 72/20/20/20/72-byte boundaries are echoed in order. Every actual polling POST is at most the 100-byte advertised maxPayload. Includes base64 expansion and record separators.",
+        "reason": "Polling only, advertised maxPayload=100, five raw packets in original order: 72 binary bytes, 20 binary bytes, twenty a characters, 20 binary bytes, 72 binary bytes. Assert exactly five echoes with matching types/bytes/order and every observed POST <=100 bytes. Data replaces typed-array/ArrayBuffer/Blob/Node Buffer; initialized zero bytes also make the original allocUnsafe case deterministic.",
         "contract": "remaining-js-141"
       },
       {
@@ -2957,19 +2957,19 @@
       {
         "id": "JS-178",
         "status": "focused-regression",
-        "reason": "Server-set cookies are sent on subsequent polling POSTs and on the WebSocket upgrade only when enabled. The isolated jar survives reconnect and is not shared with another engine or the application jar.",
+        "reason": "Real polling-only connection with withCredentials=true. Fixture sets original cookies 1=1 and 2=2; after open, a raw message is echoed and the server-observed POST Cookie contains exactly both name/value pairs. Cookie pair order is normalized because Foundation owns serialization order; no missing or additional cookie is accepted. Original ten-millisecond sleep is replaced by the completed-open/cookie-processing barrier.",
         "contract": "remaining-js-178"
       },
       {
         "id": "JS-179",
         "status": "focused-regression",
-        "reason": "Disabled credentials do not resend server cookies in polling or the WebSocket upgrade, and do not read a pre-populated engine jar. Explicit application Cookie headers remain explicit.",
+        "reason": "Real polling-only connection with withCredentials=false. Fixture sets original cookies 1=1 and 2=2; send on open, await echo and assert the subsequent server-observed POST has no Cookie header. Native nil corresponds to JS undefined.",
         "contract": "remaining-js-179"
       },
       {
         "id": "JS-180",
         "status": "focused-regression",
-        "reason": "Foundation parses the upstream simple foo=bar cookie into the same name and value. The native cookie object and browser CORS semantics are not claimed to be identical to the Node CookieJar.",
+        "reason": "Parse original foo=bar Set-Cookie input with Foundation; assert name foo and value bar. Native HTTPCookie replaces the Node object while preserving every field asserted by this simple original scenario.",
         "contract": "remaining-js-180"
       },
       {
@@ -2980,7 +2980,7 @@
       {
         "id": "JS-182",
         "status": "focused-regression",
-        "reason": "Foundation preserves the entire upstream cookie value bar=bar&foo=foo&John=Doe&Doe=John, including equals signs and ampersands.",
+        "reason": "Parse original foo=bar=bar&foo=foo&John=Doe&Doe=John; Domain=.example.com; Path=/; HttpOnly; Secure. Assert name foo and the complete original value including embedded equals and ampersands. HTTPCookie is the native object representation.",
         "contract": "remaining-js-182"
       },
       {
@@ -2996,25 +2996,25 @@
       {
         "id": "JS-194",
         "status": "focused-regression",
-        "reason": "A 101-byte payload against maxHttpBufferSize=100 produces polling write error HTTP 413 and a transport error close carrying structured detail.",
+        "reason": "Real a*101 exceeds 100-byte polling server limit. Error callback must carry SocketTransportError with HTTP 413, operation write, polling write (HTTP 413) description and empty body; close must follow the error with transport error and identical detail object. Native URLSession completed response/type replaces XHR readyState/TransportError fields; queued b additionally covers JS-151.",
         "contract": "remaining-js-194"
       },
       {
         "id": "JS-195",
         "status": "focused-regression",
-        "reason": "A 101-byte WebSocket payload against maxHttpBufferSize=100 closes with peer code 1009. A simultaneous receive error must not erase the peer close code or turn it into a generic error close.",
+        "reason": "Real WebSocket a*101 over 100-byte server limit closes with transport close, typed detail operation close, code 1009, empty close reason and websocket close (WebSocket 1009) description. Require no preceding error callback. Native SocketTransportError fields replace CloseEvent fields; IE11 branch is platform-specific.",
         "contract": "remaining-js-195"
       },
       {
         "id": "JS-196",
         "status": "focused-regression",
-        "reason": "An actual stale-SID polling GET reports HTTP 400 and the exact Session ID unknown JSON body, followed by one detailed transport error close.",
+        "reason": "Real polling request with nonexistent SID returns 400: error callback asserts typed polling read error, exact status and exact Session ID unknown JSON body; close follows with transport error and same detail. Stale request injected at transport layer because user query may not override engine-owned SID. Native completed URLSession response replaces XHR readyState.",
         "contract": "remaining-js-196"
       },
       {
         "id": "JS-197",
         "status": "focused-regression",
-        "reason": "An actual stale-SID WebSocket handshake fails and closes with native transport detail. URLSession need not expose the HTTP rejection status; no fabricated XHR or CloseEvent object is claimed.",
+        "reason": "Real WebSocket handshake carrying nonexistent SID must report typed websocket close-operation error with native underlying error; close follows with transport error and the same detail object. Native URLSession error replaces JS generic error Event; no unsupported HTTP response-body/status claim is made.",
         "contract": "remaining-js-197"
       },
       {
@@ -3042,7 +3042,7 @@
       {
         "id": "JS-240",
         "status": "focused-regression",
-        "reason": "Original two-zero-byte ArrayBuffer payload is represented by Data at namespace /, id 0. Exact header and attachment bytes also have an independent assertion; native encode/decode preserves the payload.",
+        "reason": "EVENT [a,two zero bytes], root namespace, id 0; encode then decode all attachments, assert type, namespace, id, full deep data equality and reconstruction only completing on the final attachment. JS ArrayBuffer/TypedArray/Blob maps to native Data; native binaryEvent/binaryAck retains its wire type after reconstruction.",
         "contract": "JS-240"
       },
       {
@@ -3053,25 +3053,25 @@
       {
         "id": "JS-242",
         "status": "focused-regression",
-        "reason": "Original typed-array bytes 0...4 survive Data encoding at namespace / and id 0. A sliced buffer excludes sentinel prefix/suffix bytes without modifying its source.",
+        "reason": "EVENT [a,bytes 0 through 4], root namespace, id 0; encode then decode all attachments, assert type, namespace, id, full deep data equality and reconstruction only completing on the final attachment. JS ArrayBuffer/TypedArray/Blob maps to native Data; native binaryEvent/binaryAck retains its wire type after reconstruction.",
         "contract": "JS-242"
       },
       {
         "id": "JS-246",
         "status": "focused-regression",
-        "reason": "Original two-zero-byte Blob payload is adapted to native Data at namespace / and id 0; empty and high-bit byte payloads also round-trip.",
+        "reason": "EVENT [a,two zero bytes], root namespace, id 0; encode then decode all attachments, assert type, namespace, id, full deep data equality and reconstruction only completing on the final attachment. JS ArrayBuffer/TypedArray/Blob maps to native Data; native binaryEvent/binaryAck retains its wire type after reconstruction.",
         "contract": "JS-246"
       },
       {
         "id": "JS-247",
         "status": "focused-regression",
-        "reason": "The original nested hi/why/binary/bye event at /deep with id 999 encodes and reconstructs unchanged using Data instead of Blob. Additional null/nested inputs remain intact.",
+        "reason": "EVENT [a,{a:hi,b:{why:two zero bytes},c:bye}], /deep, id 999; encode then decode all attachments, assert type, namespace, id, full deep data equality and reconstruction only completing on the final attachment. JS ArrayBuffer/TypedArray/Blob maps to native Data; native binaryEvent/binaryAck retains its wire type after reconstruction.",
         "contract": "JS-247"
       },
       {
         "id": "JS-248",
         "status": "focused-regression",
-        "reason": "The original hi ack/why/binary/bye ack payload at /deep with id 999 encodes as a binary ACK and reconstructs unchanged using Data instead of Blob.",
+        "reason": "ACK [{a:hi ack,b:{why:two zero bytes},c:bye ack}], /deep, id 999; encode then decode all attachments, assert type, namespace, id, full deep data equality and reconstruction only completing on the final attachment. JS ArrayBuffer/TypedArray/Blob maps to native Data; native binaryEvent/binaryAck retains its wire type after reconstruction.",
         "contract": "JS-248"
       },
       {

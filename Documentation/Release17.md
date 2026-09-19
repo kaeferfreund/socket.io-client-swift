@@ -13,6 +13,10 @@ namespaces, matching the JavaScript client. The default remains false. Namespace
 CONNECT packets and lifecycle callbacks follow subscription order. Engine.IO
 framing requires ASCII packet type digits, preserves combining Unicode scalars
 in text data, and reports an empty polling payload as a parser error.
+Raw Engine.IO binary sends now produce one packet without an attachment header.
+The shared codec decodes packet framing independently of transport CLOSE handling.
+A parser failure replaces the native engine on reconnect; low-level delegates can
+observe completed/failed Engine.IO upgrades separately from the HTTP handshake.
 
 ## Draft release notes
 
@@ -58,14 +62,17 @@ compression switches/Deflate thresholds are also unsupported. URLSession deflate
 interoperability does not imply that those controls exist. Parser safety limits
 and documented Swift/platform API differences remain intentional.
 
-Complete JavaScript assertion parity is **not yet established**. Passing the
-ordinary CI suite is not evidence that every original JavaScript scenario has
-equivalent native assertions. See [PARITY.md](../PARITY.md).
+All 195 applicable original runtime declarations now have complete native
+assertions and passed execution evidence in the 801-test suite. The other 102
+runtime declarations retain explicit API/platform/unsupported-feature reasons.
+This scoped assertion audit is complete; it is not proof of all possible client
+behavior or a device/release certificate. See [PARITY.md](../PARITY.md).
 
 ## Publication gates
 
-- [ ] Finish the outstanding original-test assertion audit, supported behavior
-  implementation and paired lifecycle traces. Run
+- [x] Complete the supported original-test assertion audit and validate all 195
+  mappings against the successful 801-test native log; see [final audit](FinalParityAssertions-2026-09-19.md).
+- [ ] Finish the paired lifecycle traces and rerun
   `python3 scripts/check-parity-contracts.py --strict --swift-log <current-log>`
   against the complete successful Swift log for the release commit. Do not
   weaken this gate or convert missing supported behavior to exclusions.
@@ -91,8 +98,10 @@ distribution operation; the Git-backed podspec alone does not publish a pod.
   all jobs passed, including 715 Swift tests and zero strict-concurrency warnings.
 - [e63dc0e CI](https://github.com/kaeferfreund/socket.io-client-swift/actions/runs/35433653301):
   all jobs passed after transport ordering/fallback/remembered-upgrade changes.
-- The strict parity audit still fails for supported, uncertified scenarios.
-  Seven newly supported transport scenarios are now tracked as native regressions
-  requiring further assertion review, rather than obsolete feature exclusions.
+- [43bbe47 final audit CI](https://github.com/kaeferfreund/socket.io-client-swift/actions/runs/35440824938):
+  all seven jobs pass, including 801 Swift tests and the strict checker against
+  the actual log. All 195 applicable runtime declarations are covered by complete
+  native assertion mappings; library line coverage is 93.97%.
+
 
 These earlier runs do not certify later release-preparation commits.

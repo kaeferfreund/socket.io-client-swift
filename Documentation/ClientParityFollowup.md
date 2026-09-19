@@ -41,8 +41,9 @@ namespace subscription order, autoConnect for newly created namespaces, and
 Engine.IO ASCII framing/empty-payload handling. Jev assisted with bounded
 comparisons; every recommendation was independently checked.
 
-Complete original-scenario certification remains open for 36 supported test
-declarations. No coverage percentage implies semantic equivalence.
+The [final 36-scenario audit](FinalParityAssertions-2026-09-19.md) completes the
+supported assertion mappings, verified against the successful 801-test native run. No execution
+coverage percentage implies semantic equivalence.
 
 ## Evidence and CI contracts
 
@@ -53,21 +54,20 @@ The original Node client suites are executed in a separate Node 24 job (matching
 `swift test --enable-code-coverage` exports LLVM coverage. The summary counts only `Source/SocketIO`, not tests. Execution coverage and scenario parity remain separate metrics.
 
 The inventory now contains 297 runtime declarations plus 14 type declarations:
-8 candidate-existing, 187 focused regressions, 38 platform-specific, 28 API
-differences and 36 unsupported-feature entries, with zero unmapped declarations.
-Seven transport scenarios moved from unsupported to limited native regressions
-following implementation; they are not automatically certified as complete
-original-assertion ports.
+195 fully mapped focused regressions, 38 platform-specific, 28 API differences
+and 36 unsupported-feature entries, with zero candidate or unmapped declarations.
+Seven transport scenarios moved from unsupported to implemented, and now have
+complete original-scenario assertions.
 For a deliberately strict completeness check:
 
 ```sh
 python3 scripts/check-parity-contracts.py --strict
 ```
 
-This fails while supported runtime rows remain uncertified; reviewed unsupported-feature exclusions are explicit and validated. The ordinary CI check is a reviewed-contract/backlog regression gate, not an assertion of 100% coverage.
+This fails while supported runtime rows remain uncertified; reviewed unsupported-feature exclusions are explicit and validated. CI now runs this strict check together with current passed-XCTest evidence.
 
 ## Still outside this change
 
-There is no claim of complete JavaScript parity or a production-release approval. WebTransport, compression configuration, browser/Node-specific APIs, JS manager caching and custom JSON hooks remain explicit boundaries. Callback, async and legacy acknowledgements now share ordered retry delivery, with async cancellation cleanup and socket-specific overrides. General pre-connect reception is buffered. Transport lists, fallback and remembered upgrades are implemented. Strict concurrency and TSan have passed in macOS CI. Complete assertion equivalence, paired lifecycle traces, deterministic scheduling of every timer, and physical-device/background/network-transition validation remain open. Existing parser/encoder safety limits are not weakened to imitate unlimited JS acceptance.
+There is no claim of complete JavaScript parity or a production-release approval. WebTransport, compression configuration, browser/Node-specific APIs, JS manager caching and custom JSON hooks remain explicit boundaries. Callback, async and legacy acknowledgements now share ordered retry delivery, with async cancellation cleanup and socket-specific overrides. General pre-connect reception is buffered. Transport lists, fallback and remembered upgrades are implemented. Strict concurrency and TSan have passed in macOS CI. Paired lifecycle traces, deterministic scheduling of every timer, and physical-device/background/network-transition validation remain open. Existing parser/encoder safety limits are not weakened to imitate unlimited JS acceptance.
 
 The older `ProtocolParityReview.md` is historical except where explicitly updated by this follow-up. In particular, JS promise acknowledgements without a timeout **do reject on disconnect** (`emitWithAck` marks its callback `withError`); they are not intentionally left pending forever.

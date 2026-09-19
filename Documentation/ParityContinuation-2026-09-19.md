@@ -1,5 +1,7 @@
 # Original-scenario audit continuation
 
+Historical batch through b6f419b. Current work: [the final 36-scenario audit](FinalParityAssertions-2026-09-19.md).
+
 Reference: `aaf2af36ec8ad05910f357a788e0e358bad32738`.
 This batch adds 38 complete mappings to the previous 74-item backlog. There are
 36 supported runtime declarations still without complete assertion certification.

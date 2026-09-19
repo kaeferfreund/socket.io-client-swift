@@ -43,16 +43,14 @@ Stream-Codec bleiben ausdrücklich ausgeschlossen.
 
 ## Aktuelle Implementierungs- und Nachweisarbeit
 
-- Im aktuellen Nachlauf sind 124 vorher unvollständig belegte Deklarationen
-  mit vollständigen nativen Assertions zugeordnet (31 zuerst, dann 55 und 38);
-  36 bleiben offen. Jev unterstützt die Quellenprüfung, ersetzt aber weder
-  die unabhängige Prüfung noch erfolgreiche Testausführungen.
-- Vollständiger Assertion-Abgleich der 68 alten Kandidaten **und** der 120
-  fokussierten Zuordnungen. Ein Klassenverweis oder vorhandener Testtitel reicht
-  nicht; Vorbereitung, Daten, Reihenfolge und negative Assertions müssen stimmen.
-- Neue Transportlisten, `tryAllTransports` und `rememberUpgrade` gegen Original-
-  Szenarien und echte Fehlversuche prüfen; Inventar nur mit belastbaren Verträgen
-  aktualisieren.
+- Die letzten 36 Zuordnungen sind implementiert: nun 195 vollständige native
+  Assertion-Verträge, keine Kandidaten mehr. 801 Swift-Tests bestehen, ebenso die
+  strenge Prüfung gegen ihr echtes Testprotokoll. Details und offene
+  Freigabegrenzen: [Abschlussaudit](Documentation/FinalParityAssertions-2026-09-19.md).
+- Transportlisten, Fallback, echtes rememberUpgrade, Raw-Binärnachrichten,
+  Upgrade-/Close-Reihenfolge und Parserfehler-Reconnect haben konkrete Original-
+  Assertions. Die CI verlangt künftig die strenge Prüfung samt bestandenem
+  XCTest-Nachweis. Jev-Empfehlungen wurden unabhängig geprüft.
 - Gemeinsame JS/Swift-Ablaufvergleiche für Ack/Retry/Reconnect/Recovery/Auth und
   mehrere Namespaces. Timer-sensitive Fälle kontrolliert ausführen.
 - Striktes Freigabegate erst aktivieren, wenn jeder anwendbare Test vollständig

@@ -11,8 +11,15 @@ import XCTest
 /// A minimal `SocketEngineSpec` conformer that does NOT override `writable`.
 /// Verifies the protocol's default fail-safe `false` returns. Most other
 /// `SocketEngineSpec` requirements are stubbed.
-private final class StubEngine: NSObject, SocketEngineSpec {
+private final class StubEngine: NSObject, SocketEnginePollable {
     weak var client: SocketEngineClient?
+    var invalidated = false
+    var postWait: [Post] = []
+    var session: URLSession?
+    var waitingForPoll = false
+    var waitingForPost = false
+    var errors: [String] = []
+    var packets: [String] = []
     var closed: Bool = false
     var connected: Bool = true
     var connectParams: [String: Any]? = nil
@@ -41,12 +48,16 @@ private final class StubEngine: NSObject, SocketEngineSpec {
     }
 
     func connect() {}
-    func didError(reason: String) {}
+    func didError(reason: String) { errors.append(reason) }
     func disconnect(reason: String) {}
     func doFastUpgrade() {}
     func flushWaitingForPostToWebSocket() {}
     func parseEngineData(_ data: Data) {}
-    func parseEngineMessage(_ message: String) {}
+    func parseEngineMessage(_ message: String) {
+        packets.append(message)
+        if message == "1" { closed = true }
+    }
+    func stopPolling() { invalidated = true }
     func write(_ msg: String, withType type: SocketEnginePacketType, withData data: [Data], completion: (() -> ())?) {}
 }
 
@@ -54,5 +65,25 @@ final class SocketEngineWritableTest: XCTestCase {
     func testProtocolDefaultIsFalse() {
         let stub = StubEngine()
         XCTAssertFalse(stub.writable, "default impl must return false (fail-safe)")
+    }
+}
+
+extension SocketEngineWritableTest {
+    func testCustomEngineInheritsSafeDefaultsAndLegacyErrorForwarding() {
+        let stub = StubEngine()
+        XCTAssertNil(stub.maxPayload)
+        XCTAssertNil(stub.timestampRequests)
+        XCTAssertEqual(stub.timestampParam, "t")
+        XCTAssertFalse(stub.forceBase64)
+        XCTAssertFalse(stub.hasPingExpired)
+        stub.didError(reason: "legacy reason", error: SocketTransportError(transport: "polling", operation: "read"))
+        XCTAssertEqual(stub.errors, ["legacy reason"])
+    }
+    func testCustomPollingDecoderStopsDispatchAtClose() {
+        let stub = StubEngine()
+        stub.parsePollingMessage("4first\u{1e}1\u{1e}4late")
+        XCTAssertEqual(stub.packets, ["4first", "1"])
+        stub.doPoll()
+        XCTAssertFalse(stub.waitingForPoll, "A closed custom engine must not start a new poll")
     }
 }

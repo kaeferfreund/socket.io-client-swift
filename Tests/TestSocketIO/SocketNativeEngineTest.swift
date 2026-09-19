@@ -77,6 +77,57 @@ final class SocketNativeEngineTest: XCTestCase {
         transport.onEvent?(.message(.text(handshake))); drain(engine)
     }
 
+    func testMalformedOpenPacketsFailOnceWithoutOpening() {
+        for packet in ["0not-json", "0{}", "0{\"sid\":\"\"}", "0{\"sid\":42}"] {
+            let (engine, client, transport) = make()
+            transport.onEvent?(.opened(protocol: nil)); drain(engine)
+            transport.onEvent?(.message(.text(packet))); drain(engine)
+            engine.engineQueue.sync {
+                XCTAssertTrue(engine.closed, packet)
+                XCTAssertEqual(client.opens, 0, packet)
+                XCTAssertEqual(client.errors.count, 1, packet)
+            }
+        }
+    }
+
+    func testMissingUpgradeListOpensAndBinaryAfterCloseIsIgnored() {
+        let (engine, client, transport) = make()
+        transport.onEvent?(.opened(protocol: nil)); drain(engine)
+        transport.onEvent?(.message(.text("0{\"sid\":\"x\",\"pingInterval\":25000,\"pingTimeout\":20000}")))
+        drain(engine)
+        engine.engineQueue.sync { XCTAssertEqual(client.opens, 1) }
+        engine.disconnect(reason: "test"); drain(engine)
+        engine.engineQueue.sync {
+            engine.parseEngineData(Data([1, 2]))
+            XCTAssertTrue(client.binary.isEmpty)
+        }
+    }
+
+    func testConnectingConnectedEngineClosesOldConnectionAndStartsFreshTransport() {
+        let (engine, client, transport) = make()
+        open(engine, transport)
+        engine.connect(); drain(engine)
+        engine.engineQueue.sync {
+            XCTAssertEqual(client.closes, ["transport close"])
+            XCTAssertEqual(transport.connects, 2)
+            XCTAssertFalse(engine.connected)
+            XCTAssertEqual(engine.sid, "")
+        }
+        open(engine, transport)
+        engine.engineQueue.sync { XCTAssertEqual(client.opens, 2) }
+        engine.disconnect(reason: "test"); drain(engine)
+    }
+
+    func testWebSocketWriteWithoutTransportStillCompletesExactlyOnce() {
+        let client = NativeEngineClient()
+        let engine = SocketEngine(client: client, url: url, config: [])
+        let completed = expectation(description: "unsent completion")
+        engine.sendWebSocketMessage("message", withType: .message, withData: []) { completed.fulfill() }
+        wait(for: [completed], timeout: 1)
+        drain(engine)
+        engine.engineQueue.sync { XCTAssertTrue(client.messages.isEmpty) }
+    }
+
     func testApplicationTrafficCannotRefreshTheServerHeartbeatDeadline() {
         let (engine, client, transport) = make()
         var now = DispatchTime.now()

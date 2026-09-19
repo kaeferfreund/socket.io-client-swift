@@ -58,7 +58,8 @@ final class EngineRemainingParityE2ETest: XCTestCase {
     }
 
     /// One raw send must produce exactly one echo, preserving type, bytes and order.
-    private func roundTrip(_ packets: [EngineWebSocketMessage], afterUpgrade: Bool = false) {
+    private func roundTrip(_ packets: [EngineWebSocketMessage], afterUpgrade: Bool = false,
+                           onOpen: @escaping () -> Void = {}) {
         let expected = packets
         let received = expectation(description: "all raw Engine.IO packets echoed")
         received.expectedFulfillmentCount = expected.count
@@ -80,7 +81,7 @@ final class EngineRemainingParityE2ETest: XCTestCase {
                 actual.append(packet); received.fulfill()
             }
         }
-        if !afterUpgrade { client.opened = send }
+        client.opened = { onOpen(); if !afterUpgrade { send() } }
         engine.connect()
         wait(for: [received], timeout: 10)
         XCTAssertEqual(actual, expected)
@@ -266,11 +267,12 @@ final class EngineRemainingParityE2ETest: XCTestCase {
         try make([.transports([first, second]), .tryAllTransports(true)],
                  environment: ["DENY_TRANSPORT": first.rawValue])
         client.closed = { reason, _ in XCTFail("Unexpected intermediate close: \(reason)") }
-        roundTrip([.text("fallback succeeded")])
-        engine.engineQueue.sync {
-            XCTAssertTrue(engine.connected)
-            XCTAssertEqual(engine.polling, second == .polling)
-        }
+        roundTrip([.text("fallback succeeded")], onOpen: { [self] in
+            engine.engineQueue.sync {
+                XCTAssertTrue(engine.connected)
+                XCTAssertEqual(engine.polling, second == .polling)
+            }
+        })
         let requests = try XCTUnwrap(snapshot()["requests"] as? [[String: Any]])
         XCTAssertTrue((requests.first?["url"] as? String)?.contains("transport=" + first.rawValue) == true)
         XCTAssertTrue(requests.contains { ($0["url"] as? String)?.contains("transport=" + second.rawValue) == true })

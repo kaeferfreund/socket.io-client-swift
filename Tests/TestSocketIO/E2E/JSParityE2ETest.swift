@@ -482,21 +482,47 @@ final class JSParityE2ETest: XCTestCase {
 
     // MARK: socket.ts — "doesn't fire a connect_error event when the connection is already established"
 
-    /// A transport that drops under an established connection is a disconnect,
-    /// not a connection error. Reporting it as an error is what makes an app
-    /// tell the user the server is unreachable when it is merely reconnecting.
+    /// The JS assertion concerns connect_error, not Swift's runtime .error
+    /// diagnostic. URLSession may report a native receive failure when the
+    /// server drops the transport; that detail must not be suppressed just to
+    /// satisfy this test. The drop must still disconnect and reconnect once.
     func testNoErrorEventWhenAnEstablishedConnectionDrops() throws {
         let manager = makeManager(.reconnectWait(1))
         let socket = connect(manager.socket(forNamespace: "/"))
+        defer { socket.removeAllHandlers() }
 
-        var errors = [[Any]]()
-        socket.on(clientEvent: .error) { data, _ in errors.append(data) }
-        socket.on(clientEvent: .connectError) { data, _ in errors.append(data) }
+        var connectErrors = [[Any]]()
+        var lifecycle = [String]()
+        var disconnectCount = 0
+        var connectCount = 0
+        let disconnected = expectation(description: "transport disconnected")
+        let reconnected = expectation(description: "namespace reconnected")
+        socket.on(clientEvent: .connectError) { data, _ in connectErrors.append(data) }
+        socket.on(clientEvent: .disconnect) { data, _ in
+            lifecycle.append("disconnect")
+            disconnectCount += 1
+            XCTAssertTrue(["transport close", "transport error"].contains(data.first as? String ?? ""))
+            if disconnectCount == 1 { disconnected.fulfill() }
+        }
+        socket.on(clientEvent: .reconnect) { _, _ in lifecycle.append("reconnect") }
+        socket.on(clientEvent: .connect) { _, _ in
+            lifecycle.append("connect")
+            connectCount += 1
+            if connectCount == 1 { reconnected.fulfill() }
+        }
 
         try killTransport(ofSocketWithId: XCTUnwrap(socket.sid))
-        settle(3)
+        wait(for: [disconnected, reconnected], timeout: 15, enforceOrder: true)
+        // A real round trip proves that the replacement connection is usable
+        // and provides a processing barrier instead of the old fixed sleep.
+        XCTAssertEqual(try serverSocketId(for: socket), socket.sid)
 
-        XCTAssertTrue(errors.isEmpty, "A dropped transport must surface as a disconnect: \(errors)")
+        XCTAssertTrue(connectErrors.isEmpty, "An established transport drop is not a connect_error: \(connectErrors)")
+        XCTAssertEqual(lifecycle, ["disconnect", "reconnect", "connect"])
+        XCTAssertEqual(disconnectCount, 1)
+        XCTAssertEqual(connectCount, 1)
+        XCTAssertEqual(socket.status, .connected)
+        XCTAssertTrue(socket.active)
     }
 
     // MARK: connection.ts — "should reconnect manually"

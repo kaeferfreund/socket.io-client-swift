@@ -54,15 +54,21 @@ class SocketEngineTest: XCTestCase {
     }
 
     func testEngineDoesErrorOnUnknownTransport() {
+        // setTestable() changes status only. Engine events require the
+        // subscription that a real connect() establishes through active.
+        socket.setTestActive(true)
+        manager.reconnects = false
         let finalExpectation = expectation(description: "Unknown Transport")
 
         socket.on("error") {data, ack in
-            if let error = data[0] as? String, error == "Unknown transport" {
+            if let error = data.first as? String, error == "Unknown transport" {
                 finalExpectation.fulfill()
             }
         }
 
-        engine.parseEngineMessage("{\"code\": 0, \"message\": \"Unknown transport\"}")
+        engine.engineQueue.sync {
+            engine.parseEngineMessage("{\"code\": 0, \"message\": \"Unknown transport\"}")
+        }
         waitForExpectations(timeout: 3, handler: nil)
     }
 
@@ -71,13 +77,17 @@ class SocketEngineTest: XCTestCase {
     /// error"}`, which `_onPacket` routes through `_onError` → `_onClose
     /// ("transport error")`. Reporting the error without closing is not enough.
     func testEngineDoesErrorOnUnknownMessage() {
+        socket.setTestActive(true)
+        manager.reconnects = false
         let finalExpectation = expectation(description: "Engine Errors")
 
         socket.on("error") {data, ack in
             finalExpectation.fulfill()
         }
 
-        engine.parseEngineMessage("afafafda")
+        engine.engineQueue.sync {
+            engine.parseEngineMessage("afafafda")
+        }
         waitForExpectations(timeout: 3, handler: nil)
         engine.engineQueue.sync {
             XCTAssertTrue(engine.closed)

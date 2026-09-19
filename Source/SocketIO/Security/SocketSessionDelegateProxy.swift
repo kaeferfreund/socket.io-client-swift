@@ -9,10 +9,17 @@ import Security
 /// Intercepts trust and lifecycle callbacks without replacing the internal
 /// delegate. Server-trust challenges are reserved for the configured policy;
 /// an external delegate cannot bypass hostname verification or configured pins.
-internal class SocketSessionDelegateProxy: NSObject, URLSessionTaskDelegate {
+internal class SocketSessionDelegateProxy: NSObject, URLSessionDataDelegate {
     internal let tlsConfiguration: SocketTLSConfiguration
     internal weak var forwardingDelegate: URLSessionDelegate?
     internal var onInvalidation: ((URLSession, Error?) -> Void)?
+
+    /// Bodies being accumulated under a byte cap, keyed by task identifier.
+    /// Only populated when `.bufferLimits(maximumPollingResponseBytes:)` is
+    /// configured; without it the engine keeps using the completion-handler
+    /// task form, whose body the URL loading system delivers whole.
+    private var boundedBodies = [Int: SocketBoundedBody]()
+    private let boundedBodyLock = NSLock()
 
     internal init(tlsConfiguration: SocketTLSConfiguration,
                   forwardingDelegate: URLSessionDelegate?) {
@@ -107,11 +114,92 @@ internal class SocketSessionDelegateProxy: NSObject, URLSessionTaskDelegate {
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        finishBoundedBody(for: task.taskIdentifier, error: error)
         #if canImport(ObjectiveC)
         (forwardingDelegate as? URLSessionTaskDelegate)?.urlSession?(session, task: task, didCompleteWithError: error)
         #else
         (forwardingDelegate as? URLSessionTaskDelegate)?.urlSession(session, task: task, didCompleteWithError: error)
         #endif
+    }
+
+    // MARK: Gate R1 — bounded incoming polling body
+
+    /// Registers a bounded accumulator for `task`. Must be called before the
+    /// task is resumed.
+    internal func boundBody(of task: URLSessionTask, to limit: Int,
+                            completion: @escaping (Data?, URLResponse?, Error?) -> Void) {
+        boundedBodyLock.lock()
+        boundedBodies[task.taskIdentifier] = SocketBoundedBody(limit: limit, completion: completion)
+        boundedBodyLock.unlock()
+    }
+
+    /// Refuses an announced `Content-Length` above the cap before any body
+    /// byte is transferred.
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        boundedBodyLock.lock()
+        guard var body = boundedBodies[dataTask.taskIdentifier] else {
+            boundedBodyLock.unlock()
+            completionHandler(.allow)
+
+            return
+        }
+
+        body.response = response
+        let announced = response.expectedContentLength
+        if announced > 0 && announced > Int64(body.limit) {
+            body.overflow = SocketBufferLimitError(buffer: .pollingResponse, limit: body.limit,
+                                                   attempted: Int(clamping: announced), measuringBytes: true)
+        }
+        boundedBodies[dataTask.taskIdentifier] = body
+        let refused = body.overflow != nil
+        boundedBodyLock.unlock()
+
+        completionHandler(refused ? .cancel : .allow)
+    }
+
+    /// Cancels a chunked response as soon as the accumulated bytes cross the
+    /// cap, so an unannounced oversized body is never fully retained.
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        boundedBodyLock.lock()
+        guard var body = boundedBodies[dataTask.taskIdentifier], body.overflow == nil else {
+            boundedBodyLock.unlock()
+
+            return
+        }
+
+        if body.data.count + data.count > body.limit {
+            body.overflow = SocketBufferLimitError(buffer: .pollingResponse, limit: body.limit,
+                                                   attempted: body.data.count + data.count, measuringBytes: true)
+            body.data = Data()
+            boundedBodies[dataTask.taskIdentifier] = body
+            boundedBodyLock.unlock()
+            dataTask.cancel()
+
+            return
+        }
+
+        body.data.append(data)
+        boundedBodies[dataTask.taskIdentifier] = body
+        boundedBodyLock.unlock()
+    }
+
+    private func finishBoundedBody(for identifier: Int, error: Error?) {
+        boundedBodyLock.lock()
+        guard let body = boundedBodies.removeValue(forKey: identifier) else {
+            boundedBodyLock.unlock()
+
+            return
+        }
+        boundedBodyLock.unlock()
+
+        if let overflow = body.overflow {
+            // The cancellation this proxy issued is reported as the overflow,
+            // not as a generic URL error.
+            body.completion(nil, body.response, overflow)
+        } else {
+            body.completion(error == nil ? body.data : nil, body.response, error)
+        }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
@@ -120,6 +208,20 @@ internal class SocketSessionDelegateProxy: NSObject, URLSessionTaskDelegate {
         #else
         (forwardingDelegate as? URLSessionTaskDelegate)?.urlSession(session, task: task, didFinishCollecting: metrics)
         #endif
+    }
+}
+
+/// One polling response body accumulated under a byte cap.
+private struct SocketBoundedBody {
+    let limit: Int
+    let completion: (Data?, URLResponse?, Error?) -> Void
+    var data = Data()
+    var response: URLResponse?
+    var overflow: SocketBufferLimitError?
+
+    init(limit: Int, completion: @escaping (Data?, URLResponse?, Error?) -> Void) {
+        self.limit = limit
+        self.completion = completion
     }
 }
 

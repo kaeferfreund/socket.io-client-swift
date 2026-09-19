@@ -48,6 +48,8 @@ extension Dictionary where Key == String, Value == Any {
             return .parserOptions(options)
         case let ("webSocketOptions", options as SocketWebSocketOptions):
             return .webSocketOptions(options)
+        case let ("bufferLimits", limits as SocketBufferLimits):
+            return .bufferLimits(limits)
         case let ("connectTimeout", timeout as Double):
             return .connectTimeout(timeout)
         case let ("useCustomEngine", enable as Bool), let ("customEngine", enable as Bool):
@@ -104,6 +106,8 @@ extension Dictionary where Key == String, Value == Any {
             return .invalidConfiguration("The version option was removed. Only Socket.IO 4.x (Engine.IO 4) is supported; remove version from configuration.")
         case ("parserOptions", _):
             return .invalidConfiguration("invalid value for parserOptions; expected SocketParserOptions")
+        case ("bufferLimits", _):
+            return .invalidConfiguration("invalid value for bufferLimits; expected SocketBufferLimits")
         case ("security", _), ("secure", _), ("selfSigned", _), ("sessionDelegate", _),
              ("enableSOCKSProxy", _), ("compress", _), ("webSocketOptions", _),
              ("useCustomEngine", _), ("customEngine", _):

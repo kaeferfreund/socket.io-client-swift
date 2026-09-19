@@ -68,11 +68,11 @@ final class SocketQueryOptionTest: XCTestCase {
         XCTAssertEqual(engine.urlPolling.query, "transport=polling&b64=1&e=f&EIO=4")
     }
 
-    /// An empty `connectParams` is no `query` option at all, so the URL wins.
-    func testEmptyConnectParamsFallBackToTheURLQuery() {
+    /// An explicit empty query is truthy in JS and replaces the URL query.
+    func testEmptyConnectParamsReplaceTheURLQuery() {
         let engine = self.engine(url: "http://localhost/?c=d", .connectParams([:]))
 
-        XCTAssertEqual(engine.urlPolling.query, "transport=polling&b64=1&c=d&EIO=4")
+        XCTAssertEqual(engine.urlPolling.query, "transport=polling&b64=1&EIO=4")
     }
 
     func testNoQueryAnywhereLeavesTheEngineParametersAlone() {

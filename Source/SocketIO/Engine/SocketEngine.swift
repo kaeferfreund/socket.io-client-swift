@@ -48,6 +48,9 @@ open class SocketEngine: NSObject,
     internal var pollingSessionConfigurationFactory: () -> URLSessionConfiguration = { .default }
     private var tlsConfiguration: SocketTLSConfiguration = .systemDefault
     private var webSocketOptions = SocketWebSocketOptions()
+    /// Pipeline-wide resource policy; only `maximumPollingResponseBytes` is
+    /// enforced at this layer. Unlimited by default, like the JS client.
+    internal private(set) var bufferLimits = SocketBufferLimits.unlimited
     private var configurationError: String?
 
     /// The connect parameters sent during a connect.
@@ -434,8 +437,8 @@ open class SocketEngine: NSObject,
             urlWebSocket.scheme = "ws"
         }
 
-        if let connectParams = self.connectParams, !connectParams.isEmpty {
-            for (key, value) in connectParams {
+        if let connectParams = self.connectParams {
+            for (key, value) in connectParams.sorted(by: { $0.key < $1.key }) {
                 let keyEsc = key.urlEncode()!
                 let valueEsc = "\(value)".urlEncode()!
 
@@ -447,25 +450,17 @@ open class SocketEngine: NSObject,
             queryString += "&" + urlQuery
         }
 
-        urlWebSocket.percentEncodedQuery = "transport=websocket" + queryString
-        urlPolling.percentEncodedQuery = "transport=polling&b64=1" + queryString
-
-        // EIO is reserved. Ignore user overrides without decoding/re-encoding
-        // unrelated query values (notably '+', '/', ':' and credentials).
-        do {
-            var query = (urlWebSocket.percentEncodedQueryItems ?? []).filter {
-                $0.name.removingPercentEncoding != "EIO"
-            }
-            query.append(URLQueryItem(name: "EIO", value: "4"))
-            urlWebSocket.percentEncodedQueryItems = query
+        // Engine.IO owns these keys. Inspect decoded *names*, never substring
+        // matches (e.g. token=EIO must not suppress the protocol version).
+        let reserved: Set<String> = ["EIO", "transport", "sid", "b64"]
+        let parameters = queryString.split(separator: "&", omittingEmptySubsequences: true).filter { part in
+            let name = String(part.split(separator: "=", maxSplits: 1,
+                                         omittingEmptySubsequences: false)[0])
+            return !reserved.contains(name.removingPercentEncoding ?? name)
         }
-        do {
-            var query = (urlPolling.percentEncodedQueryItems ?? []).filter {
-                $0.name.removingPercentEncoding != "EIO"
-            }
-            query.append(URLQueryItem(name: "EIO", value: "4"))
-            urlPolling.percentEncodedQueryItems = query
-        }
+        let suffix = parameters.isEmpty ? "" : "&" + parameters.joined(separator: "&")
+        urlWebSocket.percentEncodedQuery = "transport=websocket" + suffix + engineIOParam
+        urlPolling.percentEncodedQuery = "transport=polling&b64=1" + suffix + engineIOParam
 
         return (urlPolling.url!, urlWebSocket.url!)
     }
@@ -939,6 +934,8 @@ open class SocketEngine: NSObject,
                 tlsConfiguration = policy
             case let .webSocketOptions(options):
                 webSocketOptions = options
+            case let .bufferLimits(limits):
+                bufferLimits = limits
             case let .invalidConfiguration(reason):
                 configurationError = reason
             case .compress:

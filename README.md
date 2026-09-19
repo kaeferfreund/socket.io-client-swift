@@ -401,3 +401,7 @@ transport and security APIs.
 
 Based on [socketio/socket.io-client-swift](https://github.com/socketio/socket.io-client-swift).
 Licensed under [MIT](LICENSE).
+
+### Client parity follow-up
+
+See [the current parity follow-up](Documentation/ClientParityFollowup.md) for the queue-turn and acknowledgement fixes, explicit empty-query semantics, executable test contracts and remaining limitations. Modern multi-listeners now observe owner-queue changes immediately; modern `addAnyListener` excludes internal lifecycle events, while legacy `onAny` is unchanged.

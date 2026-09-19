@@ -196,6 +196,8 @@ extension SocketEnginePollable {
         // Capture the concrete attempt's barrier, not the engine's future one.
         let postGroup = req.httpMethod == "POST" ? (self as? SocketEngine)?.pollingPostGroup : nil
         postGroup?.enter()
+
+        let engine = self as? SocketEngine
         let queue = engineQueue
         let delivery = SocketUncheckedSendableBox({ [weak self, weak requestSession]
             (data: Data?, response: URLResponse?, error: Error?) in
@@ -203,10 +205,27 @@ extension SocketEnginePollable {
                   self.session === requestSession, !self.closed, !self.invalidated else { return }
             callback(data, response, error)
         })
-        requestSession.dataTask(with: req) { data, response, error in
+        let deliver: @Sendable (Data?, URLResponse?, Error?) -> Void = { data, response, error in
             defer { postGroup?.leave() }
             queue.socketAsync { delivery.value(data, response, error) }
-        }.resume()
+        }
+
+        // Gate R1: with a configured cap the body is accumulated by the session
+        // delegate, which can refuse an announced `Content-Length` before any
+        // byte arrives and cancel a chunked body mid-transfer. Without one the
+        // request keeps the measured completion-handler form unchanged — the
+        // URL loading system does not call the data-delegate methods for a task
+        // created with a completion handler.
+        let bodyLimit = engine?.bufferLimits.maximumPollingResponseBytes ?? .max
+        if bodyLimit != .max, let proxy = requestSession.delegate as? SocketSessionDelegateProxy {
+            let task = requestSession.dataTask(with: req)
+            proxy.boundBody(of: task, to: bodyLimit, completion: deliver)
+            task.resume()
+
+            return
+        }
+
+        requestSession.dataTask(with: req, completionHandler: deliver).resume()
     }
 
     func doLongPoll(for req: URLRequest) {

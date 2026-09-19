@@ -163,6 +163,12 @@ public enum SocketIOClientOption : ClientOption {
     /// Complete incoming packet, attachment-count and nesting limits for all transports.
     case parserOptions(SocketParserOptions)
 
+    /// Pipeline-wide buffer/queue limits: send buffer, retry queue, recovery
+    /// replay, engine-to-manager handoff, polling response body and binary
+    /// reconstruction deadline. Everything is unlimited by default, which is
+    /// the JavaScript behaviour.
+    case bufferLimits(SocketBufferLimits)
+
     /// Carries a dictionary conversion failure to connection validation. No
     /// network request is started when this option is present.
     case invalidConfiguration(String)
@@ -179,6 +185,8 @@ public enum SocketIOClientOption : ClientOption {
             description = "webSocketOptions"
         case .parserOptions:
             description = "parserOptions"
+        case .bufferLimits:
+            description = "bufferLimits"
         case .invalidConfiguration:
             description = "invalidConfiguration"
         case .ackTimeout:
@@ -250,6 +258,8 @@ public enum SocketIOClientOption : ClientOption {
             value = options
         case let .parserOptions(options):
             value = options
+        case let .bufferLimits(limits):
+            value = limits
         case let .invalidConfiguration(reason):
             value = reason
         case let .ackTimeout(timeout):

@@ -181,6 +181,7 @@ final class SocketTimedEmitterCallbackTest: XCTestCase {
         let exp = expectation(description: ".timeout fires next tick")
         socket.timeout(after: -1).emit("ping") { err, _ in
             XCTAssertEqual(err as? SocketAckError, .timeout)
+            XCTAssertTrue(data.isEmpty)
             exp.fulfill()
         }
         wait(for: [exp], timeout: 1)
@@ -476,10 +477,9 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
 
 // MARK: - Task 6: race / atomicity stress + storage isolation
 //
-// `testTimerAckRaceFiresOnce` is a 200-iteration stress that pits a
-// sub-millisecond timer against an off-queue handleAck injection on the same
-// id. The TimedAckEntry.fired flag (queue-protected, no lock) must drop the
-// loser deterministically, so the user callback fires exactly once.
+// `testTimerAckRaceFiresOnce` is a 200-iteration stress that pits a ~1ms timer
+// against an off-queue handleAck injection on the same id. Entry removal on
+// handleQueue must drop the loser so the user callback fires exactly once.
 //
 // `testLegacyEmitWithAckTimingOutNotClearedOnDisconnect` regression-pins the
 // documented divergence: legacy emitWithAck.timingOut(after:) does NOT have a
@@ -487,10 +487,10 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
 // path. clearTimedAcks(reason: .disconnected) only drains the new timed-ack
 // storage, so the legacy ack stays orphaned on disconnect — fires == 0.
 //
-// Iteration count was lowered from the plan's 1000 → 200 to keep the test
-// under one second of wall clock on CI. 200 is still well above the threshold
-// where any double-fire bug would surface (a single double-fire produces an
-// XCTest "expected 1 fulfillment, got 2" failure).
+// Each race waits for every injected operation, including the losing path,
+// to finish on handleQueue before inspecting its counter. A sleep, or a queue
+// drain before an asyncAfter block has enqueued its work, cannot guarantee
+// completion and lets a delayed contender outlive the test's fixtures.
 
 final class SocketTimedEmitterRaceTest: XCTestCase {
     private var manager: SocketManager!
@@ -514,103 +514,115 @@ final class SocketTimedEmitterRaceTest: XCTestCase {
     }
 
     func testTimerAckRaceFiresOnce() {
+        // Capture the fixtures, not self: delayed work must never read fields
+        // that tearDown() can clear, even if an expectation times out.
+        let manager = self.manager!, socket = self.socket!
         // Tight race: ~1ms timer vs ~1ms async handleAck injection from a
-        // background queue. The TimedAckEntry.fired flag must arbitrate so
-        // the user callback runs exactly once across all iterations.
+        // background queue. Entry removal must arbitrate so the user callback
+        // runs exactly once across all iterations.
         let iterations = 200
         for _ in 0..<iterations {
             let counter = FireCounter()
             let exp = expectation(description: "single fire")
+            exp.assertForOverFulfill = true
+            let ackProcessed = expectation(description: "racing server ack processed")
             socket.timeout(after: 0.001).emit("ping") { _, _ in
                 counter.bump()
-                if counter.count == 1 { exp.fulfill() }
+                exp.fulfill()
             }
             // Capture the allocated ack id by reading currentAck on
             // handleQueue AFTER the emit's async registration runs. This
             // serialization is what makes the next handleAck call target the
             // right id rather than racing the allocator.
-            var ackId = -1
-            manager.handleQueue.sync { ackId = self.socket.currentAck }
+            let ackId = manager.handleQueue.sync { socket.currentAck }
             // Race: server-ack arrives at ~the same time as the timer.
-            DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) { [weak self] in
-                self?.manager.handleQueue.socketAsync {
-                    self?.socket.handleAck(ackId, data: ["x"])
+            DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) {
+                manager.handleQueue.socketAsync {
+                    socket.handleAck(ackId, data: ["x"])
+                    ackProcessed.fulfill()
                 }
             }
-            wait(for: [exp], timeout: 1)
-            // Brief drain so any latent double-fire (timer + ack both winning)
-            // would still bump the counter past 1 before we assert.
-            Thread.sleep(forTimeInterval: 0.005)
-            XCTAssertEqual(counter.count, 1, "must fire exactly once")
+            // The winning callback alone does not mean the losing ack ran.
+            wait(for: [exp, ackProcessed], timeout: 1)
+            manager.handleQueue.sync {
+                XCTAssertEqual(counter.count, 1, "must fire exactly once")
+                XCTAssertFalse(socket.ackHandlers.pendingTimedAckIDs.contains(ackId))
+            }
         }
     }
 
     func testCancelTimerRaceFiresOnce() {
+        let manager = self.manager!, socket = self.socket!
         // Spec lines 801-802: cancel-vs-timer atomic stress. The timer fires at
         // ~1ms; cancelTimedAck(fireWith:) is dispatched at the same deadline
-        // from a background queue. The TimedAckEntry.fired flag must arbitrate
-        // so the user callback runs exactly once across all iterations.
+        // from a background queue. Entry removal must arbitrate so the user
+        // callback runs exactly once across all iterations.
         for _ in 0..<200 {
-            var fires = 0
+            let counter = FireCounter()
             let exp = expectation(description: "single fire (cancel vs timer)")
+            exp.assertForOverFulfill = true
+            let cancelProcessed = expectation(description: "racing cancellation processed")
             let id: Int = manager.handleQueue.sync { socket.allocateAckId() }
             manager.handleQueue.sync {
                 socket.ackHandlers.addTimedAck(id, on: manager.handleQueue,
                                                callback: { _, _ in
-                                                   fires += 1
-                                                   if fires == 1 { exp.fulfill() }
+                                                   counter.bump()
+                                                   exp.fulfill()
                                                },
                                                timeout: 0.001)
             }
-            // Capture the objects, not `self`: reading `self.manager` from a
-            // background thread races with `tearDown()` under Thread Sanitizer.
-            let manager = self.manager!, socket = self.socket!
             DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) {
                 manager.handleQueue.socketAsync {
                     socket.ackHandlers.cancelTimedAck(id, fireWith: SocketAckError.disconnected)
+                    cancelProcessed.fulfill()
                 }
             }
-            wait(for: [exp], timeout: 1)
-            Thread.sleep(forTimeInterval: 0.005)
-            manager.handleQueue.sync {}
-            XCTAssertEqual(fires, 1, "cancel-vs-timer must fire exactly once")
+            wait(for: [exp, cancelProcessed], timeout: 1)
+            manager.handleQueue.sync {
+                XCTAssertEqual(counter.count, 1, "cancel-vs-timer must fire exactly once")
+                XCTAssertFalse(socket.ackHandlers.pendingTimedAckIDs.contains(id))
+            }
         }
     }
 
     func testCancelAckRaceFiresOnce() {
+        let manager = self.manager!, socket = self.socket!
         // Spec lines 801-802: cancel-vs-server-ack atomic stress. A cancel
         // (fireWith: .disconnected) and a server ack injection both target the
-        // same id at ~1ms. The TimedAckEntry.fired flag must drop the loser so
-        // the user callback runs exactly once.
+        // same id at ~1ms. Entry removal must drop the loser so the user
+        // callback runs exactly once.
         for _ in 0..<200 {
-            var fires = 0
+            let counter = FireCounter()
             let exp = expectation(description: "single fire (cancel vs server-ack)")
+            exp.assertForOverFulfill = true
+            let contendersProcessed = expectation(description: "both racing operations processed")
+            contendersProcessed.expectedFulfillmentCount = 2
             let id: Int = manager.handleQueue.sync { socket.allocateAckId() }
             manager.handleQueue.sync {
                 socket.ackHandlers.addTimedAck(id, on: manager.handleQueue,
                                                callback: { _, _ in
-                                                   fires += 1
-                                                   if fires == 1 { exp.fulfill() }
+                                                   counter.bump()
+                                                   exp.fulfill()
                                                },
                                                timeout: 60)
             }
-            // Capture the objects, not `self`: reading `self.manager` from a
-            // background thread races with `tearDown()` under Thread Sanitizer.
-            let manager = self.manager!, socket = self.socket!
             DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) {
                 manager.handleQueue.socketAsync {
                     socket.ackHandlers.cancelTimedAck(id, fireWith: SocketAckError.disconnected)
+                    contendersProcessed.fulfill()
                 }
             }
             DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) {
                 manager.handleQueue.socketAsync {
                     socket.handleAck(id, data: ["x"])
+                    contendersProcessed.fulfill()
                 }
             }
-            wait(for: [exp], timeout: 1)
-            Thread.sleep(forTimeInterval: 0.005)
-            manager.handleQueue.sync {}
-            XCTAssertEqual(fires, 1, "cancel-vs-ack must fire exactly once")
+            wait(for: [exp, contendersProcessed], timeout: 1)
+            manager.handleQueue.sync {
+                XCTAssertEqual(counter.count, 1, "cancel-vs-ack must fire exactly once")
+                XCTAssertFalse(socket.ackHandlers.pendingTimedAckIDs.contains(id))
+            }
         }
     }
 

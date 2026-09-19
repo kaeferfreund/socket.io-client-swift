@@ -1,0 +1,22 @@
+name: PR18 review-fix validation
+on:
+  push:
+    branches: [fix/coderabbit-findings-audit]
+    paths: [.github/workflows/review-fix-validation.yml, scripts/_review_fix.py]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Export exact source for review
+        run: git archive --format=tar HEAD > "$RUNNER_TEMP/review-source.tar"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: review-source-${{ github.run_id }}
+          path: ${{ runner.temp }}/review-source.tar
+          retention-days: 1

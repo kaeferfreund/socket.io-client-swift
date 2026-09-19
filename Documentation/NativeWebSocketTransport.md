@@ -92,10 +92,10 @@ JavaScript parser. See the
 ## Distribution and release
 
 SPM, CocoaPods and Xcode/Carthage definitions contain no Starscream dependency.
-The podspec points to this fork's development branch with prerelease version
-17.0.0-native.1. No release tag has been created. Before publishing, select and
-create an immutable tag, change the podspec source to that tag, and revalidate.
-Consumers testing this PR should pin its commit rather than a moving branch.
+Version 17.0.0 is prepared in the podspec and framework metadata. The podspec
+references the immutable `v17.0.0` tag, which has not yet been created.
+Publication remains blocked by the checks in [Release17.md](Release17.md).
+Development consumers should explicitly pin the reviewed commit until release.
 
 ## Validation
 

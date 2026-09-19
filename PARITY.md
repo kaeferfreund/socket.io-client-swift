@@ -14,13 +14,16 @@ For this port, parity means matching the supported JavaScript behavior plus
 explicitly reviewed exclusions for features the native API does not offer.
 `unsupported-feature`, `api-difference` and `platform-specific` rows with a
 reason are resolved scope boundaries; they are not passed Swift executions.
-The 43 unsupported-feature rows are explicitly listed in
+The 36 unsupported-feature rows are explicitly listed in
 `JavaScriptParityContracts.json` under `excluded_unsupported_features`:
-compression controls (4), public transport selection/cache APIs (9), and
+compression controls (4), custom per-transport constructors (2), and
 WebTransport/stream framing (30). The validator rejects new unsupported rows
 without a matching reviewed exclusion. `--strict` excludes these reviewed
 boundaries but still fails for supported behavior without certified contracts.
 Existing candidate test pointers therefore still prevent a 100% parity claim.
+Transport selection, fallback and remembered upgrades are now implemented.
+Their seven former exclusions are limited native regressions pending full
+original-scenario verification, not certificates of complete parity.
 
 | Upstream scope | Static runtime test declarations |
 | --- | ---: |

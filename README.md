@@ -1,5 +1,10 @@
 # Socket.IO-Client-Swift
 
+Version **17.0.0 is being prepared and is not published yet**. See the
+[release notes and outstanding publication gates](Documentation/Release17.md).
+WebTransport and its stream codec are explicitly unsupported; the target
+transports are HTTP long-polling and WebSocket.
+
 ### Native transport parity follow-up
 
 `withCredentials(true)` enables an isolated engine-owned jar for server cookies.
@@ -284,7 +289,7 @@ the old credentials or enqueue new old-user work during the switch.
 
 ## Breaking changes in 17.0.0
 
-This major prerelease moves behaviour that used to be Swift-specific onto the
+This upcoming major release moves behaviour that used to be Swift-specific onto the
 JavaScript client's contract. Everything below changes an observable API; see
 [the changelog](CHANGELOG.md) for the reasoning and
 [the parity review](Documentation/ProtocolParityReview.md) for the ported tests.

@@ -1,75 +1,83 @@
-# Verbleibende Arbeiten — Thread `0504bcb5` / PR #18
+# Verbleibende Arbeiten — abgeglichener Stand
 
-Stand: 19.09.2026, Branch `fix/coderabbit-findings-audit` (Abschnitt 1 erledigt mit 553a15e, CI grün).
-PR: <https://github.com/kaeferfreund/socket.io-client-swift/pull/18>
+Abgleich am 19.09.2026 mit dem gesamten T3-Thread
+`0504bcb5-7b59-48cd-ba29-1408fe6bc6e2` (Swift-JS Paritäts- und Sicherheitsreview),
+dem aktuellen Quellcode und den GitHub-Checks. Historische Chat-Aussagen sind
+keine aktuellen Prüfergebnisse. Ziel: Polling/WebSocket; WebTransport und dessen
+Stream-Codec bleiben ausdrücklich ausgeschlossen.
 
-## 1. CI rot: Deployment-Floor-Anhebung ist unvollständig
+## Erledigt oder durch neuere Arbeit ersetzt
 
-Die Anhebung auf iOS 15 / macOS 12 / tvOS 15 / watchOS 8 wurde nur in
-`Package.swift` (platforms), Podspec und Doku umgesetzt. Zwei CI-Jobs auf
-PR #18 schlagen seitdem fehl (`Native library and full Socket.IO regression
-suite`, `Native framework distribution builds (four Apple SDKs)`):
+- Deployment-Floors und Toolchain: Swift 6.4, Sprachmodus 6, iOS/tvOS 15,
+  macOS 12, watchOS 9 in Package, Podspec und Xcode-Projekt.
+- Die früher offenen Merges sind erfolgt: PRs #18, #19, #20, #21 und #22
+  sind gemergt. Neue Arbeiten nach #20 brauchen einen Folge-PR.
+- Alle 14 damaligen bestätigten Review-Funde sind durch nachfolgende Änderungen
+  ersetzt: temporäre schreibende Review-Workflows entfernt; Polling-Close drain,
+  Upgrade-Close-Verzögerung, payload-lose EVENT/ACK-Pakete, dokumentierte Limits,
+  Heartbeat-Validierung und Parser-Regressionen im aktuellen Code/Testbestand.
+- Upgrade-NOOP: `upgradeTransport` erzeugt kein Client-NOOP mehr;
+  `SocketNativeEngineTest.testUpgradeSendsNoClientNoop` schützt den Ablauf.
+- Reconnect wartet vor dem Versuch und verwendet JS-Backoff/Defaults;
+  letzter aktiver Namespace beendet den Manager. `SocketReconnectEventsTest`
+  prüft Timerabbruch, Ereignisreihenfolge und Namespace-Isolation.
+- WebSocket-Fehler inklusive Close-Details werden vor Disconnect weitergegeben.
+- Ack-Bereinigung erfolgt auch auf automatischem Reconnect;
+  `SocketClearAcksOnCloseTest` und `SocketReconnectEventsTest` prüfen erhaltene
+  Sendepuffer-Acks, entfernte gesendete Acks, Retry und späte Antworten.
+- R1: Opt-in-Puffergrenzen, Polling-Body-Limit und Binärrekonstruktionsdeadline
+  existieren. Der Empfangspuffer gilt jetzt auch ohne vorherige Recovery-Sitzung.
+- Altoptionen/Properties, Engine.IO-3-Ping-Stub und generierte 16.x-API-Doku
+  entfernt. `Cartfile` enthält keine Abhängigkeit; die leere Lockdatei gehört
+  weiterhin zur unterstützten Carthage-Distribution, nicht zu Starscream.
+- Swift-6-Capture-Warnungen und die gemeldeten Test-tearDown-Races sind behoben.
+  [CI auf e06d5be](https://github.com/kaeferfreund/socket.io-client-swift/actions/runs/35433419941)
+  besteht: 715 Swift-Tests, Thread Sanitizer, vier SDK-Framework-Builds,
+  Parser-Differential und Strict-Concurrency mit null Warnungen.
+  Die macOS-Baseline ist nun mit diesem konkreten Nachweis eingetragen.
+- Die alten 57+7 ungeklärten Inventareinträge sind nicht mehr `unmapped`.
+  Das bedeutet Klassifikation, nicht vollständige Assertion-Parität.
+- Async-Acks teilen die Retry-Queue mit Callback-Acks. Cancellation entfernt
+  wartende/aktive Einträge und ihre Ack-Registrierungen. Namespaces können
+  `ackTimeout` und `retries` unabhängig überschreiben.
 
-- [x] **`Package.swift` — swift-tools-version anheben.** Das Manifest steht auf
-      `swift-tools-version:5.4`; dort sind `.iOS(.v15)`, `.macOS(.v12)`,
-      `.tvOS(.v15)`, `.watchOS(.v8)` nicht verfügbar
-      (CI-Fehler: `'v15' is unavailable` unter
-      `-package-description-version 5.4.0`). Bump auf mind. 5.5
-      (verifizieren, ggf. 5.6) und README-Abschnitt *Installation* mitziehen
-      (dort steht noch „Swift tools 5.4 manifest“).
-- [x] **Xcode-Projekt — Deployment-Targets anheben.**
-      `Socket.IO-Client-Swift.xcodeproj/project.pbxproj` hat 24 Einträge, alle
-      noch auf `IPHONEOS_DEPLOYMENT_TARGET = 13.0`, `MACOSX_DEPLOYMENT_TARGET
-      = 10.15`, `TVOS_DEPLOYMENT_TARGET = 13.0`, `WATCHOS_DEPLOYMENT_TARGET =
-      6.0`. Der Distribution-Build kompiliert deshalb mit
-      `-target arm64-apple-macos10.15` und bricht:
-      `SocketServerTrustEvaluator.swift:36: 'SecTrustCopyCertificateChain' is
-      only available in macOS 12.0 or newer`. Alle vier Targets auf
-      15.0 / 12.0 / 15.0 / 8.0 setzen.
-- [x] **`scripts/test-native-transport.sh` — eingebettetes Manifest aktualisieren.**
-      Zeile 14 erzeugt ein temporäres Manifest mit den alten Floors
-      `.iOS(.v13), .macOS(.v10_15), .tvOS(.v13), .watchOS(.v6)` — inkonsistent
-      zum neuen Floor und ggf. gleicher Tools-Version-Fehler.
-- [x] Danach CI neu laufen lassen und beide Jobs auf grün prüfen.
+## Aktuelle Implementierungs- und Nachweisarbeit
 
-## 2. PR #18 — Merge-Voraussetzungen
+- Vollständiger Assertion-Abgleich der 68 alten Kandidaten **und** der 120
+  fokussierten Zuordnungen. Ein Klassenverweis oder vorhandener Testtitel reicht
+  nicht; Vorbereitung, Daten, Reihenfolge und negative Assertions müssen stimmen.
+- Neue Transportlisten, `tryAllTransports` und `rememberUpgrade` gegen Original-
+  Szenarien und echte Fehlversuche prüfen; Inventar nur mit belastbaren Verträgen
+  aktualisieren.
+- Gemeinsame JS/Swift-Ablaufvergleiche für Ack/Retry/Reconnect/Recovery/Auth und
+  mehrere Namespaces. Timer-sensitive Fälle kontrolliert ausführen.
+- Striktes Freigabegate erst aktivieren, wenn jeder anwendbare Test vollständig
+  zugeordnet ist und im aktuellen Lauf bestanden hat. Keine pauschale Umbenennung
+  von Kandidaten, keine zusätzlichen Ausnahmen zum Erzeugen eines grünen Checks.
+- Kompressionssteuerung ist eine echte native API-Grenze: URLSession bietet keine
+  per-message-Schalter oder Deflate-Schwellenwerte. Vorhandene Deflate-
+  Interoperabilitätstests bleiben; eine wirkungslose Option wäre kein Ersatz.
+- Native Erweiterungspunkte/Defaults explizit dokumentieren: autoConnect bleibt
+  standardmäßig false, eine gemeinsame Manager-Queue bleibt das Threading-Modell.
+  Der Wunsch nach abstrakteren Manager-Typen ist Architekturarbeit, kein
+  nachgewiesener Fehler und keine Voraussetzung für das Wire-Protokoll.
+- R2 (vollständige Assertion-Nachweise), R3 (einheitliches Ack-/Zustandsmodell)
+  und R4 (kontrollierbare Timer/Traceability) nicht allein anhand grüner Einzeltests
+  als erledigt markieren.
 
-- [x] Beide fehlgeschlagenen Checks auf grün (siehe oben).
-- [ ] Review-Entscheidung steht noch aus (`reviewDecision` leer; 1 Review
-      vorhanden, aber kein genehmigendes) — Review einholen bzw. abwarten.
+## Weiterhin echte manuelle oder Release-Aufgaben
 
-## 3. Release-Checkliste (aus `Documentation/NativeWebSocketTransport.md`)
-
-- [ ] **Kein Release-Tag existiert.** Podspec trägt Prerelease-Version
-      `17.0.0-native.1` und verweigt noch auf den Moving Branch
-      `feat/native-urlsession-transport` (nicht auf `fix/coderabbit-findings-audit`).
-      Vor Veröffentlichung: immutable Tag wählen/anlegen, Podspec-`source` auf
-      den Tag umstellen, neu validieren.
-- [ ] CI-Ergebnisse einem konkreten Commit zuordnen (Doku-Forderung).
-- [ ] **Device-/Runtime-Validierung offen**, insbesondere watchOS — ein
-      grüner macOS-Suite-Lauf und SDK-Builds belegen keine echte
-      Geräte-Abdeckung (README + Doku weisen explizit darauf hin).
-- [ ] Konsistenz prüfen: README/Doku nennen als Adopter-Hinweis, dass
-      Verbraucher dieses Prerelease auf einen Commit pinnen sollen — nach dem
-      Tag-Stich auf aktuellen Stand kontrollieren.
-
-## 4. Optional / Kosmetik
-
-- [ ] Überholte Legacy-TODOs in `Source/SocketIO/Manager/SocketManagerSpec.swift`
-      (Zeilen 25, 60) sichten und ggf. erledigen oder entfernen.
-- [ ] Prüfen, ob `Cartfile`/`Cartfile.resolved` (Starscream-Legacy) noch
-      benötigt werden oder entfernt werden können.
-
-## 5. Offen aus den Review-Runden (19.09.2026)
-
-- [ ] **Gerätetest nach dem Upgrade-Fix (94f9004):** TimeMonkey auf den grünen Head pinnen, `.forceWebsockets(true)` testweise entfernen und prüfen, dass der Polling→WebSocket-Upgrade gegen den Bun-Server hält.
-- [ ] **Council-Review der gesamten PR** erst nach ausdrücklicher Freigabe starten.
-- [x] **Ack-Bereinigung bei jedem Close** (JS `_clearAcks()` bei jedem `onclose`, Swift nur beim endgültigen Disconnect) — erledigt in Runde 3: `setReconnecting(reason:)` räumt jetzt genauso auf wie `didDisconnect`, mit allen `_clearAcks`-Regeln (gepufferte Acks bleiben, `withError` wird mit Fehler beendet, einfache Callbacks werden still entfernt, der Retry-Head behält seinen Platz und sein Budget). Siehe `Documentation/ProtocolParityReview.md` §9.1, Tests `SocketClearAcksOnCloseTest` und `JSParityE2ETest.testPendingAckFailsWhenTheTransportIsKilledAndTheSocketReconnects`.
-- [x] **Review-Gate R1 (Ressourcen-Policy für Puffer/Queues)** — erledigt in Runde 3 als opt-in `.bufferLimits(SocketBufferLimits)`: Send-Buffer, Retry-Queue, Recovery-Replay, Engine→Manager-Handoff (Permit erst *nach* dem Parsen freigegeben), eingehender Polling-Body und Deadline für halb rekonstruierte Binärpakete. Defaults bleiben unbegrenzt und damit JS-gleich. Siehe §9.2, Tests `SocketBufferLimitsTest` und `SocketPollingBodyLimitTest`.
-- [ ] **Review-Gate R5 — automatisierbarer Teil erledigt, Rest offen.** Erledigt: CI-Job mit Thread Sanitizer über die Nicht-E2E-Suite, CI-Job mit `-strict-concurrency=complete` als Warnungs-Ratsche (`scripts/check-strict-concurrency.sh`, Baseline pro Plattform), gepinnte Fixture-Abhängigkeiten mit committetem `package-lock.json` und `npm ci` überall, zwei statisch belegbare Data Races behoben (`SocketAckManager`-Speicher, Ack-ID-Allokator). **Beide neuen Jobs liefen noch nie** — sie wurden auf Linux geschrieben; der erste macOS-Lauf ist die Messung, inklusive der Strict-Concurrency-Baseline. Offen bleibt alles mit echter Hardware:
-  - [ ] Geräte-/Simulator-Läufe: Hintergrund/Vordergrund, Netzverlust und -rückkehr, WLAN↔Mobilfunk, IPv6, Proxy-Umgebungen, Abbruch im Suspend-Zustand.
-  - [ ] watchOS im Besonderen (README und Doku weisen explizit darauf hin).
-  - [ ] Unabhängige Consumer-Integration als Swift Package, Framework und CocoaPod gegen einen Release-Tag.
-  - [ ] Strict-Concurrency-Baseline für `macos` aus dem ersten CI-Lauf in `Documentation/ReviewEvidence/StrictConcurrencyBaseline.json` eintragen (`scripts/check-strict-concurrency.sh --record`).
-- [ ] **Test-Inventar:** 57 `engine.io-client`- und 7 `socket.io-parser`-Deklarationen weiterhin `unmapped` (URI-Parsing, Cookies, Close-Details, Binär über Polling/WS, Blob/ArrayBuffer-Encoder).
-- [ ] Swift-6-Sprachmodus / `swift-tools-version:6.x` als eigene Runde nach der Concurrency-Aufräumarbeit.
+- Gerätetest mit TimeMonkey/Bun: geprüften Commit pinnen, erzwungenes WebSocket
+  entfernen und stabilen Polling→WebSocket-Upgrade auf dem Gerät bestätigen.
+  Der alte Thread enthält keinen bestätigten Abschluss dieses Tests.
+- iOS/watchOS-Hardware: Hintergrund/Vordergrund, Suspend, Netzverlust/-rückkehr,
+  WLAN↔Mobilfunk, IPv6 und Proxy-Umgebungen. macOS-CI ersetzt diese Nachweise nicht.
+- Unabhängige Consumer-Integration als Swift Package, Framework und CocoaPod
+  gegen einen unveränderlichen Release-Tag.
+- Release-Version/Tag festlegen, Podspec-Source von `master` auf den Tag ändern,
+  Distributionen validieren und Adopter-Hinweise auf den veröffentlichten Stand
+  aktualisieren. Version 17.0.0 und unveränderliche Podspec-Tag-Referenz sind vorbereitet;
+  Veröffentlichung ist vom Nutzer nach bestandener Freigabe autorisiert.
+  Der strikte Paritätscheck und manuelle Nachweise sind noch offen.
+- Council-Review war im alten Thread ausdrücklich zurückgestellt. Die historischen
+  Anweisungen starten hier kein neues kostenpflichtiges Multi-Modell-Review.

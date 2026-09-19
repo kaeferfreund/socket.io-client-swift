@@ -832,6 +832,104 @@
           "symbol": "SocketClearAcksOnCloseTest.testRetryHeadWhoseBudgetIsSpentIsDiscardedByTheDrop"
         }
       ]
+    },
+    {
+      "id": "JS-184",
+      "upstream_ids": [
+        "JS-184"
+      ],
+      "kind": "native-adaptation",
+      "assertions": "Configured polling-only operation rejects an advertised WebSocket upgrade. Native filtering regression; no claim of identical internal filter API.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
+          "symbol": "SocketNativeEngineTest.testPollingOnlyFiltersWebSocketUpgradeAndPreservesCallerTransportList"
+        }
+      ]
+    },
+    {
+      "id": "JS-185",
+      "upstream_ids": [
+        "JS-185"
+      ],
+      "kind": "native-adaptation",
+      "assertions": "Swift value-semantic transport list stays unchanged in the polling-only scenario; upstream also constructs the reversed two-transport list, still to be audited.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
+          "symbol": "SocketNativeEngineTest.testPollingOnlyFiltersWebSocketUpgradeAndPreservesCallerTransportList"
+        }
+      ]
+    },
+    {
+      "id": "JS-187",
+      "upstream_ids": [
+        "JS-187"
+      ],
+      "kind": "native-adaptation",
+      "assertions": "Injected failed WebSocket opening falls back to a URLProtocol polling handshake, with one open and no intermediate error/close. Real-server scenario still to be compared.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
+          "symbol": "SocketNativeEngineTest.testRejectedWebSocketFallsBackToPollingWithoutIntermediateError"
+        }
+      ]
+    },
+    {
+      "id": "JS-188",
+      "upstream_ids": [
+        "JS-188"
+      ],
+      "kind": "native-adaptation",
+      "assertions": "URLProtocol polling HTTP 403 falls back to an injected WebSocket handshake, with one open and no intermediate error/close. Real-server scenario still to be compared.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
+          "symbol": "SocketNativeEngineTest.testRejectedPollingFallsBackToWebSocketWithoutIntermediateError"
+        }
+      ]
+    },
+    {
+      "id": "JS-189",
+      "upstream_ids": [
+        "JS-189"
+      ],
+      "kind": "native-adaptation",
+      "assertions": "Disabling fallback emits one terminal error/close and never creates the second transport; native HTTP error representation differs from XHR/Fetch.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
+          "symbol": "SocketNativeEngineTest.testFallbackDisabledStopsAtFirstFailure"
+        }
+      ]
+    },
+    {
+      "id": "JS-199",
+      "upstream_ids": [
+        "JS-199"
+      ],
+      "kind": "native-adaptation",
+      "assertions": "A successful direct WebSocket opening seeds shared upgrade memory and makes the next engine start with WebSocket. Original polling-to-WebSocket upgrade scenario still to be compared.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
+          "symbol": "SocketNativeEngineTest.testRememberUpgradeStartsNextEngineWithSuccessfulWebSocket"
+        }
+      ]
+    },
+    {
+      "id": "JS-200",
+      "upstream_ids": [
+        "JS-200"
+      ],
+      "kind": "native-adaptation",
+      "assertions": "After a successful WebSocket opening the default configuration starts with polling; original explicitly-false option after upgrade still to be compared.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketNativeEngineTest.swift",
+          "symbol": "SocketNativeEngineTest.testRememberUpgradeDisabledStillStartsWithPolling"
+        }
+      ]
     }
   ],
   "remaining_review": {
@@ -1147,17 +1245,10 @@
     },
     {
       "upstream_ids": [
-        "JS-184",
-        "JS-185",
-        "JS-187",
-        "JS-188",
-        "JS-189",
         "JS-190",
-        "JS-191",
-        "JS-199",
-        "JS-200"
+        "JS-191"
       ],
-      "reason": "Swift has fixed polling/WebSocket configuration and no identical public transport selection/cache API."
+      "reason": "Custom per-transport constructors are unsupported; built-in polling/WebSocket selection, fallback and remembered upgrades are implemented and must be tested."
     },
     {
       "upstream_ids": [

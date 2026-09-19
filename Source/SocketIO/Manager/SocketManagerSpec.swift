@@ -22,8 +22,6 @@
 import Dispatch
 import Foundation
 
-// TODO Fix the types so that we aren't using concrete types
-
 ///
 /// A manager for a socket.io connection.
 ///
@@ -57,7 +55,7 @@ public protocol SocketManagerSpec : SocketEngineClient {
     /// If `true` then every time `connect` is called, a new engine will be created.
     var forceNew: Bool { get set }
 
-    // TODO Per socket queues?
+    // Namespaces share the manager queue to preserve packet and callback ordering.
     /// The queue that all interaction with the client should occur on. This is the queue that event handlers are
     /// called on.
     var handleQueue: DispatchQueue { get set }

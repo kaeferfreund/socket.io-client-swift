@@ -1,3 +1,13 @@
+## 17.0.0 (release preparation; unpublished)
+
+- Share ordered retries across callback, async and legacy acknowledgement APIs; support cancellation and per-socket timeout/retry overrides.
+- Buffer pre-connect incoming events generally, preserving receive/send/connect ordering and clearing failed connection state.
+- Add polling/WebSocket transport lists, `tryAllTransports` and `rememberUpgrade`.
+- Prepare immutable podspec tag `v17.0.0` and framework version 17.0.0.
+- Keep WebTransport/stream codec explicitly unsupported. Complete JS assertion parity and release acceptance remain open; see [release preparation](Documentation/Release17.md).
+
+The entries below record development history for this unreleased major version.
+
 ## Native configuration cleanup (2026-09-19)
 
 - Remove obsolete `compress`, `selfSigned`, `enableSOCKSProxy` and `useCustomEngine` typed options, unused engine properties and mock requirements. Removed dictionary keys now fail validation for all values, including `false`.

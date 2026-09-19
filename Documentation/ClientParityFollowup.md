@@ -20,18 +20,22 @@ The original Node client suites are executed in a separate Node 24 job (matching
 
 `swift test --enable-code-coverage` exports LLVM coverage. The summary counts only `Source/SocketIO`, not tests. Execution coverage and scenario parity remain separate metrics.
 
-After the added native mappings, the static inventory contains 297 runtime declarations plus 14 type declarations, with **44 still unmapped**, **70 candidate-existing**, **89 focused regressions**, **36 platform-specific**, **15 API differences** and **43 unsupported-feature** entries (type entries are separate). Mapping a transferable invariant is not certification of a whole JS API.
-
+The inventory now contains 297 runtime declarations plus 14 type declarations:
+68 candidate-existing, 127 focused regressions, 38 platform-specific, 28 API
+differences and 36 unsupported-feature entries, with zero unmapped declarations.
+Seven transport scenarios moved from unsupported to limited native regressions
+following implementation; they are not automatically certified as complete
+original-assertion ports.
 For a deliberately strict completeness check:
 
 ```sh
 python3 scripts/check-parity-contracts.py --strict
 ```
 
-This fails while applicable or unsupported runtime rows remain uncertified. The ordinary CI check is a reviewed-contract/backlog regression gate, not an assertion of 100% coverage.
+This fails while supported runtime rows remain uncertified; reviewed unsupported-feature exclusions are explicit and validated. The ordinary CI check is a reviewed-contract/backlog regression gate, not an assertion of 100% coverage.
 
 ## Still outside this change
 
-There is no claim of complete JavaScript parity or a production-release approval. WebTransport, compression configuration, browser/Node-specific APIs, JS manager caching and custom JSON hooks remain explicit boundaries. Legacy acknowledgement behavior remains separate; async cancellation-aware emits still bypass the ordered retry queue. A coherent end-to-end retained-memory/backpressure policy, strict concurrency/TSan, deterministic scheduling of every timer, and physical-device/background/network-transition validation are not completed here. Existing parser/encoder safety limits are not weakened to imitate unlimited JS acceptance.
+There is no claim of complete JavaScript parity or a production-release approval. WebTransport, compression configuration, browser/Node-specific APIs, JS manager caching and custom JSON hooks remain explicit boundaries. Callback, async and legacy acknowledgements now share ordered retry delivery, with async cancellation cleanup and socket-specific overrides. General pre-connect reception is buffered. Transport lists, fallback and remembered upgrades are implemented. Strict concurrency and TSan have passed in macOS CI. Complete assertion equivalence, paired lifecycle traces, deterministic scheduling of every timer, and physical-device/background/network-transition validation remain open. Existing parser/encoder safety limits are not weakened to imitate unlimited JS acceptance.
 
 The older `ProtocolParityReview.md` is historical except where explicitly updated by this follow-up. In particular, JS promise acknowledgements without a timeout **do reject on disconnect** (`emitWithAck` marks its callback `withError`); they are not intentionally left pending forever.

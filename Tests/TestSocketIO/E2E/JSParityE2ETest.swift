@@ -768,6 +768,23 @@ final class JSParityE2ETest: XCTestCase {
         XCTAssertEqual(recorded.createdPackets, ["0/asd,", "0/foo,"])
     }
 
+    func testOriginalBase64FallbackDeliversTheSameBinaryData() throws {
+        let socket = makeManager(.forcePolling(true), .forceBase64(true)).defaultSocket
+        let received = expectation(description: "base64 binary delivered")
+        socket.on("takebin") { data, _ in
+            let binary = data.first as? Data
+            XCTAssertNotNil(binary)
+            XCTAssertEqual(binary?.base64EncodedString(), "YXNkZmFzZGY=")
+            received.fulfill()
+        }
+        socket.connect()
+        socket.emit("getbin")
+        wait(for: [received], timeout: 5)
+        let engine = try XCTUnwrap(manager.engine as? SocketEngine)
+        let query = URLComponents(url: engine.urlPolling, resolvingAgainstBaseURL: false)?.queryItems
+        XCTAssertTrue(query?.contains(URLQueryItem(name: "b64", value: "1")) == true)
+    }
+
     func testOriginalBinaryReceptionUsesDataOnBothTransports() {
         for transport: SocketIOClientOption in [.forcePolling(true), .forceWebsockets(true)] {
             let socket = makeManager(transport).defaultSocket

@@ -30,9 +30,9 @@ private final class ParityPacketRecordingEngine: SocketEngine {
                         withData data: [Data], completion: (() -> ())? = nil) {
         if type == .message {
             recordLock.lock()
-            // Native root DISCONNECT spells the namespace explicitly. Both
+            // Native root CONNECT/DISCONNECT spell the namespace explicitly. Both
             // encodings decode to exactly the same Socket.IO packet.
-            packets.append(message == "1/," ? "1" : message)
+            packets.append(["0/,": "0", "1/,": "1"][message] ?? message)
             recordLock.unlock()
         }
         super.write(message, withType: type, withData: data, completion: completion)

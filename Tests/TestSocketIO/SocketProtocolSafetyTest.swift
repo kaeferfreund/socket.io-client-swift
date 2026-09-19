@@ -23,6 +23,45 @@ final class SocketProtocolSafetyTest: XCTestCase {
         }
     }
 
+    func testOriginalParsingErrorsPreserveNativeErrorCategories() {
+        let manager = parser()
+        let invalidPayloads = ["442[\"some\",\"data\"", "0/admin,\"invalid\"", "0[]",
+                               "1/admin,{}", "2/admin,\"invalid", "2/admin,{}",
+                               "2[{\"toString\":\"foo\"}]", "2[true,\"foo\"]",
+                               "2[null,\"bar\"]", "2[\"connect\"]", "2[\"disconnect\",\"123\"]"]
+        for input in invalidPayloads {
+            XCTAssertThrowsError(try manager.parseString(input), input) { error in
+                XCTAssertEqual(error as? SocketParsableError, .invalidDataArray)
+            }
+        }
+        for input in ["5", "51", "50-", "5a-", "51.23-"] {
+            XCTAssertThrowsError(try manager.parseString(input), input) { error in
+                XCTAssertEqual(error as? SocketParsableError, .invalidPacket)
+            }
+        }
+        XCTAssertThrowsError(try manager.parseString("999")) { error in
+            XCTAssertEqual(error as? SocketParsableError, .invalidPacketType)
+        }
+        // Decoder.add(999) is not a representable call to native parseString:
+        // the compiler requires String; binary input has its own Data API.
+    }
+
+    func testOriginalPacketValidityPayloadCases() throws {
+        let manager = parser()
+        let valid = try manager.parseString("0")
+        XCTAssertEqual(valid.type, .connect)
+        XCTAssertEqual(valid.nsp, "/")
+        XCTAssertTrue(valid.data.isEmpty)
+        for wire in ["0/admin,\"invalid\"", "0[]", "1/admin,{}",
+                     "2/admin,\"invalid\"", "2/admin,{}", "2{\"toString\":\"foo\"}",
+                     "2[true,\"foo\"]", "2[null,\"bar\"]", "2[\"connect\"]",
+                     "2[\"disconnect\",\"123\"]"] {
+            XCTAssertThrowsError(try manager.parseString(wire), wire) { error in
+                XCTAssertEqual(error as? SocketParsableError, .invalidDataArray)
+            }
+        }
+    }
+
     /// JS `Decoder.decodeString` only parses a payload `if (str.charAt(++i))`, so
     /// these decode with `data === undefined`. `onevent` (`packet.data || []`)
     /// then emits nothing and `onack` logs "bad ack" — neither is a parse error.

@@ -184,7 +184,8 @@ do not enable both. `.path("/socket.io/")` configures the HTTP endpoint, while
 
 `.autoConnect` defaults to `false`, so the explicit `connect()` above is enough.
 `.autoConnect(true)` starts connection work during manager initialization for the
-default namespace. Other namespaces still require their own `connect()`.
+default namespace and automatically connects newly created namespaces. With
+`.autoConnect(false)`, each namespace requires its own `connect()`.
 
 Automatic reconnection is enabled by default for recoverable connection loss.
 The event stream matches the JavaScript client: the drop reports `.disconnect`

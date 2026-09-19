@@ -44,10 +44,9 @@ public enum SocketIOClientOption : ClientOption {
 
     /// Whether the manager should automatically call `connect()` at the end of `init`.
     /// Default `false` to preserve existing behavior. JS `Manager` defaults to `true`;
-    /// Swift inverts the default. When `true`, only the `defaultSocket` is auto-CONNECTed
-    /// through `_engineDidOpen`. Sockets created later via `manager.socket(forNamespace:)`
-    /// still require an explicit `socket.connect()` — matches JS where `Manager.autoConnect`
-    /// only opens the engine, not arbitrary namespaces.
+    /// Swift inverts the default. When `true`, the default socket and sockets
+    /// created later via `manager.socket(forNamespace:)` connect automatically,
+    /// matching JS `Manager.socket()`. When `false`, each socket requires connect().
     /// **Note:** when `true`, engine I/O begins before `SocketManager.init` returns.
     /// Listener attachment on `defaultSocket` happens AFTER init in user code; events
     /// fire asynchronously on the configured `handleQueue` so they do reach attached

@@ -2131,7 +2131,7 @@
         "JS-047"
       ],
       "kind": "native-assertion-equivalent",
-      "assertions": "AutoConnect manager: fetch same active root namespace twice before handshake completion and assert identity. On connect, disconnect and assert exact packet-create sequence [0,1] through a recording subclass of the real SocketEngine. Only explicit native root DISCONNECT spelling 1/, is canonicalized to equivalent 1.",
+      "assertions": "AutoConnect manager: fetch same active root namespace twice before handshake completion and assert identity. On connect, disconnect and assert exact packet-create sequence [0,1] through a recording subclass of the real SocketEngine. Only explicit native root namespace spelling is canonicalized: 0/, to 0 and 1/, to 1.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
@@ -2145,7 +2145,7 @@
         "JS-048"
       ],
       "kind": "native-assertion-equivalent",
-      "assertions": "AutoConnect manager opens root and /foo, then disconnects both from root connect callback. Assert exact real engine packet-create sequence [0,0/foo,,1,1/foo,], including no duplicate CONNECTs and subscription order. Native explicit root DISCONNECT syntax alone is canonicalized.",
+      "assertions": "AutoConnect manager opens root and /foo, then disconnects both from root connect callback. Assert exact real engine packet-create sequence [0,0/foo,,1,1/foo,], including no duplicate CONNECTs and subscription order. Native explicit root CONNECT/DISCONNECT namespace syntax alone is canonicalized.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
@@ -2313,7 +2313,7 @@
         "JS-055"
       ],
       "kind": "native-assertion-equivalent",
-      "assertions": "Original retry budget one and emits echo 1,2,3 before connect: immediate queue lengths 1,2,3; ACK-time lengths 2,1,0; final nil error and integer 3; complete ordered ACK values. Real engine packet-create recorder additionally asserts CONNECT, ACK IDs 0/1/2 with exact echo payloads, then DISCONNECT. Native positive deadline scaled to two seconds; only explicit root disconnect namespace is canonicalized.",
+      "assertions": "Original retry budget one and emits echo 1,2,3 before connect: immediate queue lengths 1,2,3; ACK-time lengths 2,1,0; final nil error and integer 3; complete ordered ACK values. Real engine packet-create recorder additionally asserts CONNECT, ACK IDs 0/1/2 with exact echo payloads, then DISCONNECT. Native positive deadline scaled to two seconds; only explicit root CONNECT/DISCONNECT namespace is canonicalized.",
       "tests": [
         {
           "path": "Tests/TestSocketIO/E2E/JSParityRetryE2ETest.swift",
@@ -2416,6 +2416,62 @@
         {
           "path": "Tests/TestSocketIO/SocketEnginePacketCodecTest.swift",
           "symbol": "SocketEnginePacketCodecTest.testEncodeDecodeAStringPlusBufferPayload"
+        }
+      ]
+    },
+    {
+      "id": "JS-038",
+      "upstream_ids": [
+        "JS-038"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Request original getbin before connect on forced-base64 polling; assert b64=1 transport negotiation and received bytes re-encode exactly as YXNkZmFzZGY=. Native Data replaces the legacy JS {base64:true,data:...} wrapper used when ArrayBuffer/Blob are unavailable. The transferable binary content and base64 transport are tested; Swift does not emulate absence of native binary storage.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testOriginalBase64FallbackDeliversTheSameBinaryData"
+        }
+      ]
+    },
+    {
+      "id": "JS-081",
+      "upstream_ids": [
+        "JS-081"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "On namespace /no, emit original reserved disconnecting event with goodbye; assert exactly one synchronous error containing the exact quoted name and reserved-event message, plus no buffered packet. Native nonthrowing emit reports through error event rather than a JS throw; rejection and diagnostic are preserved.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketReservedEventTest.swift",
+          "symbol": "SocketReservedEventTest.testOriginalReservedDisconnectingEmitFailsBeforeBuffering"
+        }
+      ]
+    },
+    {
+      "id": "JS-271",
+      "upstream_ids": [
+        "JS-271"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "All eleven original invalid JSON/payload inputs must throw native invalidDataArray; original five invalid attachment headers must throw invalidPacket; 999 string must throw invalidPacketType. Native typed errors replace the corresponding JS error-message categories. Passing integer 999 to parseString is statically unrepresentable (String required; Data has a separate entry point), not a silently accepted input.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketProtocolSafetyTest.swift",
+          "symbol": "SocketProtocolSafetyTest.testOriginalParsingErrorsPreserveNativeErrorCategories"
+        }
+      ]
+    },
+    {
+      "id": "JS-273",
+      "upstream_ids": [
+        "JS-273"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Check original valid CONNECT without payload (type connect, namespace root, empty native data), then every original invalid payload shape: scalar/array CONNECT, payload-bearing DISCONNECT, scalar/object EVENT, object pretending toString, boolean/null event names and reserved names. Original packet objects are represented as their wire headers plus unchanged JSON payloads; native throwing decoder is the validity boundary instead of a standalone Boolean helper.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketProtocolSafetyTest.swift",
+          "symbol": "SocketProtocolSafetyTest.testOriginalPacketValidityPayloadCases"
         }
       ]
     }

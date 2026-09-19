@@ -359,6 +359,7 @@ io.on("connection", (socket) => {
   // Original connection.ts binary scenarios; acknowledge only if the server
   // decoded native binary data and all surrounding JSON fields survived.
   socket.on("doge", () => socket.emit("doge", Buffer.from("asdfasdf", "utf8")));
+  socket.on("getbin", () => socket.emit("takebin", Buffer.from("asdfasdf", "utf8")));
   socket.on("buffa", (value) => {
     if (Buffer.isBuffer(value)) socket.emit("buffack");
   });

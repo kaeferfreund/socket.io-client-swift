@@ -443,6 +443,58 @@ final class SocketNativeEngineTest: XCTestCase {
         XCTAssertEqual(client.closes, ["transport error"])
     }
 
+    /// engine.io-client never sends a NOOP during the upgrade: the server sends
+    /// one over the pending polling GET. The client used to enqueue its own
+    /// `6` "over polling"; blocked by `fastUpgrade`, it was flushed over the
+    /// WebSocket right after `5`, which `@socket.io/bun-engine` answers with a
+    /// parse-error close. The polling test double had recorded it as a polling
+    /// write and hidden it from the WebSocket assertions.
+    func testUpgradeSendsNoClientNoop() {
+        let client = NativeEngineClient()
+        let engine = NativePollingTestEngine(client: client, url: url, config: [])
+        let candidate = NativeEngineTransport()
+        engine.webSocketTransportFactory = { _ in candidate }
+        engine.engineQueue.sync { engine.parseEngineMessage(upgradeHandshake) }
+        candidate.onEvent?(.opened(protocol: nil)); drain(engine)
+        engine.engineQueue.sync { engine.waitingForPoll = true } // a long poll is outstanding
+        candidate.onEvent?(.message(.text("3probe"))); drain(engine)
+        engine.engineQueue.sync {
+            XCTAssertTrue(engine.fastUpgrade)
+            XCTAssertTrue(engine.polling, "the upgrade waits for the outstanding GET")
+            XCTAssertFalse(engine.pollingWrites.contains("6"), "no client NOOP: \(engine.pollingWrites)")
+            XCTAssertFalse(engine.postWait.contains { $0.msg == "6" }, "no NOOP queued for the WebSocket")
+            engine.waitingForPoll = false
+            engine.doFastUpgrade()
+        }
+        drain(engine)
+        XCTAssertFalse(engine.polling)
+        XCTAssertEqual(candidate.batches.flatMap { $0 }, [.text("2probe"), .text("5")],
+                       "exactly the probe and the upgrade packet reach the WebSocket")
+        XCTAssertTrue(client.closes.isEmpty)
+        engine.disconnect(reason: "test"); drain(engine)
+    }
+
+    /// JS `pause()` resolves immediately when neither a poll nor a write is
+    /// outstanding; there is no polling completion left to finish the upgrade,
+    /// so `upgradeTransport()` has to do it itself.
+    func testUpgradeCompletesImmediatelyWhenNoPollingRequestIsOutstanding() {
+        let client = NativeEngineClient()
+        let engine = NativePollingTestEngine(client: client, url: url, config: [])
+        let candidate = NativeEngineTransport()
+        engine.webSocketTransportFactory = { _ in candidate }
+        engine.engineQueue.sync { engine.parseEngineMessage(upgradeHandshake) }
+        candidate.onEvent?(.opened(protocol: nil)); drain(engine)
+        engine.engineQueue.sync {
+            engine.waitingForPoll = false
+            engine.waitingForPost = false
+        }
+        candidate.onEvent?(.message(.text("3probe"))); drain(engine)
+        XCTAssertFalse(engine.polling, "nothing outstanding: the upgrade completes at once")
+        XCTAssertEqual(candidate.batches.flatMap { $0 }, [.text("2probe"), .text("5")])
+        XCTAssertTrue(client.closes.isEmpty)
+        engine.disconnect(reason: "test"); drain(engine)
+    }
+
     func testUpgradeWaitsForGetAndPostAndQueuesUpgradeFirst() {
         let client = NativeEngineClient()
         let engine = NativePollingTestEngine(client: client, url: url, config: [])

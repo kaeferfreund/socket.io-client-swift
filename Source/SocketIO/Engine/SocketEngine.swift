@@ -999,8 +999,20 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             DefaultSocketLogger.Logger.log("Upgrading transport to WebSockets", type: SocketEngine.logType)
 
             fastUpgrade = true
-            sendPollMessage("", withType: .noop, withData: [], completion: nil)
-            // After this point, we should not send anymore polling messages
+            // engine.io-client never sends a NOOP: the *server* sends one over
+            // the outstanding polling GET when it sees the probe, which is what
+            // releases that GET. The client NOOP this used to enqueue could not
+            // leave over HTTP any more (`fastUpgrade` blocks POSTs), so it sat in
+            // `postWait` and was flushed over the WebSocket right after the
+            // upgrade packet — `5` followed by `6`. Node's engine.io ignores a
+            // client NOOP; `@socket.io/bun-engine` treats it as a parse error and
+            // closes the freshly upgraded connection.
+            //
+            // With no GET or POST outstanding there is no completion left to
+            // finish the upgrade, so do it here (JS `pause()` resolves at once).
+            if canSendUpgradePacket {
+                doFastUpgrade()
+            }
         }
     }
 

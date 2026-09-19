@@ -1,0 +1,396 @@
+name: PR18 retry timeout validation
+
+on:
+  push:
+    branches: ["fix/coderabbit-findings-audit"]
+    paths: [".github/workflows/retry-timeout-validation.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - name: Install targeted regression tests
+        run: |
+          cat > Tests/TestSocketIO/SocketRetryTimeoutValidationTest.swift <<'SWIFT'
+          import Foundation
+          import XCTest
+          @testable import SocketIO
+
+          /// Invalid implicit acknowledgements must never take ownership of the retry head.
+          final class SocketRetryTimeoutValidationTest: XCTestCase {
+              private var manager: SocketManager!
+              private var socket: SocketIOClient!
+              private var engine: MockEngine!
+
+              private func make(timeout: Double? = nil, retries: Int = 1) {
+                  manager = SocketManager(socketURL: URL(string: "http://localhost")!, config: [.retries(retries)])
+                  manager.ackTimeout = timeout
+                  socket = manager.defaultSocket
+                  engine = MockEngine()
+                  manager.engine = engine
+                  socket.didConnect(toNamespace: "/", payload: ["sid": "first"])
+              }
+
+              private func drain() {
+                  let barrier = expectation(description: "handle queue barrier")
+                  manager.handleQueue.async { barrier.fulfill() }
+                  wait(for: [barrier], timeout: 3)
+              }
+
+              private func packet(_ position: Int) throws -> SocketPacket {
+                  guard engine.sentPackets.indices.contains(position) else {
+                      XCTFail("Expected an outgoing packet at index \(position)")
+                      throw NSError(domain: "SocketRetryTimeoutValidationTest", code: 1)
+                  }
+                  return try manager.parseString(engine.sentPackets[position].0)
+              }
+
+              override func tearDown() {
+                  if socket != nil {
+                      socket.clearRecoveryState()
+                      drain()
+                  }
+                  socket = nil
+                  engine = nil
+                  manager = nil
+                  super.tearDown()
+              }
+
+              func testMissingTimeoutRejectsPlainEmitBeforeQueueing() throws {
+                  make()
+                  var errors = [[Any]]()
+                  var completions = 0
+                  socket.on(clientEvent: .error) { data, _ in errors.append(data) }
+
+                  socket.emit("unacknowledged", 42, completion: { completions += 1 })
+
+                  XCTAssertEqual(errors.count, 1, "missing finite timeout must emit a configuration error")
+                  XCTAssertEqual(socket.testRetryQueueCount, 0)
+                  XCTAssertEqual(socket.currentAck, -1)
+                  XCTAssertEqual(completions, 0, "local completion remains asynchronous")
+                  drain()
+                  XCTAssertEqual(completions, 1)
+                  XCTAssertTrue(engine.sentPackets.isEmpty)
+                  XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+                  let errorData = try XCTUnwrap(errors.first)
+                  XCTAssertEqual(errorData.first as? String, "unacknowledged")
+                  XCTAssertEqual(errorData.count, 3)
+                  let error = try XCTUnwrap(errorData.last as? NSError)
+                  XCTAssertEqual(error.domain, "SocketIO.Emit")
+                  XCTAssertEqual(error.code, 2)
+                  XCTAssertTrue(error.localizedDescription.contains("ackTimeout"))
+              }
+
+              func testNonFiniteOrNegativeTimeoutsAlsoRejectPlainEmits() {
+                  make()
+                  var errors = 0
+                  var completions = 0
+                  socket.on(clientEvent: .error) { _, _ in errors += 1 }
+                  for timeout in [Double.infinity, -Double.infinity, Double.nan, -1] {
+                      manager.ackTimeout = timeout
+                      socket.emit("invalid-timeout", completion: { completions += 1 })
+                      XCTAssertEqual(socket.testRetryQueueCount, 0)
+                  }
+                  drain()
+                  XCTAssertEqual(errors, 4)
+                  XCTAssertEqual(completions, 4)
+                  XCTAssertEqual(socket.currentAck, -1)
+                  XCTAssertTrue(engine.sentPackets.isEmpty)
+                  XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+              }
+
+              func testDisconnectedRejectionIsNotBufferedForTheNextConnection() {
+                  make()
+                  socket.setTestStatus(.disconnected)
+                  var errors = 0
+                  socket.on(clientEvent: .error) { _, _ in errors += 1 }
+                  socket.emit("must-not-be-buffered")
+                  XCTAssertEqual(socket.testRetryQueueCount, 0)
+                  drain()
+                  socket.didConnect(toNamespace: "/", payload: ["sid": "replacement"])
+                  drain()
+                  XCTAssertEqual(errors, 1)
+                  XCTAssertTrue(engine.sentPackets.isEmpty)
+                  XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+              }
+
+              func testRejectedEmitDoesNotBlockTheFollowingAcknowledgedEmit() throws {
+                  make()
+                  var replies = 0
+                  socket.emit("rejected")
+                  socket.emit("next", ack: { error, data in
+                      XCTAssertNil(error)
+                      XCTAssertEqual(data.first as? String, "ok")
+                      replies += 1
+                  })
+                  drain()
+                  XCTAssertEqual(engine.sentPackets.count, 1)
+                  let next = try packet(0)
+                  XCTAssertEqual(next.event, "next")
+                  XCTAssertEqual(next.id, 0, "a rejected emit must not allocate an acknowledgement ID")
+                  socket.handleAck(next.id, data: ["ok"])
+                  XCTAssertEqual(replies, 1)
+                  XCTAssertEqual(socket.testRetryQueueCount, 0)
+                  XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+              }
+
+              func testErrorHandlerCanCorrectTheConfigurationAndEmitAgain() throws {
+                  make()
+                  var errors = 0
+                  var completions = 0
+                  socket.on(clientEvent: .error) { [self] _, _ in
+                      errors += 1
+                      manager.ackTimeout = 3600
+                      socket.emit("corrected")
+                  }
+                  socket.emit("rejected", completion: { completions += 1 })
+                  drain()
+                  XCTAssertEqual(errors, 1)
+                  XCTAssertEqual(completions, 1)
+                  XCTAssertEqual(engine.sentPackets.count, 1)
+                  let corrected = try packet(0)
+                  XCTAssertEqual(corrected.event, "corrected")
+                  XCTAssertEqual(corrected.id, 0)
+                  socket.handleAck(corrected.id, data: [])
+                  XCTAssertEqual(socket.testRetryQueueCount, 0)
+              }
+
+              func testFiniteTimeoutRetainsRetryBudgetAndQueueProgress() throws {
+                  make(timeout: 3600)
+                  var completions = 0
+                  socket.emit("first", completion: { completions += 1 })
+                  socket.emit("second", completion: { completions += 1 })
+                  drain()
+                  XCTAssertEqual(engine.sentPackets.count, 1)
+                  // Drive the same timeout settlement deterministically, without sleeps.
+                  for position in 0..<4 {
+                      let current = try packet(position)
+                      socket.ackHandlers.cancelTimedAck(current.id, fireWith: SocketAckError.timeout)
+                  }
+                  drain()
+                  XCTAssertEqual(engine.sentPackets.count, 4)
+                  XCTAssertEqual(try (0..<4).map { try packet($0).event }, ["first", "first", "second", "second"])
+                  XCTAssertEqual(try (0..<4).map { try packet($0).id }, [0, 1, 2, 3])
+                  XCTAssertEqual(completions, 2, "one local completion per emit, not per retry")
+                  XCTAssertEqual(socket.testRetryQueueCount, 0)
+                  XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+              }
+
+              func testExplicitAcknowledgementsPreserveNilAndInfiniteTimeouts() throws {
+                  make()
+                  var replies = 0
+                  for (index, timeout) in ([nil, Double.infinity] as [Double?]).enumerated() {
+                      manager.ackTimeout = timeout
+                      socket.emit("explicit-ack", ack: { error, _ in
+                          XCTAssertNil(error)
+                          replies += 1
+                      })
+                      drain()
+                      XCTAssertEqual(socket.testRetryQueueCount, 1)
+                      let outgoing = try packet(index)
+                      XCTAssertEqual(socket.ackHandlers.pendingTimedAckIDs, [outgoing.id])
+                      XCTAssertEqual(replies, index)
+                      socket.handleAck(outgoing.id, data: [])
+                      XCTAssertEqual(socket.testRetryQueueCount, 0)
+                  }
+                  XCTAssertEqual(replies, 2)
+              }
+
+              func testPerEmitFiniteTimeoutOverridesAnInfiniteDefault() throws {
+                  make(timeout: .infinity)
+                  var replies = 0
+                  socket.timeout(after: 3600).emit("per-emit", ack: { error, _ in
+                      XCTAssertNil(error)
+                      replies += 1
+                  })
+                  drain()
+                  XCTAssertEqual(engine.sentPackets.count, 1)
+                  socket.handleAck(try packet(0).id, data: [])
+                  XCTAssertEqual(replies, 1)
+                  XCTAssertEqual(socket.testRetryQueueCount, 0)
+              }
+
+              func testPlainEmitWithoutRetriesStillSendsWithoutATimeout() throws {
+                  make(retries: 0)
+                  var errors = 0
+                  socket.on(clientEvent: .error) { _, _ in errors += 1 }
+                  socket.emit("plain")
+                  drain()
+                  XCTAssertEqual(engine.sentPackets.count, 1)
+                  XCTAssertEqual(try packet(0).id, -1)
+                  XCTAssertEqual(errors, 0)
+                  XCTAssertEqual(socket.testRetryQueueCount, 0)
+                  XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+              }
+
+              func testArrayEmitAndSendWrappersUseTheSameValidation() {
+                  make()
+                  var errors = 0
+                  var completions = 0
+                  socket.on(clientEvent: .error) { _, _ in errors += 1 }
+                  socket.emit("array", with: [1], completion: { completions += 1 })
+                  socket.send(2, completion: { completions += 1 })
+                  socket.send(with: [3], completion: { completions += 1 })
+                  drain()
+                  XCTAssertEqual(errors, 3)
+                  XCTAssertEqual(completions, 3)
+                  XCTAssertTrue(engine.sentPackets.isEmpty)
+                  XCTAssertEqual(socket.testRetryQueueCount, 0)
+                  XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+              }
+
+              func testVolatileEmitStillBypassesRetriesWithoutATimeout() throws {
+                  make()
+                  var errors = 0
+                  socket.on(clientEvent: .error) { _, _ in errors += 1 }
+                  socket.volatile.emit("volatile")
+                  drain()
+                  XCTAssertEqual(engine.sentPackets.count, 1)
+                  XCTAssertEqual(try packet(0).id, -1)
+                  XCTAssertEqual(errors, 0)
+                  XCTAssertEqual(socket.testRetryQueueCount, 0)
+                  XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+              }
+          }
+          SWIFT
+      - name: Reproduce the finding against the unchanged source
+        run: |
+          set +e
+          swift test --filter SocketRetryTimeoutValidationTest/testMissingTimeoutRejectsPlainEmitBeforeQueueing > "$RUNNER_TEMP/retry-timeout-baseline.log" 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -F 'missing finite timeout must emit a configuration error' "$RUNNER_TEMP/retry-timeout-baseline.log"
+          echo "Confirmed: the regression fails against the original implementation."
+      - name: Apply the hash-verified minimal fix
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import hashlib
+
+          def replace(path, expected, old, new):
+              file = Path(path)
+              content = file.read_bytes()
+              actual = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+              assert actual == expected, (path, actual)
+              text = content.decode()
+              assert text.count(old) == 1, path
+              file.write_text(text.replace(old, new))
+
+          replace("Source/SocketIO/Client/SocketIOClient.swift",
+                  "5f7bd11afbeadc3abce6d5075852a9e1737da728",
+                  """        // An unacknowledged fire-and-forget emit must not block the queue
+                  // indefinitely when the manager specifies a default acknowledgement timeout.
+                  let timeout = attemptTimeout ?? (manager as? SocketManager)?.ackTimeout
+          """,
+                  """        let timeout = attemptTimeout ?? (manager as? SocketManager)?.ackTimeout
+                  // Implicit acknowledgements need a finite deadline: without a server ack,
+                  // an unlimited wait would block every subsequent retry-queue entry.
+                  // Explicit acknowledgement APIs retain their existing no-timeout contract.
+                  if userAck == nil {
+                      guard let timeout = timeout, timeout.isFinite, timeout >= 0 else {
+                          let error = NSError(domain: "SocketIO.Emit", code: 2, userInfo: [
+                              NSLocalizedDescriptionKey:
+                                  "Retried emits without an acknowledgement callback require a finite, non-negative ackTimeout"
+                          ])
+                          DefaultSocketLogger.Logger.error(error.localizedDescription, type: logType)
+                          if let completion = completion { manager?.handleQueue.async(execute: completion) }
+                          handleClientEvent(.error, data: [data[0], Array(data.dropFirst()), error])
+                          // Consume the rejected emit so the caller cannot buffer or send it.
+                          return true
+                      }
+                  }
+          """)
+
+          replace("Source/SocketIO/Client/SocketIOClientOption.swift",
+                  "11538e25bf2bd42a6ecc8a0ce77f6e01a9405bc9",
+                  """    /// order. The final ack callback then fires with `SocketAckError.timeout`.
+              case retries(Int)
+          """,
+                  """    /// order. The final ack callback then fires with `SocketAckError.timeout`.
+              ///
+              /// Plain `emit` / `send` calls without a user acknowledgement callback require
+              /// a finite, non-negative `ackTimeout` when retries are enabled. Otherwise
+              /// the emit is rejected before queueing or sending, emits `.error` with
+              /// `[eventName, items, NSError]` (domain `SocketIO.Emit`, code `2`), and invokes
+              /// its local completion asynchronously, if provided. Zero is a valid timeout.
+              /// Explicit acknowledgement APIs retain their existing no-timeout behavior.
+              /// The server must acknowledge retried events even without a user callback.
+              case retries(Int)
+          """)
+
+          replace("Tests/TestSocketIO/SocketRetrySafetyTest.swift",
+                  "c268717e79b8f685b5f5b37b4f1629a75e90dfbe",
+                  """    func testIdentityResetCancelsRetryTimerAndCompletesUnsentOperation() {
+                  make([.retries(3)])
+                  socket.setTestStatus(.disconnected)
+                  let completed = expectation(description: "unsent local operation cancelled")
+                  socket.emit("unsent", completion: { completed.fulfill() })
+                  socket.clearRecoveryState()
+          """,
+                  """    func testIdentityResetCancelsRetryTimerAndCompletesUnsentOperation() {
+                  make([.retries(3), .ackTimeout(3600)])
+                  socket.setTestStatus(.disconnected)
+                  let completed = expectation(description: "unsent local operation cancelled")
+                  socket.emit("unsent", completion: { completed.fulfill() })
+                  XCTAssertEqual(socket.testRetryQueueCount, 1, "exercise cleanup, not configuration rejection")
+                  socket.clearRecoveryState()
+          """)
+
+          replace("Tests/TestSocketIO/E2E/JSParityRetryE2ETest.swift",
+                  "d45959238406f4281f306b14b8208c311af5293d",
+                  """    func testRetryDoesNotEmitAPacketTwiceInTheConnectHandler() {
+                  let socket = makeManager(.retries(3)).defaultSocket
+          """,
+                  """    func testRetryDoesNotEmitAPacketTwiceInTheConnectHandler() {
+                  let socket = makeManager(.retries(3), .ackTimeout(10)).defaultSocket
+          """)
+          PY
+          git -c core.whitespace=cr-at-eol diff --check
+      - name: Run complete native unit and real-server regression suite
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee "$RUNNER_TEMP/retry-timeout-fixed.log"
+      - name: Store tested blobs without changing any branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          paths = ['Source/SocketIO/Client/SocketIOClient.swift', 'Source/SocketIO/Client/SocketIOClientOption.swift', 'Tests/TestSocketIO/SocketRetrySafetyTest.swift', 'Tests/TestSocketIO/E2E/JSParityRetryE2ETest.swift', 'Tests/TestSocketIO/SocketRetryTimeoutValidationTest.swift']
+          changed = subprocess.check_output(["git", "diff", "--name-only"], text=True).splitlines()
+          assert set(changed) == set(paths[:-1]), changed
+          entries = []
+          for path in paths:
+              content = Path(path).read_bytes()
+              expected = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+              result = subprocess.check_output(
+                  ["gh", "api", "--method", "POST", f"repos/{os.environ['GITHUB_REPOSITORY']}/git/blobs", "--input", "-"],
+                  input=json.dumps({"content": content.decode(), "encoding": "utf-8"}).encode())
+              actual = json.loads(result)["sha"]
+              assert actual == expected, (path, actual, expected)
+              entries.append({"path": path, "mode": "100644", "type": "blob", "sha": actual})
+          manifest = {"source_base": "be8e24bfe0ee31912f80d9efcbba36678b293eca", "validation_head": os.environ["GITHUB_SHA"], "tree": entries}
+          Path(os.environ["RUNNER_TEMP"], "retry-timeout-manifest.json").write_text(json.dumps(manifest, indent=2))
+          print(json.dumps(manifest, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: retry-timeout-validation-${{ github.run_id }}
+          retention-days: 3
+          path: |
+            ${{ runner.temp }}/retry-timeout-baseline.log
+            ${{ runner.temp }}/retry-timeout-fixed.log
+            ${{ runner.temp }}/retry-timeout-manifest.json

@@ -59,3 +59,24 @@ On Node 26.9.0 their unchanged Mocha/tsx/yargs dependency graph failed before an
 test ran (`require is not defined in ES module scope`). Only that reference-job
 runtime was restored to Node 24. The reference SHA, dependency lockfile and test
 contents were not modified. Other CI jobs retain their updated runtimes/actions.
+
+## Validation
+
+[CI on 69adced](https://github.com/kaeferfreund/socket.io-client-swift/actions/runs/35443462303)
+passed **all seven jobs**, including **844 Swift tests, zero failures**, Thread
+Sanitizer, strict concurrency, four Apple SDK builds, pinned JS suites, wire
+proofs and parser comparison. All nine checker self-tests passed locally and
+the strict contract checker passed against the downloaded XCTest log.
+
+Library coverage: **6,605/6,701 lines (98.57%)**, **1,030/1,084 functions
+(95.02%)**, **2,586/2,745 regions (94.21%)**. Branch coverage is unavailable.
+There are still 96 uncovered lines in this individual run: relative to fdf9280,
+two more polling lines executed, while two engine lifecycle guard lines did
+not execute. The earlier native run on 17cfda6 also passed all 844 tests but
+measured 98.54%; its separate upstream job failed on the Node 26 loader issue.
+No metrics are combined across runs or exclusions added to conceal variation.
+
+[Machine-readable evidence](ReviewEvidence/PollingFailureValidation-2026-09-19.json)
+records the artifact hashes and per-file line changes. The meaningful gain is
+the explicit POST-failure/reconnect contract plus stronger exactly-once and
+stale-ack assertions, rather than a guaranteed monotonic line percentage.

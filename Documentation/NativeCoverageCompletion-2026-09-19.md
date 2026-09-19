@@ -4,6 +4,9 @@ This work follows the 406 uncovered library lines at `43bbe47` (6,326/6,732,
 93.97%). Coverage is measured over every `Source/SocketIO` file, without adding
 exclusions. It is separate from the pinned JavaScript scenario inventory.
 
+The subsequent [polling failure and stale-ack follow-up](PollingFailureCoverage-2026-09-19.md)
+adds two tests and records the latest validation.
+
 ## Verified result
 
 [CI for fdf9280](https://github.com/kaeferfreund/socket.io-client-swift/actions/runs/35442518457)

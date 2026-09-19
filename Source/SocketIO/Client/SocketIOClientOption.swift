@@ -28,6 +28,12 @@ protocol ClientOption : CustomStringConvertible, Equatable {
     func getSocketIOOptionValue() -> Any
 }
 
+/// Native Engine.IO transports, in connection-attempt order.
+public enum SocketTransport: String, Sendable {
+    case polling
+    case websocket
+}
+
 /// The options for a client.
 public enum SocketIOClientOption : ClientOption {
     /// The default timeout in seconds used when waiting for an acknowledgement
@@ -94,6 +100,15 @@ public enum SocketIOClientOption : ClientOption {
     /// If passed `true`, will cause the client to always create a new engine. Useful for debugging,
     /// or when you want to be sure no state from previous engines is being carried over.
     case forceNew(Bool)
+
+    /// Ordered initial transport candidates. Defaults to polling then WebSocket.
+    case transports([SocketTransport])
+
+    /// Try the next configured transport if the initial handshake fails.
+    case tryAllTransports(Bool)
+
+    /// Start with WebSocket after a previously successful WebSocket connection.
+    case rememberUpgrade(Bool)
 
     /// If passed `true`, the only transport that will be used will be HTTP long-polling.
     case forcePolling(Bool)
@@ -206,6 +221,12 @@ public enum SocketIOClientOption : ClientOption {
             description = "extraHeaders"
         case .forceNew:
             description = "forceNew"
+        case .transports:
+            description = "transports"
+        case .tryAllTransports:
+            description = "tryAllTransports"
+        case .rememberUpgrade:
+            description = "rememberUpgrade"
         case .forcePolling:
             description = "forcePolling"
         case .forceWebsockets:
@@ -277,6 +298,12 @@ public enum SocketIOClientOption : ClientOption {
             value = headers
         case let .forceNew(force):
             value = force
+        case let .transports(transports):
+            value = transports
+        case let .tryAllTransports(enabled):
+            value = enabled
+        case let .rememberUpgrade(enabled):
+            value = enabled
         case let .forcePolling(force):
             value = force
         case let .forceWebsockets(force):

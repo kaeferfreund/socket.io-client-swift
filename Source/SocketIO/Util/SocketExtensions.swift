@@ -68,6 +68,18 @@ extension Dictionary where Key == String, Value == Any {
             return .extraHeaders(headers)
         case let ("forceNew", force as Bool):
             return .forceNew(force)
+        case let ("transports", values as [String]):
+            let transports = values.compactMap(SocketTransport.init(rawValue:))
+            guard transports.count == values.count else {
+                return .invalidConfiguration("Only polling and websocket transports are supported")
+            }
+            return .transports(transports)
+        case let ("tryAllTransports", enabled as Bool):
+            return .tryAllTransports(enabled)
+        case let ("rememberUpgrade", enabled as Bool):
+            return .rememberUpgrade(enabled)
+        case ("transports", _), ("tryAllTransports", _), ("rememberUpgrade", _):
+            return .invalidConfiguration("Invalid transport selection option: " + key)
         case let ("forcePolling", force as Bool):
             return .forcePolling(force)
         case let ("forceWebsockets", force as Bool):

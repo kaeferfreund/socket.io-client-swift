@@ -12,6 +12,17 @@ are advisory source-review evidence, not executed test proof. Two Jev calls used
 The coordinator separately reported USD 0.42655; this is not a combined billing
 statement for both providers. No additional agents or recursive reviews ran.
 
+## Earlier reconnect review
+
+The user's [earlier Jev review](JevParityReview-2026-09-19.md) is retained with
+its original snapshot and 107-item backlog. That count describes `0be321f`, not
+the current tree. Its six reviewed reconnect cases were checked against the
+sources: JS-014 now maps a real default-reconnect E2E scenario; JS-016 observes
+successful reconnect after a reentrant manual reconnect; JS-017 restarts from
+reconnectFailed with a fresh budget and real opening timeouts; JS-018 measures
+three increasing actual retry intervals; JS-023/024 assert exactly [1,2] at
+reconnectFailed. All these methods passed in run 35436799492.
+
 ## Source review and resulting changes
 
 | ID | Source-verified conclusion and action |
@@ -29,3 +40,20 @@ Static mappings and actual passing executions remain separate. The normal
 contract checker validates the mappings and CI verifies the mapped methods
 passed. The strict full-parity gate still rejects the remaining unsupported-by-
 evidence scenarios; no exclusions or checker acceptance rules were broadened.
+
+## Execution evidence
+
+[CI on 70bd38c](https://github.com/kaeferfreund/socket.io-client-swift/actions/runs/35437122400)
+passed all seven jobs: 766 Swift tests, zero failures; Thread Sanitizer; strict
+concurrency; four Apple SDK builds; pinned upstream suites; parser differential
+and wire proofs. The contract checker also passed against that exact XCTest log.
+Eight offline checker regressions passed.
+
+Library-only execution coverage: 6,183/6,589 lines (93.84%), 948/1,060 functions
+(89.43%), 2,311/2,650 regions (87.21%). Branch coverage is not reported. These are
+one run's execution counters, not assertion-equivalence percentages.
+
+The current inventory has 121 certified runtime declarations, 102 explicit
+boundaries and 74 remaining supported declarations without complete assertion
+certification. The original 129-item task has therefore advanced by 55 mappings.
+The strict completeness gate still fails, as intended. No release was created.

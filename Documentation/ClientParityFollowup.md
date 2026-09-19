@@ -28,7 +28,14 @@ raw payloads. Invalid/reserved payloads now fail before allocation; raw binary
 payloads cannot silently become binary emits. Legacy success, exhaustion, duplicate
 acks and conversion errors have explicit regressions.
 
-Complete original-scenario certification remains open for 129 supported test
+The next audit added complete mappings for 55 more declarations: namespace and
+callback ordering, volatile acknowledgements, catch-all listeners, reconnects
+and timed/async acknowledgements. Volatile error-first acknowledgements now have
+a real implementation with timeout and retry-bypass regressions. The bounded
+[Jev audit](JevAckFollowup-2026-09-19.md) helped identify missing assertions;
+its recommendations were independently checked and corrected before mapping.
+
+Complete original-scenario certification remains open for 74 supported test
 declarations. No coverage percentage implies semantic equivalence.
 
 ## Evidence and CI contracts
@@ -40,7 +47,7 @@ The original Node client suites are executed in a separate Node 24 job (matching
 `swift test --enable-code-coverage` exports LLVM coverage. The summary counts only `Source/SocketIO`, not tests. Execution coverage and scenario parity remain separate metrics.
 
 The inventory now contains 297 runtime declarations plus 14 type declarations:
-64 candidate-existing, 131 focused regressions, 38 platform-specific, 28 API
+24 candidate-existing, 171 focused regressions, 38 platform-specific, 28 API
 differences and 36 unsupported-feature entries, with zero unmapped declarations.
 Seven transport scenarios moved from unsupported to limited native regressions
 following implementation; they are not automatically certified as complete

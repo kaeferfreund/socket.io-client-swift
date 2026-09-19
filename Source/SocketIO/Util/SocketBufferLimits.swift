@@ -62,7 +62,7 @@ import Foundation
 ///   `"parse error"`, the reason `Manager.ondata` reports when the decoder
 ///   throws. Reconnection then proceeds normally if it is enabled; nothing is
 ///   replayed from a partial packet.
-public struct SocketBufferLimits : Equatable {
+public struct SocketBufferLimits : Equatable, Sendable {
     // MARK: Properties
 
     /// Maximum number of packets held in `SocketIOClient`'s send buffer — the
@@ -203,7 +203,7 @@ public struct SocketBufferLimitError : LocalizedError, Equatable, CustomStringCo
     // MARK: Cases
 
     /// Which bounded buffer overflowed.
-    public enum Buffer : String {
+    public enum Buffer : String, Sendable {
         /// `SocketIOClient`'s buffer of emits made while disconnected.
         case sendBuffer
 

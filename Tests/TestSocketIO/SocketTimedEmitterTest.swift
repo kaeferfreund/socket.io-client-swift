@@ -562,13 +562,17 @@ final class SocketTimedEmitterRaceTest: XCTestCase {
                                                },
                                                timeout: 0.001)
             }
-            DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) { [weak self] in
-                self?.manager.handleQueue.socketAsync {
-                    self?.socket.ackHandlers.cancelTimedAck(id, fireWith: SocketAckError.disconnected)
+            // Capture the objects, not `self`: reading `self.manager` from a
+            // background thread races with `tearDown()` under Thread Sanitizer.
+            let manager = self.manager!, socket = self.socket!
+            DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) {
+                manager.handleQueue.socketAsync {
+                    socket.ackHandlers.cancelTimedAck(id, fireWith: SocketAckError.disconnected)
                 }
             }
             wait(for: [exp], timeout: 1)
             Thread.sleep(forTimeInterval: 0.005)
+            manager.handleQueue.sync {}
             XCTAssertEqual(fires, 1, "cancel-vs-timer must fire exactly once")
         }
     }
@@ -590,18 +594,22 @@ final class SocketTimedEmitterRaceTest: XCTestCase {
                                                },
                                                timeout: 60)
             }
-            DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) { [weak self] in
-                self?.manager.handleQueue.socketAsync {
-                    self?.socket.ackHandlers.cancelTimedAck(id, fireWith: SocketAckError.disconnected)
+            // Capture the objects, not `self`: reading `self.manager` from a
+            // background thread races with `tearDown()` under Thread Sanitizer.
+            let manager = self.manager!, socket = self.socket!
+            DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) {
+                manager.handleQueue.socketAsync {
+                    socket.ackHandlers.cancelTimedAck(id, fireWith: SocketAckError.disconnected)
                 }
             }
-            DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) { [weak self] in
-                self?.manager.handleQueue.socketAsync {
-                    self?.socket.handleAck(id, data: ["x"])
+            DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) {
+                manager.handleQueue.socketAsync {
+                    socket.handleAck(id, data: ["x"])
                 }
             }
             wait(for: [exp], timeout: 1)
             Thread.sleep(forTimeInterval: 0.005)
+            manager.handleQueue.sync {}
             XCTAssertEqual(fires, 1, "cancel-vs-ack must fire exactly once")
         }
     }

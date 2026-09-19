@@ -19,7 +19,8 @@ jobs:
           python3 scripts/finish-remaining-metadata.py
           python3 scripts/test-review-regressions.py
           python3 scripts/check-parity-contracts.py
-          git diff --check
+          # Preserve the inventory's existing RFC 4180 CRLF line endings.
+          git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check
       - name: Publish and remove all one-time tooling
         run: |
           set -euo pipefail

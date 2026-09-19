@@ -24,8 +24,11 @@ WebSocket closes the engine and lets the existing manager decide about reconnect
 ## Compatibility changes (major prerelease)
 
 Normal SocketManager/SocketIOClient use does not require a backend selection.
-Minimum deployment versions: iOS 15, macOS 12, tvOS 15, watchOS 8. These are
+Minimum deployment versions: iOS 15, macOS 12, tvOS 15, watchOS 9. These are
 compile baselines, not a claim that every runtime/device has been exercised.
+The current fork requires Swift 6.4 with Swift 6 language mode and supports
+Socket.IO 4.x / Engine.IO 4 only. See the subsequent
+[Socket.IO 4 and Swift 6 migration](SocketIO4Swift6Migration.md).
 
 * `SocketEngine.ws`, `SocketEngineSpec.ws` and the Starscream event delegate
   entry point have been removed. The native transport is deliberately internal.
@@ -95,17 +98,19 @@ Consumers testing this PR should pin its commit rather than a moving branch.
 ## Validation
 
 `swift test` runs the complete existing suite plus native engine/TLS regressions.
-`scripts/test-native-transport.sh` runs the deterministic transport tests without
-third-party packages (the Linux path tests FoundationNetworking compilation, not
-Apple runtime behavior). CI results must be tied to a specific commit.
+`scripts/test-native-transport.sh` filters the deterministic transport tests in
+the real package, without third-party Swift packages. It requires the package's
+Apple-platform toolchain; it no longer creates a separate older-language Linux
+smoke-test package. CI results must be tied to a specific commit.
 
-Coverage added for WebSocket-open vs Engine.IO-open, multipart completion, EIO3
-binary prefix, text heartbeat, stale callbacks, duplicate terminal events,
-backpressure, failed upgrade fallback, the GET+POST barrier, option validation,
-request header/cookie precedence and the manager's actual connect timeout.
-Security tests cover explicit anchors, hostname/expiry/pin failure and real TLS
-connections in polling and WebSocket modes. Existing real-server E2E suites retain
-auth/acks/namespaces/recovery/parser and EIO3/EIO4 regression coverage.
+Coverage includes WebSocket-open vs Engine.IO-open, multipart completion,
+unprefixed Engine.IO 4 binary frames, server-driven heartbeat, stale callbacks,
+duplicate terminal events, backpressure, failed upgrade fallback, the GET+POST
+barrier, option validation, request header/cookie precedence and the manager's
+actual connect timeout. Security tests cover explicit anchors,
+hostname/expiry/pin failure and real TLS connections in polling and WebSocket
+modes. Real-server E2E suites retain auth, acks, namespaces, recovery, parser and
+Engine.IO 4 coverage. Removed Engine.IO 3 tests are not counted as passing tests.
 
 No physical iPhone/Apple Watch runtime validation is implied by a passing macOS
 suite or platform SDK build. Compression and SOCKS have not been declared

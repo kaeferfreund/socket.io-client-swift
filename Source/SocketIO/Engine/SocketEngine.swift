@@ -258,7 +258,7 @@ open class SocketEngine: NSObject,
          3: Bad request
          */
         let reason = (try? msg.toDictionary())?["message"] as? String
-        didError(reason: reason ?? "Got unknown error from server \(msg)")
+        didError(reason: reason ?? "parser error")
     }
 
     private func handleBase64(message: String) {
@@ -891,7 +891,8 @@ open class SocketEngine: NSObject,
             return handleBase64(message: message)
         }
 
-        guard let type = SocketEnginePacketType(rawValue: message.first?.wholeNumberValue ?? -1) else {
+        guard let first = message.utf8.first, first >= 48, first <= 54,
+              let type = SocketEnginePacketType(rawValue: Int(first - 48)) else {
             checkAndHandleEngineError(message)
 
             return
@@ -899,7 +900,7 @@ open class SocketEngine: NSObject,
 
         switch type {
         case .message:
-            handleMessage(String(message.dropFirst()))
+            handleMessage(String(decoding: message.utf8.dropFirst(), as: UTF8.self))
         case .noop:
             handleNOOP()
         case .ping:
@@ -907,7 +908,7 @@ open class SocketEngine: NSObject,
         case .pong:
             handlePong(with: message)
         case .open:
-            handleOpen(openData: String(message.dropFirst()))
+            handleOpen(openData: String(decoding: message.utf8.dropFirst(), as: UTF8.self))
         case .close:
             handleClose(message)
         default:

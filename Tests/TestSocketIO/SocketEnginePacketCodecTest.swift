@@ -26,6 +26,7 @@ private final class EngineCodecClient: NSObject, SocketEngineClient {
     var opens = 0
     var messages = [String]()
     var binary = [Data]()
+    var deliveries = [String]()
     var pings = 0
     var pongs = 0
 
@@ -35,8 +36,8 @@ private final class EngineCodecClient: NSObject, SocketEngineClient {
     func engineDidReceivePing() { pings += 1 }
     func engineDidReceivePong() { pongs += 1 }
     func engineDidSendPong() { pongs += 1 }
-    func parseEngineMessage(_ msg: String) { messages.append(msg) }
-    func parseEngineBinaryData(_ data: Data) { binary.append(data) }
+    func parseEngineMessage(_ msg: String) { messages.append(msg); deliveries.append("text:" + msg) }
+    func parseEngineBinaryData(_ data: Data) { binary.append(data); deliveries.append("binary:" + data.base64EncodedString()) }
     func engineDidWebsocketUpgrade(headers: [String: String]) {}
 }
 
@@ -71,8 +72,13 @@ final class SocketEnginePacketCodecTest: XCTestCase {
     /// `encodePacket({type:"message", data:"test"})` is `"4test"`, and decoding
     /// it yields the same packet — here: the engine hands `"test"` to its client.
     func testEncodeDecodeAString() {
-        XCTAssertEqual(postBody(["4test"]), "4test")
-        XCTAssertEqual(String(SocketEnginePacketType.message.rawValue) + "test", "4test")
+        let encoded = engine.engineQueue.sync {
+            engine.waitingForPost = true
+            engine.sendPollMessage("test", withType: .message, withData: [], completion: nil)
+            return engine.postWait.map { $0.msg }
+        }
+        XCTAssertEqual(encoded, ["4test"])
+        XCTAssertEqual(postBody(encoded), "4test")
 
         engine.parseEngineMessage("4test")
         settle()
@@ -93,10 +99,42 @@ final class SocketEnginePacketCodecTest: XCTestCase {
             engine.parseEngineMessage(malformed)
             engine.engineQueue.sync { }
 
-            XCTAssertEqual(client.errors.count, 1, "\(malformed.debugDescription) must be reported as an error")
+            XCTAssertEqual(client.errors, ["parser error"], malformed.debugDescription)
             XCTAssertTrue(client.messages.isEmpty)
             engine.engineQueue.sync { XCTAssertTrue(engine.closed, "\(malformed.debugDescription) must close the engine") }
         }
+    }
+
+    func testMalformedPollingPayloadReportsParserErrorAndCloses() {
+        for malformed in ["{", "{}", "[\"a123\", \"a456\"]", ""] {
+            let client = EngineCodecClient()
+            let engine = SocketEngine(client: client, url: URL(string: "http://localhost")!, config: [])
+            engine.engineQueue.sync { engine.parsePollingMessage(malformed) }
+            engine.engineQueue.sync {
+                XCTAssertEqual(client.errors, ["parser error"], malformed.debugDescription)
+                XCTAssertTrue(engine.closed)
+                XCTAssertEqual(client.closes, ["transport error"])
+                XCTAssertTrue(client.deliveries.isEmpty)
+            }
+        }
+    }
+
+    func testEnginePacketTypeRequiresAnASCIIDigit() {
+        for malformed in ["٤test", "４test", "²test"] {
+            let client = EngineCodecClient()
+            let engine = SocketEngine(client: client, url: URL(string: "http://localhost")!, config: [])
+            engine.engineQueue.sync { engine.parseEngineMessage(malformed) }
+            engine.engineQueue.sync {
+                XCTAssertEqual(client.errors, ["parser error"])
+                XCTAssertTrue(client.deliveries.isEmpty)
+                XCTAssertTrue(engine.closed)
+            }
+        }
+    }
+
+    func testEngineMessagePreservesCombiningScalarAfterTypeDigit() {
+        engine.engineQueue.sync { engine.parseEngineMessage("4\u{0301}test") }
+        XCTAssertEqual(client.messages, ["\u{0301}test"])
     }
 
     // MARK: engine.io-parser/test/index.ts > payload — "should encode/decode all packet types"
@@ -104,8 +142,15 @@ final class SocketEnginePacketCodecTest: XCTestCase {
     /// `encodePayload([open, close, ping "probe", pong "probe", message "test"])`
     /// is `"0\x1e1\x1e2probe\x1e3probe\x1e4test"`.
     func testEncodeAllPacketTypesIntoOnePayload() {
-        XCTAssertEqual(postBody(["0", "1", "2probe", "3probe", "4test"]),
-                       "0\u{1e}1\u{1e}2probe\u{1e}3probe\u{1e}4test")
+        let encoded = engine.engineQueue.sync {
+            engine.waitingForPost = true
+            for (type, payload): (SocketEnginePacketType, String) in
+                [(.open, ""), (.close, ""), (.ping, "probe"), (.pong, "probe"), (.message, "test")] {
+                engine.sendPollMessage(payload, withType: type, withData: [], completion: nil)
+            }
+            return engine.postWait.map { $0.msg }
+        }
+        XCTAssertEqual(postBody(encoded), "0\u{1e}1\u{1e}2probe\u{1e}3probe\u{1e}4test")
     }
 
     /// The decode half. Swift decodes and dispatches in one pass, so a CLOSE in
@@ -195,18 +240,18 @@ final class SocketEnginePacketCodecTest: XCTestCase {
     /// `"4test\x1ebAQIDBA=="`.
     func testEncodeDecodeAStringPlusBufferPayload() {
         let payload = Data([1, 2, 3, 4])
-        let polling = MockEngine()
-        polling.polling = true
-
-        guard case let .right(encodedBinary) = polling.createBinaryDataForSend(using: payload) else {
-            return XCTFail("A polling transport base64-encodes binary")
+        let encoded = engine.engineQueue.sync {
+            engine.waitingForPost = true
+            engine.sendPollMessage("test", withType: .message, withData: [payload], completion: nil)
+            return engine.postWait.map { $0.msg }
         }
-        XCTAssertEqual(postBody(["4test", encodedBinary]), "4test\u{1e}bAQIDBA==")
+        XCTAssertEqual(postBody(encoded), "4test\u{1e}bAQIDBA==")
 
         engine.parsePollingMessage("4test\u{1e}bAQIDBA==")
         settle()
 
         XCTAssertEqual(client.messages, ["test"])
         XCTAssertEqual(client.binary, [payload])
+        XCTAssertEqual(client.deliveries, ["text:test", "binary:AQIDBA=="])
     }
 }

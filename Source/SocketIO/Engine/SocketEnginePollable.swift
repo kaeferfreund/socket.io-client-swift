@@ -325,7 +325,6 @@ extension SocketEnginePollable {
     }
 
     func parsePollingMessage(_ str: String) {
-        guard !str.isEmpty else { return }
         DefaultSocketLogger.Logger.log("Got poll message: \(str)", type: "SocketEnginePolling")
         for record in str.components(separatedBy: "\u{1e}") {
             guard !closed else { break }

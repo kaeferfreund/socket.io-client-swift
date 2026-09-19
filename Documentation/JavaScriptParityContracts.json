@@ -2320,6 +2320,104 @@
           "symbol": "JSParityRetryE2ETest.testRetryPreservesTheOrderOfThePackets"
         }
       ]
+    },
+    {
+      "id": "JS-283",
+      "upstream_ids": [
+        "JS-283"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Encode message=test through the real polling packet encoder, assert exact 4test frame and POST body, decode and assert exactly one text delivery test with no error. Native client dispatch replaces returned JS packet object; no hand-constructed type-prefix expression substitutes for the encoder.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEnginePacketCodecTest.swift",
+          "symbol": "SocketEnginePacketCodecTest.testEncodeDecodeAString"
+        }
+      ]
+    },
+    {
+      "id": "JS-284",
+      "upstream_ids": [
+        "JS-284"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "For each original malformed single packet (empty string and a123), require exactly parser error, no text delivery and closed engine. Native engine error callback replaces JS error packet {type:error,data:parser error}; closure is an additional transport assertion.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEnginePacketCodecTest.swift",
+          "symbol": "SocketEnginePacketCodecTest.testFailToDecodeAMalformedPacket"
+        }
+      ]
+    },
+    {
+      "id": "JS-286",
+      "upstream_ids": [
+        "JS-286"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Decode each original malformed payload ({, {}, [\"a123\", \"a456\"]) through parsePollingMessage, assert exact single parser error, transport-error close and no deliveries. Also verify the empty payload edge case from decodePayload implementation, explicitly additional to the three original inputs.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEnginePacketCodecTest.swift",
+          "symbol": "SocketEnginePacketCodecTest.testMalformedPollingPayloadReportsParserErrorAndCloses"
+        }
+      ]
+    },
+    {
+      "id": "JS-302",
+      "upstream_ids": [
+        "JS-302"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original [1,2,3,4] binary bytes encoded with the production createBinaryDataForSend protocol implementation in WebSocket mode return raw Data without prefix; decode as binary and assert exactly those bytes. Foundation.Data replaces Buffer; callbacks replace returned packet object.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEnginePacketCodecTest.swift",
+          "symbol": "SocketEnginePacketCodecTest.testEncodeDecodeABuffer"
+        }
+      ]
+    },
+    {
+      "id": "JS-303",
+      "upstream_ids": [
+        "JS-303"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original binary bytes [1,2,3,4] encoded through the production binary encoder in polling mode produce exactly bAQIDBA==; decoding dispatches the exact original Data. Native Data replaces Buffer and binary callback replaces returned message packet.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEnginePacketCodecTest.swift",
+          "symbol": "SocketEnginePacketCodecTest.testEncodeDecodeABufferAsBase64"
+        }
+      ]
+    },
+    {
+      "id": "JS-308",
+      "upstream_ids": [
+        "JS-308"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Decode exact [1,2,3,4] binary input as Data; assert byte equality and no text delivery. Foundation.Data is the native binary representation corresponding to both ArrayBuffer input and output; no JS type constructor is required.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEnginePacketCodecTest.swift",
+          "symbol": "SocketEnginePacketCodecTest.testDecodeBinaryAsData"
+        }
+      ]
+    },
+    {
+      "id": "JS-309",
+      "upstream_ids": [
+        "JS-309"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Encode text test and binary [1,2,3,4] through real sendPollMessage and actual POST joiner: exact 4test record-separator bAQIDBA==. Decode payload, assert exact text and binary values and combined delivery sequence text then binary. Separate per-type arrays alone are not accepted as order proof.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketEnginePacketCodecTest.swift",
+          "symbol": "SocketEnginePacketCodecTest.testEncodeDecodeAStringPlusBufferPayload"
+        }
+      ]
     }
   ],
   "remaining_review": {

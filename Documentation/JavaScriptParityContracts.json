@@ -963,7 +963,7 @@
       {
         "id": "JS-158",
         "status": "api-difference",
-        "reason": "The standalone JS package exports a numeric protocol constant. Swift exposes a fused Engine.IO transport with SocketIOVersion and generated EIO query values, not the same module export. Native EIO 3/4 values have a separate unit regression."
+        "reason": "The standalone JS package exports a numeric protocol constant. Swift exposes a fused Engine.IO transport with a generated EIO=4 query value, not the same module export. The generated Engine.IO 4 query value has a separate unit regression."
       },
       {
         "id": "JS-163",

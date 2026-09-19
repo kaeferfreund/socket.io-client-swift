@@ -39,10 +39,11 @@ test('raw polling observer does not consume requests or close a held poll', { ti
     assert.equal(post.bytes, 6);
     assert.equal(post.body, '4probe');
   } finally {
-    const exited = once(child, 'exit');
-    child.kill('SIGTERM');
-    const kill = setTimeout(() => child.kill('SIGKILL'), 1000);
-    await exited;
-    clearTimeout(kill);
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit');
+      child.kill('SIGTERM');
+      const kill = setTimeout(() => child.kill('SIGKILL'), 1000);
+      try { await exited; } finally { clearTimeout(kill); }
+    }
   }
 });

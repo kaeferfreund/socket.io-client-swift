@@ -526,9 +526,8 @@ has:
   settles with the error. Swift's `handleQueueAck` already implements both
   branches, so routing the disconnect error through it reproduces JS exactly.
 - **The async `emitWithAck` continuation is resumed with `.disconnected`**, as
-  JS rejects the promise. A Swift continuation must be resumed exactly once, so
-  this remains the documented deviation from JS leaving a bare `emitWithAck`
-  promise pending forever.
+  JS rejects the promise through `_clearAcks()`. The Swift continuation is
+  resumed exactly once.
 - **Connection-state recovery is unaffected.** JS `onclose` does not touch
   `_pid`; only an explicit identity reset does. `_pid`/`_lastOffset` survive the
   close, so the next CONNECT still asks the server to resume.
@@ -619,9 +618,9 @@ Two new CI jobs in `.github/workflows/swift.yml`:
   builds with `-strict-concurrency=complete` and compares the warning count to a
   per-platform baseline in
   `Documentation/ReviewEvidence/StrictConcurrencyBaseline.json`. It is a
-  ratchet, not a clean-build requirement: the fork is not migrated to the Swift
-  6 language mode, and no mutable class is stamped `@unchecked Sendable` to make
-  it pass. A platform with no baseline yet is **reported, not failed** — the run
+  ratchet, not a clean-build requirement. The package uses Swift 6 language
+  mode; strict-concurrency diagnostics are tracked separately against the
+  baseline. A platform with no baseline yet is **reported, not failed** — the run
   prints the count and the line to commit, so the first run measures the number
   instead of producing a red build.
 
@@ -679,7 +678,7 @@ CI jobs.
 ### 9.5 What round 3 did not do
 
 The 57 unmapped `engine.io-client` rows and the 7 `socket.io-parser` encoder
-rows are untouched, as is the Swift 6 language mode. Gates **R2** (full encoder
-parity and release acceptance), **R3** (one internal acknowledgement record and
+rows were untouched in round 3. The package now uses Swift 6 language mode.
+Gates **R2** (full encoder parity and release acceptance), **R3** (one internal acknowledgement record and
 a documented state machine) and **R4** (injectable schedulers, full
 traceability) remain open.

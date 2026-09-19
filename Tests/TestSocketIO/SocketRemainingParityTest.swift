@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import SocketIO
 
-private final class RemainingUnitClient: NSObject, SocketEngineClient {
+private class RemainingUnitClient: NSObject, SocketEngineClient {
     var errors = [String]()
     var closes = [String]()
     var closeError: SocketTransportError?
@@ -17,6 +17,29 @@ private final class RemainingUnitClient: NSObject, SocketEngineClient {
     func parseEngineBinaryData(_ data: Data) {}
     func engineDidWebsocketUpgrade(headers: [String: String]) {}
 }
+/// Records both hooks to catch duplicate delivery and loss of structured details.
+private final class RemainingStructuredClient: RemainingUnitClient {
+    var errorDetails: [SocketTransportError] = []
+    var events: [String] = []
+    func engineDidError(reason: String, error: SocketTransportError) {
+        errors.append(reason)
+        errorDetails.append(error)
+        events.append("error")
+    }
+    override func engineDidClose(reason: String, error: SocketTransportError) {
+        super.engineDidClose(reason: reason, error: error)
+        events.append("close")
+    }
+}
+
+private final class RemainingLegacyErrorEngine: SocketEngine {
+    var observedErrors: [String] = []
+    override func didError(reason: String) {
+        observedErrors.append(reason)
+        super.didError(reason: reason)
+    }
+}
+
 private final class RemainingUnitTransport: EngineWebSocketTransport {
     var onEvent: ((EngineWebSocketEvent) -> Void)?
     var isWritable = true
@@ -188,6 +211,38 @@ final class SocketRemainingParityTest: XCTestCase {
             XCTAssertEqual(client.closeError?.closeReason, "too big")
         }
     }
+    func testStructuredFailurePreservesLegacyOverrideAndDeliversDetailsOnce() {
+        let delegate = RemainingStructuredClient()
+        let instance = RemainingLegacyErrorEngine(client: delegate,
+            url: URL(string: "http://localhost")!, config: [.log(false)])
+        let detail = SocketTransportError(transport: "polling", operation: "read")
+        instance.didError(reason: "read failed", error: detail)
+        settle(instance)
+        instance.engineQueue.sync {
+            XCTAssertEqual(instance.observedErrors, ["read failed"])
+            XCTAssertEqual(delegate.errors, ["read failed"])
+            XCTAssertEqual(delegate.errorDetails.count, 1)
+            XCTAssertTrue(delegate.errorDetails.first === detail)
+            XCTAssertTrue(delegate.closeError === detail)
+            XCTAssertEqual(delegate.events, ["error", "close"])
+            XCTAssertEqual(delegate.closes, ["transport error"])
+            XCTAssertTrue(instance.closed)
+        }
+    }
+
+    func testStructuredFailureFallsBackToLegacyDelegateOnce() {
+        let instance = RemainingLegacyErrorEngine(client: client,
+            url: URL(string: "http://localhost")!, config: [.log(false)])
+        let detail = SocketTransportError(transport: "polling", operation: "write")
+        instance.engineQueue.sync {
+            instance.didError(reason: "write failed", error: detail)
+            XCTAssertEqual(instance.observedErrors, ["write failed"])
+            XCTAssertEqual(client.errors, ["write failed"])
+            XCTAssertEqual(client.closes, ["transport error"])
+            XCTAssertTrue(client.closeError === detail)
+        }
+    }
+
     func testTransportDetailBoundsResponseAndDoesNotLogIt() {
         let body = Data(repeating: 65, count: 5000)
         let response = HTTPURLResponse(url: URL(string: "https://example.com/?secret=hidden")!,

@@ -24,15 +24,6 @@
 
 import Foundation
 
-/// The socket.io version being used.
-public enum SocketIOVersion: Int {
-    /// socket.io 2, engine.io 3
-    case two = 2
-
-    /// socket.io 3, engine.io 4
-    case three = 3
-}
-
 protocol ClientOption : CustomStringConvertible, Equatable {
     func getSocketIOOptionValue() -> Any
 }
@@ -191,9 +182,6 @@ public enum SocketIOClientOption : ClientOption {
     /// network request is started when this option is present.
     case invalidConfiguration(String)
 
-    /// The version of socket.io being used. This should match the server version. Default is 3.
-    case version(SocketIOVersion)
-
     // MARK: Properties
 
     /// The description of this option.
@@ -207,8 +195,6 @@ public enum SocketIOClientOption : ClientOption {
             description = "parserOptions"
         case .bufferLimits:
             description = "bufferLimits"
-        case .version:
-            description = "version"
         case .invalidConfiguration:
             description = "invalidConfiguration"
         case .ackTimeout:
@@ -288,8 +274,6 @@ public enum SocketIOClientOption : ClientOption {
             value = options
         case let .bufferLimits(limits):
             value = limits
-        case let .version(versionNum):
-            value = versionNum
         case let .invalidConfiguration(reason):
             value = reason
         case let .ackTimeout(timeout):

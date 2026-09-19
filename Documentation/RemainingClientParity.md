@@ -83,7 +83,7 @@ literal JavaScript API/type assertion port.
 | IDs | Decision |
 | --- | --- |
 | JS-138 | Platform: deleting JavaScript `ArrayBuffer` and returning its fallback wrapper has no native runtime counterpart. The base64 wire path is covered separately. |
-| JS-158 | API: no standalone Engine.IO module `protocol` export. Native EIO 3/4 query values are separately tested. |
+| JS-158 | API: no standalone Engine.IO module `protocol` export. The generated Engine.IO 4 query value has a separate regression. |
 | JS-163, JS-164, JS-168, JS-169, JS-170, JS-171 | API: JS host/port/secure object constructors and location defaults are replaced by explicit Foundation URLs. The already mapped absolute-URL tests are not falsely relabelled as these overloads. |
 | JS-172 | API: no identical internal eight-character `randomString` helper. No cryptographic guarantee was implied by that original test. |
 | JS-181 | API/policy: the Node parser returns only name/value/expires and overwrites conflicting expiry attributes in header iteration order. Foundation preserves security scope and owns native expiration policy. Its object/expiry result is not certified identical for that conflicting header. |

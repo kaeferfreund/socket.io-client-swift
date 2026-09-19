@@ -531,28 +531,35 @@ open class SocketEngine: NSObject,
         return tlsConfiguration.validationError ?? webSocketOptions.validationError
     }
 
+    // Scoped to the legacy error hook on engineQueue so overrides still observe
+    // structured failures without emitting duplicate client events.
+    private var currentTransportError: SocketTransportError?
+
     /// Called when an error happens during execution. Causes a disconnection.
     open func didError(reason: String) {
         let fail = { [weak self] in
             guard let self = self, !self.closed else { return }
             DefaultSocketLogger.Logger.error(reason, type: SocketEngine.logType)
-            self.client?.engineDidError(reason: reason)
-            self.closeOutEngine(reason: "transport error")
-        }
-        if DispatchQueue.getSpecific(key: engineQueueKey) != nil { fail() }
-        else { engineQueue.socketAsync(execute: fail) }
-    }
-
-    /// Structured transport failure, reported before the corresponding close.
-    public func didError(reason: String, error: SocketTransportError) {
-        let fail = { [weak self] in
-            guard let self = self, !self.closed else { return }
-            if let callback = self.client?.engineDidError(reason:error:) {
+            let error = self.currentTransportError
+            if let error, let callback = self.client?.engineDidError(reason:error:) {
                 callback(reason, error)
             } else {
                 self.client?.engineDidError(reason: reason)
             }
             self.closeOutEngine(reason: "transport error", error: error)
+        }
+        if DispatchQueue.getSpecific(key: engineQueueKey) != nil { fail() }
+        else { engineQueue.socketAsync(execute: fail) }
+    }
+
+    /// Structured transport failure, reported through `didError(reason:)` before close.
+    open func didError(reason: String, error: SocketTransportError) {
+        let fail = { [weak self] in
+            guard let self = self, !self.closed else { return }
+            let previousError = self.currentTransportError
+            self.currentTransportError = error
+            defer { self.currentTransportError = previousError }
+            self.didError(reason: reason)
         }
         if DispatchQueue.getSpecific(key: engineQueueKey) != nil { fail() }
         else { engineQueue.socketAsync(execute: fail) }

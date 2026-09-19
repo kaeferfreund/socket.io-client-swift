@@ -60,7 +60,7 @@ jobs:
 
   thread-sanitizer:
     name: Unit suite under Thread Sanitizer (review gate R5)
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
@@ -104,7 +104,7 @@ jobs:
 
   strict-concurrency:
     name: Strict-concurrency warning ratchet (review gate R5)
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7

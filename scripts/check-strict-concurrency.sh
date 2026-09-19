@@ -3,10 +3,10 @@
 # Review gate R5: build the library with `-strict-concurrency=complete` and fail
 # when the number of concurrency warnings grows.
 #
-# This is a ratchet, not a clean-build requirement: the fork is not migrated to
-# the Swift 6 language mode and the remaining warnings are recorded as a
-# baseline instead of being silenced by stamping mutable classes
-# `@unchecked Sendable`.
+# This is a ratchet, not a clean-build requirement: the package builds in the
+# Swift 6 language mode, and any remaining diagnostics under
+# `-strict-concurrency=complete` are recorded as a baseline instead of being
+# silenced by stamping mutable classes `@unchecked Sendable`.
 #
 # The baseline is per platform, because the Objective-C and Security code paths
 # only compile on Apple platforms. A platform with no recorded baseline is

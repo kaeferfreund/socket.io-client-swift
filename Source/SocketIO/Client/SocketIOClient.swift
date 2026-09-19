@@ -1805,9 +1805,6 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         recovered = value
     }
 
-    func emitTest(event: String, _ data: Any...) {
-        emit([event] + data)
-    }
 }
 
 // MARK: - Auth provider

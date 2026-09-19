@@ -1236,10 +1236,6 @@ open class SocketEngine: NSObject,
         connected = value
     }
 
-    func setClosed(_ value: Bool) {
-        closed = value
-    }
-
     func setFastUpgrade(_ value: Bool) {
         fastUpgrade = value
     }
@@ -1330,17 +1326,6 @@ private final class RetiringPollingSender {
         for entry in requests[index...] {
             for completion in entry.completions { completion() }
         }
-    }
-}
-
-extension SocketEngine {
-    // MARK: URLSessionDelegate methods
-
-    /// Delegate called when the session becomes invalid.
-    public func URLSession(session: URLSession, didBecomeInvalidWithError error: NSError?) {
-        DefaultSocketLogger.Logger.error("Engine URLSession became invalid", type: "SocketEngine")
-
-        didError(reason: "Engine URLSession became invalid")
     }
 }
 

@@ -25,14 +25,7 @@
 import Foundation
 
 enum JSONError : Error {
-    case notArray
     case notNSDictionary
-}
-
-extension Array {
-    func toJSON() throws -> Data {
-        return try JSONSerialization.data(withJSONObject: self, options: JSONSerialization.WritingOptions(rawValue: 0))
-    }
 }
 
 extension CharacterSet {
@@ -50,6 +43,12 @@ extension Dictionary where Key == String, Value == Any {
             return .webSocketOptions(options)
         case let ("bufferLimits", limits as SocketBufferLimits):
             return .bufferLimits(limits)
+        case let ("ackTimeout", timeout as Double):
+            return .ackTimeout(timeout)
+        case let ("retries", count as Int):
+            return .retries(count)
+        case ("ackTimeout", _), ("retries", _):
+            return .invalidConfiguration("Invalid acknowledgement option: " + key)
         case let ("connectTimeout", timeout as Double):
             return .connectTimeout(timeout)
         case let ("autoConnect", autoConnect as Bool):
@@ -144,15 +143,6 @@ extension Dictionary where Key == String, Value == Any {
 }
 
 extension String {
-    func toArray() throws -> [Any] {
-        guard let stringData = data(using: .utf16, allowLossyConversion: false) else { return [] }
-        guard let array = try JSONSerialization.jsonObject(with: stringData, options: .mutableContainers) as? [Any] else {
-             throw JSONError.notArray
-        }
-
-        return array
-    }
-
     func toDictionary() throws -> [String: Any] {
         guard let binData = data(using: .utf16, allowLossyConversion: false) else { return [:] }
         guard let json = try JSONSerialization.jsonObject(with: binData, options: .allowFragments) as? [String: Any] else {

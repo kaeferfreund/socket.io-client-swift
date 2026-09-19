@@ -244,6 +244,25 @@ final class SocketAuthProviderTest: XCTestCase {
         XCTAssertTrue(sawNew, "fresh provider must produce ['new': true] in observed results")
     }
 
+    func testAsyncProviderSuccessWritesResolvedConnectPayload() {
+        let engine = MockEngine()
+        manager.engine = engine
+        let written = expectation(description: "async auth writes CONNECT")
+        engine.onWrite = { message, attachments in
+            XCTAssertEqual(message, "0/,{\"token\":\"async-token\"}")
+            XCTAssertTrue(attachments.isEmpty)
+            written.fulfill()
+        }
+        socket.setAuth { () async throws -> [String: Any]? in ["token": "async-token"] }
+        drain()
+        queue.sync {
+            manager.setTestStatus(.connected)
+            socket.connect()
+        }
+        wait(for: [written], timeout: 2)
+        queue.sync { XCTAssertEqual(engine.sentPackets.count, 1) }
+    }
+
     // MARK: U-A9 — async provider throw fires .error and does NOT call completion
 
     func testAsyncProviderThrowFiresErrorClientEvent() {

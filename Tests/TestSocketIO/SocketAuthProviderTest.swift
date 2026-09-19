@@ -403,3 +403,44 @@ final class SocketAuthProviderTest: XCTestCase {
                        "the most recently installed provider must be the one invoked")
     }
 }
+
+extension SocketAuthProviderTest {
+    func testUnserializableConnectPayloadAbortsJoinAndDiscardsPreconnectEvents() throws {
+        let engine = MockEngine()
+        manager.engine = engine
+        try queue.sync {
+            manager.setTestStatus(.connected)
+            socket.setTestStatus(.connecting)
+            var deliveries = 0
+            var errors: [String] = []
+            socket.on("early") { _, _ in deliveries += 1 }
+            socket.on(clientEvent: .error) { data, _ in errors.append(data.first as? String ?? "") }
+            socket.handlePacket(try manager.parseString("2[\"early\",42]"))
+            manager.connectSocket(socket, withPayload: ["token": Double.nan])
+            XCTAssertEqual(errors, ["connect payload serialization failed: invalid JSON object"])
+            XCTAssertEqual(socket.status, .notConnected)
+            XCTAssertTrue(engine.sentPackets.isEmpty)
+            XCTAssertEqual(socket.testRetainedBuffers.replayPackets, 0)
+            // A corrected explicit join can recover; old incoming data must not leak.
+            manager.connectSocket(socket, withPayload: ["token": "corrected"])
+            XCTAssertEqual(engine.sentPackets.map { $0.0 }, ["0/,{\"token\":\"corrected\"}"])
+            socket.didConnect(toNamespace: "/", payload: ["sid": "new"])
+            XCTAssertEqual(deliveries, 0)
+        }
+    }
+
+    func testInvalidParserConfigurationNeverStartsTheAttachedEngine() {
+        let invalid = SocketManager(socketURL: URL(string: "http://localhost")!,
+                                    config: [.parserOptions(SocketParserOptions(maximumAttachments: 0)), .log(false)])
+        let engine = TestEngine(client: invalid, url: invalid.socketURL, options: nil)
+        invalid.engine = engine
+        var opens = 0
+        var errors: [String] = []
+        engine.onConnect = { opens += 1 }
+        invalid.defaultSocket.on(clientEvent: .connectError) { data, _ in errors.append(data.first as? String ?? "") }
+        invalid.connect()
+        XCTAssertEqual(errors, ["Invalid parser limits"])
+        XCTAssertEqual(invalid.status, .disconnected)
+        XCTAssertEqual(opens, 0)
+    }
+}

@@ -288,3 +288,39 @@ final class SocketRemainingParityTest: XCTestCase {
         }
     }
 }
+
+extension SocketRemainingParityTest {
+    func testDictionaryTransportSelectionPreservesOrderAndFlags() {
+        let values: [String: Any] = ["transports": ["websocket", "polling"],
+                                     "tryAllTransports": true, "rememberUpgrade": true]
+        let instance = engine(Array(values.toSocketConfiguration()))
+        XCTAssertEqual(instance.transports, [.websocket, .polling])
+        XCTAssertTrue(instance.tryAllTransports)
+        XCTAssertTrue(instance.rememberUpgrade)
+        XCTAssertEqual(values["transports"] as? [String], ["websocket", "polling"])
+    }
+
+    func testInvalidDictionaryTransportSelectionFailsBeforeOpeningAnyTransport() {
+        let invalid: [[String: Any]] = [
+            ["transports": "polling"], ["transports": ["webtransport"]],
+            ["transports": [] as [String]], ["transports": ["polling", "polling"]],
+            ["tryAllTransports": "true"], ["rememberUpgrade": "false"]
+        ]
+        for values in invalid {
+            let previousErrors = client.errors.count
+            let instance = engine(Array(values.toSocketConfiguration()))
+            instance.webSocketTransportFactory = { _ in
+                XCTFail("Invalid transport configuration must not reach a transport")
+                return RemainingUnitTransport()
+            }
+            instance.connect()
+            settle(instance)
+            instance.engineQueue.sync {
+                XCTAssertTrue(instance.closed)
+                XCTAssertFalse(instance.connected)
+                XCTAssertEqual(client.errors.count, previousErrors + 1)
+                XCTAssertTrue(client.errors.last?.contains("Invalid socket configuration") == true)
+            }
+        }
+    }
+}

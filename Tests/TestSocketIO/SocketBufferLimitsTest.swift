@@ -450,3 +450,66 @@ final class SocketBufferLimitsTest: XCTestCase {
         XCTAssertGreaterThan(SocketBufferLimits.retainedBytes(of: [["a", "b"]]), 2)
     }
 }
+
+extension SocketBufferLimitsTest {
+    func testCancellingAnInflightRetryReleasesItsByteBudgetForTheNextEmit() throws {
+        make(SocketBufferLimits(maximumRetryQueueBytes: 9), .retries(1), .ackTimeout(100))
+        connect()
+        let state = SocketAsyncAckState()
+        var cancelled = 0
+        socket.emitTimed(event: "x", items: ["12345678"], timeout: 100, cancellation: state) { error, _ in
+            XCTAssertTrue(error is CancellationError)
+            cancelled += 1
+        }
+        XCTAssertEqual(socket.testRetainedBuffers.retryBytes, 9)
+        var rejected = 0
+        socket.emit("x", "12345678", ack: { error, _ in
+            let limit = error as? SocketBufferLimitError
+            XCTAssertEqual(limit?.buffer, .retryQueue)
+            XCTAssertEqual(limit?.measuringBytes, true)
+            XCTAssertEqual(limit?.attempted, 18)
+            rejected += 1
+        })
+        XCTAssertEqual(rejected, 1)
+        XCTAssertEqual(engine.sentPackets.count, 1)
+        let staleID = try manager.parseString(engine.sentPackets[0].0).id
+        state.cancel()
+        socket.cancelAsyncEmit(state)
+        XCTAssertEqual(cancelled, 1)
+        XCTAssertEqual(socket.testRetainedBuffers.retryBytes, 0)
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+        var completed = 0
+        socket.emit("x", "12345678", ack: { error, _ in
+            XCTAssertNil(error)
+            completed += 1
+        })
+        XCTAssertEqual(engine.sentPackets.count, 2)
+        socket.handleAck(staleID, data: [])
+        XCTAssertEqual(completed, 0)
+        socket.handleAck(try manager.parseString(engine.sentPackets[1].0).id, data: [])
+        XCTAssertEqual(completed, 1)
+        XCTAssertEqual(socket.testRetainedBuffers.retryBytes, 0)
+        XCTAssertEqual(socket.testRetainedBuffers.retryPackets, 0)
+    }
+
+    func testPreconnectReceiveByteOverflowClearsBufferedEventsWithoutDeliveringThem() throws {
+        make(SocketBufferLimits(maximumRecoveryReplayBytes: 8))
+        socket.setTestStatus(.connecting)
+        var deliveries = 0
+        var errors: [SocketBufferLimitError] = []
+        socket.on("x") { _, _ in deliveries += 1 }
+        socket.on(clientEvent: .error) { data, _ in
+            if let error = data.first as? SocketBufferLimitError { errors.append(error) }
+        }
+        socket.handlePacket(try manager.parseString("2[\"x\",\"1234567\"]"))
+        XCTAssertEqual(socket.testRetainedBuffers.replayPackets, 1)
+        socket.handlePacket(try manager.parseString("2[\"x\",\"1234567\"]"))
+        XCTAssertEqual(errors.count, 1)
+        XCTAssertEqual(errors.first?.buffer, .recoveryReplay)
+        XCTAssertEqual(errors.first?.measuringBytes, true)
+        XCTAssertEqual(socket.testRetainedBuffers.replayPackets, 0)
+        XCTAssertEqual(socket.testRetainedBuffers.replayBytes, 0)
+        XCTAssertEqual(deliveries, 0)
+        XCTAssertEqual(engine.disconnectReasons.count, 1)
+    }
+}

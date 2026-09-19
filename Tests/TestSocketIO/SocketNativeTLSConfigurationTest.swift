@@ -137,3 +137,86 @@ private final class NativeChallengeSender: NSObject, URLAuthenticationChallengeS
     func performDefaultHandling(for challenge: URLAuthenticationChallenge) {}
     func rejectProtectionSpaceAndContinue(with challenge: URLAuthenticationChallenge) {}
 }
+
+extension SocketNativeTLSConfigurationTest {
+    func testMissingAuthenticationHandlersDefaultExactlyOnceAtBothDelegateLevels() {
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: URL(string: "http://example.test")!)
+        let space = URLProtectionSpace(host: "example.test", port: 80, protocol: "http", realm: "test",
+                                       authenticationMethod: NSURLAuthenticationMethodHTTPBasic)
+        let challenge = URLAuthenticationChallenge(protectionSpace: space, proposedCredential: nil,
+            previousFailureCount: 0, failureResponse: nil, error: nil, sender: NativeChallengeSender())
+        let proxy = SocketSessionDelegateProxy(tlsConfiguration: .systemDefault, forwardingDelegate: nil)
+        var sessionCalls = 0
+        var taskCalls = 0
+        proxy.urlSession(session, didReceive: challenge) { disposition, credential in
+            XCTAssertEqual(disposition, .performDefaultHandling)
+            XCTAssertNil(credential)
+            sessionCalls += 1
+        }
+        proxy.urlSession(session, task: task, didReceive: challenge) { disposition, credential in
+            XCTAssertEqual(disposition, .performDefaultHandling)
+            XCTAssertNil(credential)
+            taskCalls += 1
+        }
+        XCTAssertEqual(sessionCalls, 1)
+        XCTAssertEqual(taskCalls, 1)
+    }
+
+    func testTaskAuthenticationForwardsCredentialsButCompletesOnlyOnce() {
+        let delegate = RepeatedTaskCompletionDelegate(redirect: nil)
+        let proxy = SocketSessionDelegateProxy(tlsConfiguration: .systemDefault, forwardingDelegate: delegate)
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: URL(string: "http://example.test")!)
+        let space = URLProtectionSpace(host: "example.test", port: 80, protocol: "http", realm: "test",
+                                       authenticationMethod: NSURLAuthenticationMethodHTTPBasic)
+        let challenge = URLAuthenticationChallenge(protectionSpace: space, proposedCredential: nil,
+            previousFailureCount: 0, failureResponse: nil, error: nil, sender: NativeChallengeSender())
+        var calls = 0
+        proxy.urlSession(session, task: task, didReceive: challenge) { disposition, credential in
+            XCTAssertEqual(disposition, .useCredential)
+            XCTAssertEqual(credential?.user, "user")
+            XCTAssertEqual(credential?.password, "password")
+            calls += 1
+        }
+        XCTAssertEqual(calls, 1)
+    }
+
+    func testRedirectDelegateCannotOverrideSecureOriginOrCompleteTwice() {
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: URL(string: "https://example.test/start")!)
+        let response = HTTPURLResponse(url: task.originalRequest!.url!, statusCode: 302,
+                                       httpVersion: nil, headerFields: nil)!
+        for destination in [nil, "http://example.test/insecure", "https://example.test/allowed"] as [String?] {
+            let candidate = destination.map { URLRequest(url: URL(string: $0)!) }
+            let delegate = RepeatedTaskCompletionDelegate(redirect: candidate)
+            let proxy = SocketSessionDelegateProxy(tlsConfiguration: .systemDefault, forwardingDelegate: delegate)
+            var calls = 0
+            proxy.urlSession(session, task: task, willPerformHTTPRedirection: response,
+                             newRequest: URLRequest(url: URL(string: "https://example.test/proposed")!)) { request in
+                calls += 1
+                XCTAssertEqual(request?.url?.absoluteString,
+                               destination?.hasPrefix("https:") == true ? destination : nil)
+            }
+            XCTAssertEqual(calls, 1)
+        }
+    }
+}
+
+private final class RepeatedTaskCompletionDelegate: NSObject, URLSessionTaskDelegate {
+    let redirect: URLRequest?
+    init(redirect: URLRequest?) { self.redirect = redirect }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        completionHandler(.useCredential, URLCredential(user: "user", password: "password", persistence: .none))
+        completionHandler(.cancelAuthenticationChallenge, nil)
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(redirect)
+        completionHandler(request)
+    }
+}

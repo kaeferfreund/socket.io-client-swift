@@ -87,8 +87,13 @@ half of R4 remain deferred architecture work without a demonstrated defect; see
 [ProtocolParityReview.md](ProtocolParityReview.md).
 
 Physical iOS/watchOS runtime checks remain outstanding and
-are not certified by this release. Swift Package Manager is the only supported
-installation method; CI builds the package for all four Apple SDKs.
+are not certified by this release: background/foreground, suspend, network
+loss and return, Wi-Fi↔cellular handover, IPv6 and proxy environments.
+macOS CI does not replace these proofs. Swift Package Manager is the only
+supported installation method; CI builds the package for all four Apple SDKs.
+
+A follow-up multi-model council review was explicitly deferred; the
+historical review instructions must not trigger a new paid review on their own.
 
 ## Pre-release evidence
 

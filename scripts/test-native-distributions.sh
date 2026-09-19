@@ -8,8 +8,10 @@ fi
 if grep -n Starscream Package.swift; then
   echo 'Removed dependency remains in package metadata' >&2; exit 1
 fi
+echo 'Resolving Swift package schemes'
+xcodebuild -list
 for DESTINATION in \
-  'generic/platform=macOS' \
+  'platform=macOS' \
   'generic/platform=iOS Simulator' \
   'generic/platform=tvOS Simulator' \
   'generic/platform=watchOS Simulator'

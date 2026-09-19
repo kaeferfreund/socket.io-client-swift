@@ -743,6 +743,16 @@ final class JSParityE2ETest: XCTestCase {
         XCTAssertEqual(queryValue, "&=?a")
     }
 
+    func testAutoConnectAlsoJoinsNewlyCreatedNamespaces() {
+        let manager = makeManager(.autoConnect(true))
+        let foo = manager.socket(forNamespace: "/foo")
+        XCTAssertTrue(foo.active)
+        let joined = expectation(description: "new namespace auto-connects")
+        foo.once(clientEvent: .connect) { _, _ in joined.fulfill() }
+        wait(for: [joined], timeout: 5)
+        XCTAssertEqual(foo.status, .connected)
+    }
+
     func testNamespaceConnectPacketsFollowSubscriptionRatherThanCreationOrder() {
         let recorded = ParityPacketRecordingManager(socketURL: serverURL)
         manager = recorded

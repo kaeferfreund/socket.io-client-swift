@@ -238,8 +238,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         handleQueue.setSpecific(key: handleQueueKey, value: 1)
 
         if autoConnect {
-            defaultSocket.connect()  // sets defaultSocket.status = .connecting (so _engineDidOpen will CONNECT it)
-            connect()                 // opens engine; _engineDidOpen sends CONNECT for defaultSocket
+            _ = defaultSocket // socket(forNamespace:) subscribes and opens the engine.
         }
     }
 
@@ -1159,6 +1158,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         let client = SocketIOClient(manager: self, nsp: nsp)
 
         nsps[nsp] = client
+        if autoConnect { client.connect() }
 
         return client
     }

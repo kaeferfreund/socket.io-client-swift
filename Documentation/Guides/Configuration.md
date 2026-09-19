@@ -80,6 +80,8 @@ Frequently used options:
 | .connectParams(...) | Connection query parameters |
 | .extraHeaders(...) | Additional HTTP headers |
 | .connectTimeout(Double) | Engine.IO handshake timeout |
+| .requestTimeout(Double) | Per-polling-request idle and total timeout, in seconds (17.0.1+) |
+| .clientCertificate(URLCredential) | Client identity for mutual TLS (17.0.1+) |
 | .reconnects(Bool) | Enable/disable automatic reconnect |
 | .reconnectAttempts(Int) | Reconnect attempt budget, -1 = unlimited |
 | .reconnectWait(Int) | Initial reconnect delay |
@@ -97,6 +99,20 @@ Frequently used options:
 | .handleQueue(DispatchQueue) | Serial queue owning client interaction |
 
 For the complete set, see SocketIOClientOption.
+
+## Polling request timeout and client certificates (17.0.1)
+
+`.requestTimeout(120)` applies a positive finite limit of 120 seconds to each
+polling handshake, GET and POST. It leaves WebSocket settings unchanged. The
+manager connect timeout and heartbeat deadline remain independent. Omission keeps
+Foundation defaults; unlike JavaScript's milliseconds/unset timeout, Swift uses
+seconds and requires positive finite values.
+
+`.clientCertificate(credential)` accepts a `URLCredential` created from a client
+identity and optional intermediate certificates. Polling and WebSocket use the
+same identity while retaining normal server trust checks. Credentials are limited
+to the configured TLS host and port. See [native transport configuration](../NativeWebSocketTransport.md)
+for examples and the detailed timeout/TLS behavior.
 
 ## Cookies
 

@@ -1,5 +1,12 @@
-## Unreleased
+## 17.0.1 — 2026-09-19
 
+- Fix Foundation URL construction crashes from `<`, `>`, backslash and backtick in connect parameters; encode keys and values with JavaScript `encodeURIComponent` semantics (socketio/socket.io-client-swift#1421).
+- Cancel per-socket connection timeouts after success, disconnection or replacement so stale deadlines cannot interrupt reconnects (socketio/socket.io-client-swift#887).
+- Derive `defaultSocket`'s namespace from the manager URL path; explicitly select `/` with `socket(forNamespace:)` when required (socketio/socket.io-client-swift#1297).
+- Add `.clientCertificate(URLCredential)` for mutual TLS across polling, WebSocket and upgrades, scoped to the configured TLS origin (socketio/socket.io-client-swift#857, socketio/socket.io-client-swift#936, socketio/socket.io-client-swift#1157).
+- Add `.requestTimeout(Double)` in seconds for polling handshake, GET and POST requests, covering idle and total transfer time while preserving native defaults when omitted (socketio/socket.io-client-swift#681).
+- Add regression tests, real-server TLS/timeout fixtures and the upstream triage report with evaluation evidence.
+- See [17.0.1 release notes](Documentation/Release17.0.1.md) for behavior changes and validation scope.
 - Swift Package Manager is the only supported installation method. Carthage, CocoaPods and the Xcode project are removed.
 - Remove completed review-audit notes that are superseded by `PARITY.md` and the gated inventory.
 

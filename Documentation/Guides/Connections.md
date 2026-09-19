@@ -81,6 +81,12 @@ Avoid putting long-lived credentials into URLs.
 
 A single SocketManager can multiplex multiple Socket.IO namespaces over one Engine.IO connection.
 
+Since 17.0.1, `manager.defaultSocket` uses the namespace in the manager URL path:
+`https://example.com/admin` selects `/admin`. An empty path or `/` selects root.
+Use `manager.socket(forNamespace: "/")` to explicitly select root regardless of
+the URL. The `.path(...)` option separately configures the HTTP/WebSocket endpoint;
+it does not select a namespace.
+
 ```swift
 let manager = SocketManager(
     socketURL: URL(string: "https://example.com")!

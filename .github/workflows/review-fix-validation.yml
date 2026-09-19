@@ -2,7 +2,7 @@ name: PR18 review-fix validation
 on:
   push:
     branches: [fix/coderabbit-findings-audit]
-    paths: [.github/workflows/review-fix-validation.yml, scripts/_review_fix.py]
+    paths: [.github/workflows/review-fix-validation.yml, scripts/_review_fix.py, scripts/_review_fix_followup.py]
 permissions:
   contents: read
 jobs:
@@ -21,6 +21,7 @@ jobs:
           node-version: 26
       - name: Apply hash-verified reviewed changes
         run: |
+          python3 scripts/_review_fix_followup.py
           python3 scripts/_review_fix.py apply
           git -c core.whitespace=cr-at-eol diff --cached --check
       - name: Check review evidence and fixture guards

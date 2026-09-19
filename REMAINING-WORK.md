@@ -43,6 +43,8 @@ Stream-Codec bleiben ausdrücklich ausgeschlossen.
 
 ## Aktuelle Implementierungs- und Nachweisarbeit
 
+- Im aktuellen Nachlauf sind 31 vorher unvollständig belegte Deklarationen
+  mit vollständigen nativen Assertions zugeordnet; 129 bleiben offen.
 - Vollständiger Assertion-Abgleich der 68 alten Kandidaten **und** der 120
   fokussierten Zuordnungen. Ein Klassenverweis oder vorhandener Testtitel reicht
   nicht; Vorbereitung, Daten, Reihenfolge und negative Assertions müssen stimmen.

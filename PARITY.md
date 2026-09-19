@@ -42,11 +42,11 @@ See [the full inventory](Documentation/JavaScriptTestInventory.csv),
 [the recorded decoder comparison](Documentation/ReviewEvidence/DecoderDifferential.json).
 Inventory labels distinguish focused regressions, candidate old pointers,
 unmapped rows, API differences and unsupported features. A candidate is not a
-proof that all assertions of an upstream test have been ported. The round-2 pass
-(2026-09-18) closed every `mapping-gap` row. The 2026-09-19 cycle-safety follow-up
-adds the remaining circular-object regression: 67 rows are focused regressions,
-with zero `mapping-gap` and zero `known-divergence` rows. These inventory labels
-do not remove the deliberate encoding bounds or close release gate R2.
+proof that all assertions of an upstream test have been ported. The current
+inventory contains 64 candidate mappings and 131 focused regressions, with no
+unmapped declarations. The latest assertion audit certifies 31 previously
+uncertified scenarios; 129 supported declarations still need full certification.
+These labels do not remove the deliberate encoding bounds or close release gate R2.
 
 The local decoder comparison exercised 5,000 generated valid text/binary vectors
 against the actual pinned JavaScript decoder and current Swift decoder, with zero

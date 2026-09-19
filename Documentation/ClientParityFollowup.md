@@ -12,6 +12,25 @@ Reference: official `socketio/socket.io` at `aaf2af36ec8ad05910f357a788e0e358bad
 * Fixture startup drains stdout and stderr asynchronously and keeps bounded diagnostic tails. Silent/early-exiting/noisy/invalid-readiness/SIGTERM-resistant children have regression tests. Dependency installation and process shutdown are bounded. Fixture versions and transitive dependencies are locked; CI uses `npm ci` without lifecycle scripts.
 * The parser harness invokes the actual pinned JS Encoder as well as Decoder: Swift encoding → JS decoding, JS encoding → Swift decoding, and the existing generated decode corpus. Comparison normalizes representation differences; it is not byte-for-byte JSON object-order equivalence.
 
+## Assertion audit and coverage follow-up (2026-09-19)
+
+31 formerly uncertified declarations now have reviewed native assertion contracts:
+20 encoder/binary round trips, seven malformed/reset parser scenarios, and four
+server-acknowledgement/UTF8/auth scenarios. Round trips check decoded type,
+namespace, acknowledgement ID, complete data and attachment completion rather
+than only an encoded string. Error/reset cases use the original malformed input
+sequences, with explicit native error/lifecycle adaptations. The manifest names
+exact test methods; CI still requires passed executions.
+
+Coverage-driven tests also found and fixed a real raw-ack defect: `createOnAck`
+ignored its `binary` argument and allocated acknowledgement IDs before validating
+raw payloads. Invalid/reserved payloads now fail before allocation; raw binary
+payloads cannot silently become binary emits. Legacy success, exhaustion, duplicate
+acks and conversion errors have explicit regressions.
+
+Complete original-scenario certification remains open for 129 supported test
+declarations. No coverage percentage implies semantic equivalence.
+
 ## Evidence and CI contracts
 
 `JavaScriptParityContracts.json` gives exact XCTest symbols and assertions for selected reviewed contracts. CI requires these symbols to exist **and to appear as passed executions** in the current Swift log. It also compares every CSV declaration identity with a newly generated AST inventory of the pinned JS checkout. Checker self-tests reject fake symbols, absent execution evidence and unreviewed backlog changes.
@@ -21,7 +40,7 @@ The original Node client suites are executed in a separate Node 24 job (matching
 `swift test --enable-code-coverage` exports LLVM coverage. The summary counts only `Source/SocketIO`, not tests. Execution coverage and scenario parity remain separate metrics.
 
 The inventory now contains 297 runtime declarations plus 14 type declarations:
-68 candidate-existing, 127 focused regressions, 38 platform-specific, 28 API
+64 candidate-existing, 131 focused regressions, 38 platform-specific, 28 API
 differences and 36 unsupported-feature entries, with zero unmapped declarations.
 Seven transport scenarios moved from unsupported to limited native regressions
 following implementation; they are not automatically certified as complete

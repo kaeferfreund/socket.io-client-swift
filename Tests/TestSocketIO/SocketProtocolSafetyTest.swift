@@ -231,3 +231,69 @@ extension SocketProtocolSafetyTest {
         }
     }
 }
+
+extension SocketProtocolSafetyTest {
+    /// Exact malformed sequences from the pinned buffer.js/parser.js. Native
+    /// decoding reports a terminal parse error instead of throwing from add().
+    func testOriginalMalformedBinarySequencesCloseOnceWithoutDeliveringAnEvent() {
+        let sequences: [(String?, Bool, String?)] = [
+            ("51-[\"hello\",{\"_placeholder\":true,\"num\":\"splice\"}]", true, nil),
+            ("51-[\"hello\",{\"_placeholder\":true,\"num\":1}]", true, nil),
+            (nil, true, nil),
+            ("51-[\"hello\",{\"_placeholder\":true,\"num\":0}]", false, "2[\"hello\"]"),
+            ("5", false, nil)
+        ]
+        for (header, binary, text) in sequences {
+            let manager = parser()
+            let engine = ReviewParseEngine(client: manager, url: manager.socketURL, options: nil)
+            manager.engine = engine
+            manager.setTestStatus(.connected)
+            let socket = manager.defaultSocket
+            socket.setTestStatus(.connected)
+            var deliveries = 0
+            socket.on("hello") { _, _ in deliveries += 1 }
+            if let header { manager.parseEngineMessage(header) }
+            if binary { manager.parseEngineBinaryData(Data("world".utf8)) }
+            if let text { manager.parseEngineMessage(text) }
+            drainHandleQueue(of: manager)
+            XCTAssertEqual(engine.reasons, ["parse error"])
+            XCTAssertEqual(deliveries, 0)
+            XCTAssertTrue(manager.waitingPackets.isEmpty)
+        }
+    }
+
+    func testOriginalAttachmentLimitRejectsThreeWhenOnlyTwoAreAllowed() {
+        let manager = parser(SocketParserOptions(maximumAttachments: 2))
+        XCTAssertThrowsError(try manager.parseString(
+            "53-[\"hello\",{\"_placeholder\":true,\"num\":0},{\"_placeholder\":true,\"num\":1},{\"_placeholder\":true,\"num\":2}]"))
+        XCTAssertTrue(manager.waitingPackets.isEmpty)
+    }
+
+    func testReconnectDiscardsAnUnfinishedBinaryPacketAndDecodesTheNextTextEvent() {
+        let manager = parser()
+        let engine = ReviewParseEngine(client: manager, url: manager.socketURL, options: nil)
+        manager.engine = engine
+        manager.setTestStatus(.connected)
+        let socket = manager.defaultSocket
+        socket.setTestStatus(.connected)
+        var deliveries = 0
+        socket.on("hello") { data, _ in
+            XCTAssertTrue(data.isEmpty)
+            deliveries += 1
+        }
+        manager.parseEngineMessage("51-[\"hello\"]")
+        drainHandleQueue(of: manager)
+        XCTAssertEqual(manager.waitingPackets.count, 1)
+        XCTAssertEqual(deliveries, 0)
+        manager.setTestStatus(.notConnected)
+        manager.connect()
+        manager.setTestStatus(.connected)
+        socket.setTestStatus(.connected)
+        manager.parseEngineMessage("2[\"hello\"]")
+        drainHandleQueue(of: manager)
+        XCTAssertEqual(deliveries, 1)
+        XCTAssertTrue(manager.waitingPackets.isEmpty)
+        XCTAssertTrue(engine.reasons.isEmpty)
+        manager.disconnect()
+    }
+}

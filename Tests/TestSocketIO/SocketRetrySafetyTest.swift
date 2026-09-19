@@ -335,3 +335,38 @@ extension SocketRetrySafetyTest {
         XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
     }
 }
+
+extension SocketRetrySafetyTest {
+    func testCancellationWinsWhenAnAckOrQueueDrainRunsBeforeTheCancellationHop() throws {
+        for waiting in [false, true] {
+            make([.retries(1), .ackTimeout(100)])
+            if waiting { socket.emit("head", ack: { _, _ in }) }
+            let token = SocketAsyncAckState()
+            var cancellations = 0
+            var successes = 0
+            socket.emitTimed(event: "cancel", items: [], timeout: 100, cancellation: token) { error, _ in
+                XCTAssertTrue(error is CancellationError)
+                cancellations += 1
+            }
+            socket.emit("next", ack: { error, _ in
+                XCTAssertNil(error)
+                successes += 1
+            })
+            let oldID = try ackID(0)
+            // Task cancellation sets the lock-protected token before its owner-
+            // queue cleanup hop. An already queued ack must not turn it into success.
+            token.cancel()
+            socket.handleAck(oldID, data: ["too late"])
+            XCTAssertEqual(cancellations, 1)
+            XCTAssertEqual(engine.sentPackets.count, 2)
+            XCTAssertEqual(try manager.parseString(engine.sentPackets[1].0).event, "next")
+            socket.cancelAsyncEmit(token)
+            socket.handleAck(oldID, data: ["duplicate"])
+            XCTAssertEqual(cancellations, 1)
+            socket.handleAck(try ackID(1), data: [])
+            XCTAssertEqual(successes, 1)
+            XCTAssertEqual(socket.testRetryQueueCount, 0)
+            XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+        }
+    }
+}

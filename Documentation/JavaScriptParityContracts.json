@@ -1130,6 +1130,160 @@
           "symbol": "SocketPacketEncoderTest.testRejectsCyclicFoundationContainers"
         }
       ]
+    },
+    {
+      "id": "JS-253",
+      "upstream_ids": [
+        "JS-253"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original string placeholder num splice followed by binary UTF8 world causes exactly one terminal parse error, zero application events and no retained reconstruction. Swift rejects invalid indices earlier at the header and reports through the manager rather than a JS thrown Error; error strings are native.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketProtocolSafetyTest.swift",
+          "symbol": "SocketProtocolSafetyTest.testOriginalMalformedBinarySequencesCloseOnceWithoutDeliveringAnEvent"
+        }
+      ]
+    },
+    {
+      "id": "JS-254",
+      "upstream_ids": [
+        "JS-254"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original out-of-range placeholder num 1 for one attachment followed by binary UTF8 world causes exactly one terminal parse error, zero application events and no retained reconstruction. Swift rejects invalid indices earlier at the header and reports through the manager rather than a JS thrown Error; error strings are native.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketProtocolSafetyTest.swift",
+          "symbol": "SocketProtocolSafetyTest.testOriginalMalformedBinarySequencesCloseOnceWithoutDeliveringAnEvent"
+        }
+      ]
+    },
+    {
+      "id": "JS-255",
+      "upstream_ids": [
+        "JS-255"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original binary UTF8 world without header causes exactly one terminal parse error, zero application events and no retained reconstruction. Swift rejects invalid indices earlier at the header and reports through the manager rather than a JS thrown Error; error strings are native.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketProtocolSafetyTest.swift",
+          "symbol": "SocketProtocolSafetyTest.testOriginalMalformedBinarySequencesCloseOnceWithoutDeliveringAnEvent"
+        }
+      ]
+    },
+    {
+      "id": "JS-256",
+      "upstream_ids": [
+        "JS-256"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original one-attachment hello header followed by text hello causes exactly one terminal parse error, zero application events and no retained reconstruction. Swift rejects invalid indices earlier at the header and reports through the manager rather than a JS thrown Error; error strings are native.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketProtocolSafetyTest.swift",
+          "symbol": "SocketProtocolSafetyTest.testOriginalMalformedBinarySequencesCloseOnceWithoutDeliveringAnEvent"
+        }
+      ]
+    },
+    {
+      "id": "JS-267",
+      "upstream_ids": [
+        "JS-267"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original truncated binary header 5 causes exactly one terminal parse error, zero application events and no retained reconstruction. Swift rejects invalid indices earlier at the header and reports through the manager rather than a JS thrown Error; error strings are native.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketProtocolSafetyTest.swift",
+          "symbol": "SocketProtocolSafetyTest.testOriginalMalformedBinarySequencesCloseOnceWithoutDeliveringAnEvent"
+        }
+      ]
+    },
+    {
+      "id": "JS-268",
+      "upstream_ids": [
+        "JS-268"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Exact original three-placeholder hello header with maximumAttachments 2 throws before retaining reconstruction; native typed failure replaces the JS exception string.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketProtocolSafetyTest.swift",
+          "symbol": "SocketProtocolSafetyTest.testOriginalAttachmentLimitRejectsThreeWhenOnlyTwoAreAllowed"
+        }
+      ]
+    },
+    {
+      "id": "JS-272",
+      "upstream_ids": [
+        "JS-272"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Exact unfinished 51-[hello] then decoder reset, then 2[hello]. One hello with empty arguments is delivered, reconstruction is cleared, no parse-error close occurs. Native decoder lifetime/reset belongs to manager reconnect rather than standalone Decoder.destroy().",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/SocketProtocolSafetyTest.swift",
+          "symbol": "SocketProtocolSafetyTest.testReconnectDiscardsAnUnfinishedBinaryPacketAndDecodesTheNextTextEvent"
+        }
+      ]
+    },
+    {
+      "id": "JS-008",
+      "upstream_ids": [
+        "JS-008"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Emit the request before connection; server sends an event with an acknowledgement callback; client sends both original arguments 5 and {test:true}; server validates both and confirms via an event. Only fixture event names are renamed.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testOriginalServerRequestedAcknowledgementReceivesBothArguments"
+        }
+      ]
+    },
+    {
+      "id": "JS-011",
+      "upstream_ids": [
+        "JS-011"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Request before connection, receive the five exact upstream UTF8 strings as server events including the repeated final string, assert count and full ordered equality. Only fixture event names are renamed.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testOriginalUTF8ServerEventsPreserveAllFiveValuesAndOrder"
+        }
+      ]
+    },
+    {
+      "id": "JS-075",
+      "upstream_ids": [
+        "JS-075"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Fresh manager and /abc namespace with original auth object {a:b,c:d}; server handshake echoes exact auth and both keys are absent from query. Explicit native connect replaces JS auto-connect.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testAuthObjectAndCallbackReachAuthWithoutLeakingIntoQuery"
+        }
+      ]
+    },
+    {
+      "id": "JS-076",
+      "upstream_ids": [
+        "JS-076"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Fresh manager and /abc namespace with callback auth provider returning original {e:f}; server handshake echoes exact auth and e is absent from query. Explicit native connect replaces JS auto-connect.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testAuthObjectAndCallbackReachAuthWithoutLeakingIntoQuery"
+        }
+      ]
     }
   ],
   "remaining_review": {

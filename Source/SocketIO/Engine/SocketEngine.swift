@@ -48,6 +48,9 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     internal var pollingSessionConfigurationFactory: () -> URLSessionConfiguration = { .default }
     private var tlsConfiguration: SocketTLSConfiguration = .systemDefault
     private var webSocketOptions = SocketWebSocketOptions()
+    /// Pipeline-wide resource policy; only `maximumPollingResponseBytes` is
+    /// enforced at this layer. Unlimited by default, like the JS client.
+    internal private(set) var bufferLimits = SocketBufferLimits.unlimited
     private var configurationError: String?
 
     /// The connect parameters sent during a connect.
@@ -974,6 +977,8 @@ open class SocketEngine: NSObject, URLSessionDelegate,
                 tlsConfiguration = policy
             case let .webSocketOptions(options):
                 webSocketOptions = options
+            case let .bufferLimits(limits):
+                bufferLimits = limits
             case let .invalidConfiguration(reason):
                 configurationError = reason
             case .compress:

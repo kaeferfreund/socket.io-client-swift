@@ -1320,4 +1320,37 @@ final class JSParityE2ETest: XCTestCase {
 
         XCTAssertEqual(value.first as? Int, 42)
     }
+
+    // MARK: socket.ts > acknowledgement upon disconnection — on a retried drop
+
+    /// The JS scenarios "should ack with an error upon disconnection
+    /// (callback & timeout / ackTimeout)" disconnect manually, but JS
+    /// `Socket.onclose` runs `_clearAcks()` on *every* close, so a transport
+    /// drop that the manager retries settles the pending acknowledgement the
+    /// same way. `never_ack` guarantees the server never answers, so the only
+    /// thing that can settle it is the close. The timeout is far longer than
+    /// the test budget, so a `.timeout` here would be a different bug.
+    func testPendingAckFailsWhenTheTransportIsKilledAndTheSocketReconnects() throws {
+        let socket = connect(makeManager(.ackTimeout(60), .reconnectWait(1)).socket(forNamespace: "/"))
+        let sid = try XCTUnwrap(socket.sid)
+
+        let settled = expectation(description: "pending ack settles on the retried drop")
+        socket.emit("never_ack", ack: { err, _ in
+            XCTAssertEqual(err as? SocketAckError, .disconnected)
+            settled.fulfill()
+        })
+        // A round trip on the same session proves the emit reached the server
+        // before the transport is killed.
+        XCTAssertEqual(try serverSocketId(for: socket), sid)
+
+        let reconnected = expectation(description: "namespace re-joined")
+        reconnected.assertForOverFulfill = false
+        socket.on(clientEvent: .connect) { _, _ in reconnected.fulfill() }
+
+        try killTransport(ofSocketWithId: sid)
+        wait(for: [settled, reconnected], timeout: 20)
+
+        XCTAssertEqual(socket.status, .connected)
+        XCTAssertTrue(socket.active)
+    }
 }

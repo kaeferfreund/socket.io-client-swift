@@ -77,6 +77,37 @@ final class SocketNativeEngineTest: XCTestCase {
         transport.onEvent?(.message(.text(handshake))); drain(engine)
     }
 
+    func testCurrentPollingSessionInvalidationReportsErrorAndClosesOnce() throws {
+        let client = NativeEngineClient()
+        let engine = NativePollingTestEngine(client: client, url: url, config: [.forcePolling(true)])
+        engine.connect(); drain(engine)
+        try engine.engineQueue.sync {
+            let session = try XCTUnwrap(engine.session)
+            let proxy = try XCTUnwrap(session.delegate as? SocketSessionDelegateProxy)
+            proxy.urlSession(session, didBecomeInvalidWithError: URLError(.networkConnectionLost))
+            XCTAssertEqual(client.errors.count, 1)
+            XCTAssertEqual(client.closes, ["transport error"])
+            proxy.urlSession(session, didBecomeInvalidWithError: URLError(.networkConnectionLost))
+            XCTAssertEqual(client.errors.count, 1)
+        }
+        drain(engine)
+    }
+
+    func testStoppingPollingFromCallerQueueRetiresSession() {
+        let client = NativeEngineClient()
+        let engine = NativePollingTestEngine(client: client, url: url, config: [.forcePolling(true)])
+        engine.connect(); drain(engine)
+        engine.engineQueue.sync { XCTAssertNotNil(engine.session) }
+        engine.stopPolling(); drain(engine)
+        engine.engineQueue.sync {
+            XCTAssertNil(engine.session)
+            XCTAssertTrue(engine.invalidated)
+            XCTAssertFalse(engine.waitingForPoll)
+            XCTAssertFalse(engine.waitingForPost)
+        }
+        engine.disconnect(reason: "test"); drain(engine)
+    }
+
     func testMalformedOpenPacketsFailOnceWithoutOpening() {
         for packet in ["0not-json", "0{}", "0{\"sid\":\"\"}", "0{\"sid\":42}"] {
             let (engine, client, transport) = make()

@@ -20,6 +20,7 @@ private final class StubEngine: NSObject, SocketEnginePollable {
     var waitingForPost = false
     var errors: [String] = []
     var packets: [String] = []
+    var webSocketFlushes = 0
     var closed: Bool = false
     var connected: Bool = true
     var connectParams: [String: Any]? = nil
@@ -51,7 +52,7 @@ private final class StubEngine: NSObject, SocketEnginePollable {
     func didError(reason: String) { errors.append(reason) }
     func disconnect(reason: String) {}
     func doFastUpgrade() {}
-    func flushWaitingForPostToWebSocket() {}
+    func flushWaitingForPostToWebSocket() { webSocketFlushes += 1; postWait.removeAll() }
     func parseEngineData(_ data: Data) {}
     func parseEngineMessage(_ message: String) {
         packets.append(message)
@@ -69,6 +70,16 @@ final class SocketEngineWritableTest: XCTestCase {
 }
 
 extension SocketEngineWritableTest {
+    func testCustomEngineFlushesQueuedPollingWritesThroughWebSocketAfterUpgrade() {
+        let stub = StubEngine()
+        stub.polling = false
+        stub.postWait = [(msg: "4queued", completion: nil)]
+        stub.flushWaitingForPost()
+        XCTAssertEqual(stub.webSocketFlushes, 1)
+        XCTAssertTrue(stub.postWait.isEmpty)
+        XCTAssertFalse(stub.waitingForPost)
+    }
+
     func testCustomEngineInheritsSafeDefaultsAndLegacyErrorForwarding() {
         let stub = StubEngine()
         XCTAssertNil(stub.maxPayload)

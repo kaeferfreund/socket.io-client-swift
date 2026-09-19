@@ -4,6 +4,21 @@ import XCTest
 @testable import SocketIO
 
 final class URLSessionWebSocketTransportTest: XCTestCase {
+    func testMessagesArriveOnlyThroughReceiveCompletion() {
+        let harness = Harness()
+        let connection = harness.open()
+        harness.event(connection, .message(.text("duplicate delegate path")))
+        harness.run {
+            XCTAssertTrue(harness.log.messages.isEmpty)
+            XCTAssertEqual(connection.receives.count, 1)
+        }
+        harness.receiveFinished(connection, .success(.text("actual receive")))
+        harness.run {
+            XCTAssertEqual(harness.log.messages, [.text("actual receive")])
+            XCTAssertEqual(connection.receives.count, 1)
+        }
+    }
+
     private enum TestError: Error { case failed }
 
     private final class Connection: EngineWebSocketConnection {

@@ -51,16 +51,16 @@ final class SocketClientProtocolDefaultsTest: XCTestCase {
         let backing = manager.defaultSocket
         let socket: SocketIOClientSpec = DefaultContractClient(backing)
         defer { queue.sync { manager.disconnect() } }
+        let completed = expectation(description: "write completions")
+        completed.expectedFulfillmentCount = 2
         try queue.sync {
             manager.setTestStatus(.connected)
             backing.setTestStatus(.connected)
-            var writes = 0
             var replies: [String] = []
-            socket.send("one", 1) { writes += 1 }
-            socket.send(with: ["two", 2]) { writes += 1 }
+            socket.send("one", 1) { completed.fulfill() }
+            socket.send(with: ["two", 2]) { completed.fulfill() }
             socket.sendWithAck("three", 3).timingOut(after: 0) { replies.append($0[0] as! String) }
             socket.sendWithAck(with: ["four", 4]).timingOut(after: 0) { replies.append($0[0] as! String) }
-            XCTAssertEqual(writes, 2)
             XCTAssertEqual(engine.sentPackets.count, 4)
             let packets = try engine.sentPackets.map { try manager.parseString($0.0) }
             for (index, name) in ["one", "two", "three", "four"].enumerated() {
@@ -72,6 +72,7 @@ final class SocketClientProtocolDefaultsTest: XCTestCase {
             XCTAssertEqual(replies, ["third reply", "fourth reply"])
             XCTAssertFalse(socket.recovered)
         }
+        wait(for: [completed], timeout: 1)
     }
 
     func testCustomClientDefaultErrorIsLoggedAndDeliveredToErrorListener() {

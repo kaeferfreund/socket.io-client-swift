@@ -33,6 +33,21 @@ final class SocketPacketDiagnosticsTest: XCTestCase {
         XCTAssertTrue(logger.entries.allSatisfy { $0.contains("encodedPacketString()") })
     }
 
+    func testFoundationScalarNormalizationHonorsBinaryPolicyAndByteBudget() throws {
+        XCTAssertEqual(try SocketPacket.jsonSafeEmitData([NSDate(timeIntervalSince1970: 0)], allowBinary: true)
+            as NSArray, ["1970-01-01T00:00:00.000Z"] as NSArray)
+        var textOnly = SocketEmitNormalizer(allowBinary: false)
+        XCTAssertThrowsError(try textOnly.normalize(NSData(data: Data([1])))) { error in
+            guard case SocketPacketError.unsupportedValue = error else { return XCTFail("\(error)") }
+        }
+        var bounded = SocketEmitNormalizer(allowBinary: true, maximumBytes: 1)
+        XCTAssertThrowsError(try bounded.normalize(NSData(data: Data([1, 2])))) { error in
+            guard case SocketPacketError.payloadTooLarge(limit: 1) = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertEqual(try SocketPacket.jsonSafeEmitData(["\u{1}\u{2028}\u{2029}"], allowBinary: true)
+            as NSArray, ["\u{1}\u{2028}\u{2029}"] as NSArray)
+    }
+
     func testFoundationDictionaryRejectsNonStringKeysWithPayloadPath() {
         let dictionary = NSDictionary(object: "value", forKey: NSNumber(value: 42))
         XCTAssertThrowsError(try SocketPacket.jsonSafeEmitData([dictionary], allowBinary: true)) { error in

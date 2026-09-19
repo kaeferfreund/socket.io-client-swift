@@ -445,6 +445,7 @@ final class SocketBufferLimitsTest: XCTestCase {
 
     func testRetainedBytesCountsStringsDataAndNesting() {
         XCTAssertEqual(SocketBufferLimits.retainedBytes(of: ["abc"]), 3)
+        XCTAssertEqual(SocketBufferLimits.retainedBytes(of: [NSNull()]), 4)
         XCTAssertEqual(SocketBufferLimits.retainedBytes(of: [Data(count: 64)]), 64)
         XCTAssertEqual(SocketBufferLimits.retainedBytes(of: ["ev", ["k": "vv"]]), 2 + 8 + 1 + 2)
         XCTAssertGreaterThan(SocketBufferLimits.retainedBytes(of: [["a", "b"]]), 2)

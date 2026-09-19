@@ -258,6 +258,7 @@ final class JSParityE2ETest: XCTestCase {
         socket.connect()
         wait(for: [connected], timeout: 5)
         XCTAssertEqual(try serverSocketId(for: socket), try XCTUnwrap(socket.sid))
+        XCTAssertNotEqual(socket.sid, manager.engine?.sid)
 
         let disconnected = expectation(description: "disconnect")
         disconnected.assertForOverFulfill = false
@@ -286,6 +287,9 @@ final class JSParityE2ETest: XCTestCase {
         wait(for: [connected], timeout: 5)
 
         let firstId = try XCTUnwrap(socket.sid)
+        socket.on(clientEvent: .reconnectAttempt) { _, _ in
+            XCTAssertTrue(socket.sid?.isEmpty ?? true)
+        }
 
         try killTransport(ofSocketWithId: firstId)
 
@@ -357,11 +361,13 @@ final class JSParityE2ETest: XCTestCase {
         socket.connect()
         wait(for: [connected], timeout: 5)
 
-        // The same three strings the JS test uses.
+        // All five strings from the pinned JS test, including its duplicate.
         let strings = [
             "てすと",
             "Я Б Г Д Ж Й",
-            "Ä ä Ü ü ß"
+            "Ä ä Ü ü ß",
+            "utf8 — string",
+            "utf8 — string"
         ]
 
         for string in strings {
@@ -460,6 +466,7 @@ final class JSParityE2ETest: XCTestCase {
         XCTAssertEqual(try serverSocketId(for: root), try XCTUnwrap(root.sid))
         XCTAssertEqual(try serverSocketId(for: foo), try XCTUnwrap(foo.sid))
         XCTAssertNotEqual(foo.sid, root.sid, "Each namespace gets its own server-side id")
+        XCTAssertNotEqual(foo.sid, manager.engine?.sid)
     }
 
     // MARK: socket.ts — "doesn't fire an error event if we force disconnect in opening state"
@@ -1352,5 +1359,80 @@ final class JSParityE2ETest: XCTestCase {
 
         XCTAssertEqual(socket.status, .connected)
         XCTAssertTrue(socket.active)
+    }
+}
+
+extension JSParityE2ETest {
+    func testOriginalServerRequestedAcknowledgementReceivesBothArguments() {
+        let socket = makeManager().defaultSocket
+        let done = expectation(description: "server validates both ack arguments")
+        socket.on("parity-server-ack") { _, ack in ack.with(5, ["test": true]) }
+        socket.on("parity-ack-result") { data, _ in
+            XCTAssertEqual(data.first as? Bool, true)
+            done.fulfill()
+        }
+        socket.emit("parity-request-ack")
+        socket.connect()
+        wait(for: [done], timeout: 5)
+    }
+
+    func testOriginalUTF8ServerEventsPreserveAllFiveValuesAndOrder() {
+        let socket = makeManager().defaultSocket
+        let expected = ["てすと", "Я Б Г Д Ж Й", "Ä ä Ü ü ß", "utf8 — string", "utf8 — string"]
+        var values: [String] = []
+        let received = expectation(description: "all original UTF8 events")
+        received.expectedFulfillmentCount = expected.count
+        socket.on("parity-utf8") { data, _ in
+            values.append(data.first as? String ?? "missing")
+            received.fulfill()
+        }
+        socket.emit("parity-get-utf8")
+        socket.connect()
+        wait(for: [received], timeout: 5)
+        XCTAssertEqual(values, expected)
+    }
+
+    func testBinaryAndNestedBinarySurviveTheActualSocketIOConnection() {
+        let socket = connect(makeManager().defaultSocket)
+        let bytes = Data([0, 1, 2, 3, 255])
+        let direct = expectation(description: "binary bytes")
+        socket.emit("parity-binary", bytes, ack: { error, data in
+            XCTAssertNil(error)
+            XCTAssertEqual(data.first as? Data, bytes)
+            direct.fulfill()
+        })
+        let nested = expectation(description: "binary in object")
+        socket.emit("parity-binary", ["hello": "lol", "message": bytes, "goodbye": "gotcha"] as [String: Any], ack: { error, data in
+            XCTAssertNil(error)
+            let object = data.first as? [String: Any]
+            XCTAssertEqual(object?["message"] as? Data, bytes)
+            XCTAssertEqual(object?["hello"] as? String, "lol")
+            XCTAssertEqual(object?["goodbye"] as? String, "gotcha")
+            nested.fulfill()
+        })
+        wait(for: [direct, nested], timeout: 5)
+    }
+
+    func testAuthObjectAndCallbackReachAuthWithoutLeakingIntoQuery() {
+        for callback in [false, true] {
+            let socket = makeManager().socket(forNamespace: "/abc")
+            let received = expectation(description: "auth stays out of query")
+            let auth = callback ? ["e": "f"] : ["a": "b", "c": "d"]
+            socket.on("handshake") { data, _ in
+                let handshake = data.first as? [String: Any]
+                XCTAssertEqual(handshake?["auth"] as? [String: String], auth)
+                let query = handshake?["query"] as? [String: Any]
+                for key in auth.keys { XCTAssertNil(query?[key]) }
+                received.fulfill()
+            }
+            if callback {
+                socket.setAuth { complete in complete(auth) }
+                socket.connect()
+            } else {
+                socket.connect(withPayload: auth)
+            }
+            wait(for: [received], timeout: 5)
+            socket.disconnect()
+        }
     }
 }

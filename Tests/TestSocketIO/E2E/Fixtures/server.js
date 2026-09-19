@@ -311,6 +311,21 @@ io.on("connection", (socket) => {
     socket.emit("false", false);
   });
 
+  // Original client-test direction: the server requests an acknowledgement.
+  socket.on("parity-request-ack", () => {
+    socket.emit("parity-server-ack", (number, object) => {
+      socket.emit("parity-ack-result", number === 5 && object?.test === true);
+    });
+  });
+  socket.on("parity-get-utf8", () => {
+    for (const value of ["てすと", "Я Б Г Д Ж Й", "Ä ä Ü ü ß", "utf8 — string", "utf8 — string"]) {
+      socket.emit("parity-utf8", value);
+    }
+  });
+  socket.on("parity-binary", (value, ack) => {
+    if (typeof ack === "function") ack(value);
+  });
+
   // JS parity: `socket.on("echo", (arg, cb) => cb(arg))` from the JS support
   // server. Used by the ported ack scenarios.
   socket.on("echo", (...args) => {

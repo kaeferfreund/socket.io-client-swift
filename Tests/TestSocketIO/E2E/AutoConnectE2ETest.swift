@@ -80,5 +80,6 @@ final class AutoConnectE2ETest: XCTestCase {
         wait(for: [noConnect], timeout: 1)
 
         XCTAssertEqual(manager.status, .notConnected)
+        XCTAssertNil(manager.engine)
     }
 }

@@ -69,12 +69,13 @@ final class SocketEngineURLParityTest: XCTestCase {
         XCTAssertEqual(engine.urlWebSocket.query, "transport=websocket&token=x&EIO=4")
     }
 
+    /// Engine.IO 4 is the only supported protocol version: neither the URL nor
+    /// `connectParams` can change `EIO`.
     func testExplicitParametersReplaceURLAndProtocolVersionStaysAuthoritative() {
         let engine = self.engine("https://localhost/?old=secret",
-                                 .connectParams(["EIO": "wrong", "transport": "bad", "token": "a&b"]),
-                                 .version(.two))
-        XCTAssertEqual(engine.urlPolling.query, "transport=polling&b64=1&token=a%26b&EIO=3")
-        XCTAssertEqual(engine.urlWebSocket.query, "transport=websocket&token=a%26b&EIO=3")
+                                 .connectParams(["EIO": "wrong", "transport": "bad", "token": "a&b"]))
+        XCTAssertEqual(engine.urlPolling.query, "transport=polling&b64=1&token=a%26b&EIO=4")
+        XCTAssertEqual(engine.urlWebSocket.query, "transport=websocket&token=a%26b&EIO=4")
     }
 
     func testResettingExplicitQueryToNilRestoresURLQuery() {

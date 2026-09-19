@@ -1,5 +1,25 @@
 # Socket.IO-Client-Swift
 
+### Native transport parity follow-up
+
+`withCredentials(true)` enables an isolated engine-owned jar for server cookies.
+**Migration:** automatic server cookies are now opt-in (default `false`); the
+application's shared cookie store is not used. Explicit `.cookies(...)` and
+`Cookie` headers remain explicit. The private jar survives reconnects and
+polling-to-WebSocket upgrades; create a new manager for a new cookie identity.
+
+`.forceBase64(true)` enables Engine.IO base64 text over WebSocket, including
+upgrades. `.addTrailingSlash(false)` requests the configured path without an
+appended slash. Defaults are `false` and `true`, respectively.
+
+Transport errors and disconnects keep their reason at `data[0]` and may append a
+`SocketTransportError` at `data[1]` (HTTP status/body or WebSocket code/reason).
+Custom reason-only Engine.IO delegates retain a fallback. Subclasses handling
+manager engine callbacks should also account for the new typed overloads.
+See [remaining-client review](Documentation/RemainingClientParity.md) for exact
+test mappings, native adaptations, migration details and known boundaries.
+
+
 [![Swift validation](https://github.com/kaeferfreund/socket.io-client-swift/actions/workflows/swift.yml/badge.svg?branch=master)](https://github.com/kaeferfreund/socket.io-client-swift/actions/workflows/swift.yml)
 
 A Swift Socket.IO client for iOS, macOS, tvOS and watchOS. This fork uses Apple's
@@ -21,21 +41,28 @@ migration changes some 16.x APIs; see [migration notes](Documentation/NativeWebS
 
 | Requirement | Minimum |
 | --- | --- |
-| Swift tools | 5.5, using the package's Swift 5 language mode |
+| Swift tools / compiler | 6.4, using Swift 6 language mode (Xcode 27) |
 | iOS / tvOS | 15 |
 | macOS | 12 |
-| watchOS | 8 |
+| watchOS | 9 |
 
-The public API is intended for Swift. Strict Swift 6 concurrency compatibility
-and an Objective-C integration are not claimed.
+The package and framework targets use **Swift 6 language mode** with complete
+concurrency checking. The public API remains queue-based, not actor-based:
+`SocketManager` and `SocketIOClient` are deliberately **not Sendable**. Configure
+and use a manager and its sockets on its serial `handleQueue` (main by default).
+Do not concurrently mutate callback payloads or change the queue after connecting.
+The public API is intended for Swift; Objective-C integration is not supported.
 
-| Socket.IO server | Client configuration | Engine.IO protocol |
+| Supported Socket.IO server | Client configuration | Engine.IO protocol |
 | --- | --- | --- |
-| 3.x / 4.x | `.version(.three)`, the default | 4 |
-| 2.x | `.version(.two)` | 3 |
+| 4.x | No version option | 4 |
 
-`.three` also selects the mode for Socket.IO 4.x servers; there is no `.four`
-option. This is a **Socket.IO client**, not a client for an arbitrary WebSocket
+Socket.IO below 4 is no longer supported. Remove `.version(.two)`,
+`.version(.three)` and dictionary `"version"` options; no replacement is needed.
+There is deliberately no `.four` selector. Socket.IO 3 shares the modern wire
+protocol, so the handshake cannot distinguish its major version, but it is
+outside this fork's supported/tested server range.
+See [the migration guide](Documentation/SocketIO4Swift6Migration.md). This is a **Socket.IO client**, not a client for an arbitrary WebSocket
 endpoint. Compatibility details and known differences from the JavaScript client
 are recorded in [PARITY.md](PARITY.md).
 
@@ -203,7 +230,7 @@ callback and timeout contract differs from the error-first and async APIs. See
 
 ## Authentication and recovery
 
-For Socket.IO 3.x/4.x servers that accept an authentication payload:
+For Socket.IO 4.x servers that accept an authentication payload:
 
 ```swift
 socket.connect(withPayload: ["token": "your-access-token"])
@@ -217,11 +244,10 @@ production. Auth providers are available through `setAuth(_:)`; see
 
 ### Connection State Recovery
 
-With a `.version(.three)` manager and a Socket.IO server configured for
+With a Socket.IO 4.6+ server configured for
 `connectionStateRecovery`, a reconnect after an abrupt transport loss can resume
 a prior session and replay missed server-to-client events. Recovery depends on
 the server accepting the saved session and offset; it is not guaranteed.
-`.version(.two)` does not use recovery.
 
 ```swift
 socket.on(clientEvent: .connect) { [weak socket] _, _ in
@@ -279,10 +305,14 @@ JavaScript client's contract. Everything below changes an observable API; see
 | `Data` through `rawEmitView` | Silently sent an empty payload. | Throws `SocketPacketError.unsupportedValue`; that view deliberately does not shred binary into attachments. |
 | Server-URL query string | Discarded when the engine built its transport URLs. | Used as the connection query, unless `.connectParams` is set (JS `if (parsed.query && !opts.query)`). |
 | JSON object key order | Arbitrary, varied between runs. | Sorted, so the wire output is reproducible. A Swift `Dictionary` has no insertion order to preserve, and JSON object order carries no meaning. |
+| Pending acknowledgement on a retried drop | Survived the reconnect untouched, so it could match an id the new session re-issued or fire a late timeout. | Settled at the close, as JS `Socket.onclose` → `_clearAcks()` does on **every** close: an error-first callback and an `async emitWithAck` get the disconnect error, a plain callback is dropped silently, and an acknowledgement whose packet is still buffered is kept. The retry queue's head keeps its place and its budget and is re-sent under a fresh id. |
 
 Additions that are not breaking: `async` `socket.emitWithAck(_:_:)` and
 `socket.timeout(after:).emitWithAck(_:_:)`, `SocketPacket.encodedPacketString()`
-(the throwing encoder) and `SocketPacketError`.
+(the throwing encoder), `SocketPacketError`, and
+`.bufferLimits(SocketBufferLimits)` — every limit in it is off by default, so
+the client stays JavaScript-equal unless you opt in (see
+[Optional pipeline buffer limits](#optional-pipeline-buffer-limits)).
 
 ## TLS and migration from Starscream
 
@@ -343,10 +373,61 @@ transport limits each incoming message to 16 MiB and pending outgoing payload to
 [SocketWebSocketOptions](Source/SocketIO/Engine/Transport/SocketWebSocketOptions.swift).
 The server's Engine.IO `maxPayload` separately governs outgoing polling batches.
 
-None of these settings is a total application-memory limit. In particular,
-disconnected-send and retry queues can grow while offline; avoid producing an
-unbounded stream of reliable events during long outages. Use `socket.volatile`
-only for updates that may safely be dropped.
+None of these settings is a total application-memory limit; see the next section
+for the queues that accumulate *across* packets.
+
+## Optional pipeline buffer limits
+
+`.parserOptions` bounds one incoming packet and `.webSocketOptions` bounds one
+native WebSocket message. Neither bounds what accumulates *between* packets: the
+send buffer of a socket that is offline, the retry queue behind a head the
+server never acknowledges, the recovery replay buffer, packets the engine hands
+the manager faster than they are parsed, or one very large polling response.
+`.bufferLimits(SocketBufferLimits)` is that third layer.
+
+**Every limit is off by default**, because the JavaScript client has no such
+bound either — out of the box this client behaves exactly like `socket.io-client`
+and its `sendBuffer` grows while you are offline. Opt in where you need the
+guarantee:
+
+```swift
+let limits = SocketBufferLimits(
+    maximumSendBufferPackets: 1_000,      // emits buffered while disconnected
+    maximumSendBufferBytes: 8 << 20,
+    maximumRetryQueuePackets: 200,        // entries behind an unacknowledged head
+    maximumRecoveryReplayPackets: 5_000,  // replayed events during session recovery
+    maximumUnparsedPackets: 512,          // engine → manager handoff backpressure
+    maximumPollingResponseBytes: 4 << 20, // one incoming long-polling HTTP body
+    binaryReconstructionTimeout: 30       // seconds a partial binary packet may wait
+)
+let manager = SocketManager(
+    socketURL: URL(string: "https://example.com")!,
+    config: [.bufferLimits(limits)]
+)
+```
+
+Overflow is explicit and never silent:
+
+* **Outgoing** (`sendBuffer`, retry queue): the **new** emit fails locally. Its
+  write completion runs once, its acknowledgement settles once with a
+  `SocketBufferLimitError`, and the `.error` client event carries the same
+  error. Nothing already accepted is evicted — an emit you were told is queued
+  is never dropped behind your back.
+* **Incoming** (replay buffer, handoff backlog, polling body): the connection is
+  closed with `"transport error"`. A half-reconstructed binary packet that
+  outlives `binaryReconstructionTimeout` closes with `"parse error"` instead,
+  and nothing is replayed from the partial packet. Reconnection then proceeds
+  normally if it is enabled.
+
+With `maximumPollingResponseBytes` set, the body is bounded *while it is
+received*: an announced `Content-Length` above the cap is refused before any
+body byte is transferred, and a chunked body is cancelled as soon as the
+accumulated bytes cross the cap. All configured values must be positive; an
+invalid set is rejected before connecting.
+
+These are queue-retention bounds measured in estimated payload bytes, not a
+total application-memory limit and not an allocator cap. `socket.volatile`
+remains the right tool for updates that may safely be dropped.
 
 ## Testing and JavaScript parity
 

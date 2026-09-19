@@ -127,6 +127,15 @@ The native fork rejects `.compress`, `.selfSigned(true)` and `.enableSOCKSProxy(
 
 ### R1. Bound the entire pipeline, not only individual native packets, high priority
 
+**Status (2026-09-19): IMPLEMENTED in round 3, not release-validated.** The
+policy below exists as the opt-in `.bufferLimits(SocketBufferLimits)` option and
+covers every buffer this paragraph names, with the overflow behaviour and the
+full acceptance list tested. See section 9.2. What is **not** done: the defaults
+stay unlimited so the client remains JavaScript-equal out of the box, so a
+deployment that wants the bound has to set it; the byte accounting is an
+estimate of retained payload size, not a process-memory measurement; and none of
+it has run on a device. The historical observation below predates the change.
+
 **Static risk, not a measured exhaustion exploit in this review.** `SocketIOClient.sendBuffer`, `retryQueue` and `bufferedRecoveryReplayEvents` remain unbounded. The source explicitly documents the send buffer as unlimited. In addition, native receives can enqueue work onto the manager's DispatchQueue faster than the manager parses it. A per-message WebSocket limit and per-packet parser cap do not bound this accumulated backlog. Polling currently receives its complete response through a URLSession data-task completion, before the parser can enforce its text limit.
 
 Required next implementation: one coherent resource policy covering queued packet count and retained bytes at the application buffer, retry queue, recovery replay and engine-to-manager handoff; a bounded incoming polling body; and a receive permit released after parsing, not merely after dispatch. Define whether overflow fails a new emit or closes the connection, how callbacks complete, and how long a half-reconstructed packet can remain outstanding. Never silently replay partial packets or silently drop reliable emits.
@@ -162,6 +171,19 @@ The test server's blocking `availableData` startup read and undrained stderr pip
 
 ### R5. Validate the native runtime and distribution contract
 
+**Status (2026-09-19): PARTIALLY CLOSED in round 3.** Done: a Thread Sanitizer
+CI job over the non-E2E unit suite, a `-strict-concurrency=complete` ratchet
+with a per-platform baseline (no mutable class was stamped `@unchecked
+Sendable`), pinned fixture dependencies with a committed lockfile and `npm ci`
+everywhere, and two source-visible data races fixed
+(`SocketAckManager` storage, the acknowledgement id allocator). Both new jobs
+were authored on Linux and have not run yet; their first macOS run is the
+measurement. Still open: everything below that needs real hardware — device and
+simulator runs, background/foreground, network loss and recovery,
+Wi-Fi/cellular transitions, IPv6, proxy environments, cancellation while
+suspended, and independent package/framework/CocoaPods consumer integration
+against a release tag. See section 9.3 and `REMAINING-WORK.md` section 5.
+
 Run device/simulator application tests for background/foreground, network loss/recovery, Wi-Fi/cellular transitions, IPv6, proxy environments and cancellation while suspended. macOS unit tests and SDK framework builds are not equivalent to runtime validation on iPhone or Apple Watch. Run Thread Sanitizer and strict-concurrency builds separately; do not stamp mutable clients `@unchecked Sendable` to silence warnings.
 
 Pin fixture dependency versions/lockfiles and record resolved versions for reproducible comparisons. Test Swift package, framework and CocoaPods consumer integration independently before release. A branch build is not a signed app, a release tag or a published pod.
@@ -174,10 +196,12 @@ Reproduce on macOS with Swift/Xcode, Node and OpenSSL installed:
 
 ```sh
 swift test
+swift test --sanitize=thread --skip 'E2ETest' --skip 'HarnessSanityTest' --skip 'TestServerProcessTest'
+bash scripts/check-strict-concurrency.sh
 bash scripts/test-native-distributions.sh
 bash scripts/test-parser-safety.sh
 cd Tests/TestSocketIO/E2E/Fixtures
-npm install --no-audit --no-fund
+npm ci --ignore-scripts --no-audit --no-fund
 node --test polling-proof-observer.test.mjs
 node upgrade-race-proof.mjs
 node max-payload-proof.mjs
@@ -450,6 +474,11 @@ typed-array rows of the engine.io-parser inventory are marked
 
 ### 8.5 What round 2 did not do
 
+**Superseded by section 9**: round 3 implemented gate R1, automated the part of
+gate R5 that does not need a device, and made the acknowledgement lifetime
+across a retried drop JS-exact. The paragraph below records what was still open
+at the end of round 2.
+
 Review gates **R1** (one coherent resource policy) and **R5** (device and
 distribution validation) are untouched, as are the 57 unmapped
 `engine.io-client` rows (URI parsing, cookies, close details, binary over
@@ -460,3 +489,196 @@ outstanding timed ack survives an automatic reconnect cycle here. That was left
 alone deliberately in this round — it touches the retry queue and the send
 buffer, and none of those paths can be exercised end to end on the Linux box
 this round was written on.
+
+## 9. Round 3 (2026-09-19): acknowledgement clearing on every close, one resource policy, automatable runtime validation
+
+Round 3 closes the item section 8.5 deliberately left open, implements review
+gate **R1**, and automates the part of review gate **R5** that does not need a
+device. Where earlier sections describe the old behaviour, this section is
+current.
+
+### 9.1 `_clearAcks()` on every close, not only the terminal one
+
+JS `Socket.onclose` ends with `_clearAcks()`, and it runs on **every** close,
+including one the manager will retry. Swift ran that cleanup only from the
+terminal `didDisconnect`, so `setReconnecting(reason:)` — the retried-drop path
+— left the acknowledgement registry untouched. An acknowledgement owned by a
+session the transport swallowed could therefore survive a reconnect and later
+match an id the new session re-issued, or fire a late timeout against it.
+
+`setReconnecting(reason:)` now runs the same cleanup as `didDisconnect`
+(`notifyDisconnectAndClearAcks(reason:)`), with exactly the rules `_clearAcks`
+has:
+
+- **An acknowledgement whose packet is still in the send buffer is kept.** That
+  packet has not reached the server; it goes out on the next CONNECT and the
+  acknowledgement is still owed (JS `sendBuffer.some(packet => …)`).
+- **A `withError` registration is settled** with the disconnect error; a plain
+  callback is removed **silently** (JS: *"handlers that do not accept an error
+  as first argument are ignored here"*). Swift expresses that distinction as
+  `notifyOnDisconnect`, which is unchanged.
+- **The retry queue's per-attempt acknowledgement is one of those
+  registrations.** JS registers a fresh one per attempt from `_drainQueue`, and
+  the callback `_addToQueue` appended decides what the close means: with retries
+  left, the entry keeps its place in `_queue` with `pending = false`, and
+  `onconnect`'s `_drainQueue(true)` re-sends it under a new id; once
+  `tryCount > retries`, the entry is discarded and the user's acknowledgement
+  settles with the error. Swift's `handleQueueAck` already implements both
+  branches, so routing the disconnect error through it reproduces JS exactly.
+- **The async `emitWithAck` continuation is resumed with `.disconnected`**, as
+  JS rejects the promise through `_clearAcks()`. The Swift continuation is
+  resumed exactly once.
+- **Connection-state recovery is unaffected.** JS `onclose` does not touch
+  `_pid`; only an explicit identity reset does. `_pid`/`_lastOffset` survive the
+  close, so the next CONNECT still asks the server to resume.
+
+Tests: `SocketClearAcksOnCloseTest` (7 cases, driven by a fake engine that
+answers CONNECT and ACK frames and can kill the session, so the whole
+drop → reconnect → re-join → re-drain cycle runs at queue speed), and
+`JSParityE2ETest.testPendingAckFailsWhenTheTransportIsKilledAndTheSocketReconnects`,
+which kills the server-side transport with a `never_ack` emit outstanding.
+Ported from `socket.io-client/test/socket.ts` "should ack with an error upon
+disconnection (callback & timeout / callback & ackTimeout / promise)" and "should
+not discard an unsent ack (callback)", the "throttled timer" scenario, and the
+`retry.ts` retried-head cases.
+
+### 9.2 Gate R1: one resource policy, opt-in, JavaScript-equal by default
+
+New public option `.bufferLimits(SocketBufferLimits)`
+(`Source/SocketIO/Util/SocketBufferLimits.swift`). It is its own home rather
+than an extension of `SocketWebSocketOptions` or `SocketParserOptions`, because
+it is the only cross-cutting layer of the three:
+
+| Option | Bounds |
+| --- | --- |
+| `.parserOptions` | one incoming Socket.IO packet |
+| `.webSocketOptions` | one native WebSocket message, and the native send queue |
+| `.bufferLimits` | everything that accumulates *across* packets |
+
+**Every limit defaults to unlimited**, which is what keeps the default
+behaviour JavaScript-equal — JS `sendBuffer` and `_queue` have no bound either.
+An invalid limit is rejected before connecting, like an invalid
+`SocketParserOptions`.
+
+Covered: `SocketIOClient.sendBuffer` (packets and bytes), the `.retries` queue
+(packets and bytes), the connection-state-recovery replay buffer (packets and
+bytes), the engine-to-manager handoff (packets and bytes, with the receive
+permit released **after parsing**, not after dispatch), one incoming polling
+HTTP body, and how long a half-reconstructed binary packet may stay outstanding.
+
+**Overflow is explicit and never silent:**
+
+- **Outgoing** — the *new* emit fails locally. Its write completion runs once,
+  its acknowledgement settles once with a typed `SocketBufferLimitError`, and
+  the `.error` client event carries the same error. Nothing already accepted is
+  evicted: dropping a reliable emit the caller believes is queued is precisely
+  the silent loss this gate forbids.
+- **Incoming** — the connection closes with `"transport error"`, the reason
+  engine.io-client's `_onError` → `_onClose` produces. The one exception is the
+  half-reconstructed binary packet: that is a decoder failure, so it closes with
+  `"parse error"`, the reason `Manager.ondata` reports when the decoder throws.
+  Nothing is replayed from a partial packet.
+
+The bounded polling body is accumulated by the session delegate
+(`SocketSessionDelegateProxy` is now a `URLSessionDataDelegate`): an announced
+`Content-Length` above the cap is refused before a body byte is transferred, and
+a chunked body is cancelled as soon as the accumulated bytes cross the cap.
+Without a configured cap the transport keeps the previously measured
+completion-handler request form — the URL loading system does not call the
+data-delegate methods for a task created with a completion handler, so the
+unbounded default path is byte-for-byte the old one.
+
+Tests: `SocketBufferLimitsTest` (17 cases) covers the whole R1 acceptance list —
+blocked consumer, never-connected socket, never-acked retry head, replay flood,
+unfinished binary packet — plus proof that the retained counts and bytes return
+to zero after a reset, after an acknowledged retry head and after a buffer
+flush, and that the defaults really are unlimited.
+`SocketPollingBodyLimitTest` (4 cases) covers the oversized and chunked HTTP
+bodies against a session-scoped `URLProtocol` fixture, with a positive control
+inside the cap and a control proving the unlimited default still accepts an
+oversized body.
+
+**What this is not.** These are queue-retention bounds expressed in estimated
+payload bytes (`SocketBufferLimits.retainedBytes`), not a measurement of process
+memory and not an allocator cap. The estimate is deliberate: the payload has
+already been normalized by `SocketPacket.jsonSafeEmitData`, so it is a finite
+graph of `String`/`NSNumber`/`Data`/`NSNull`/collections, and the accounting
+answers "do not retain more than N bytes of my payloads".
+
+### 9.3 Gate R5: what is now automated, and what still needs a device
+
+Two new CI jobs in `.github/workflows/swift.yml`:
+
+- **`thread-sanitizer`** runs the non-E2E unit suite with
+  `swift test --sanitize=thread` on macOS and fails on any
+  `ThreadSanitizer: data race` report. The skip rule is the `*E2ETest` naming
+  convention, and a preceding step fails the job if an E2E class stops obeying
+  it, so the skip list cannot silently stop covering a suite.
+- **`strict-concurrency`** runs `scripts/check-strict-concurrency.sh`, which
+  builds with `-strict-concurrency=complete` and compares the warning count to a
+  per-platform baseline in
+  `Documentation/ReviewEvidence/StrictConcurrencyBaseline.json`. It is a
+  ratchet, not a clean-build requirement. The package uses Swift 6 language
+  mode; strict-concurrency diagnostics are tracked separately against the
+  baseline. A platform with no baseline yet is **reported, not failed** — the run
+  prints the count and the line to commit, so the first run measures the number
+  instead of producing a red build.
+
+Fixture dependencies are pinned: `Tests/TestSocketIO/E2E/Fixtures/package.json`
+names an exact `socket.io` version, `package-lock.json` is committed, and every
+install — in CI and in `TestServerProcess.ensureNodeModules()` — uses `npm ci`,
+which installs exactly what the lockfile pins instead of re-resolving a range.
+The resolved tree is uploaded as a CI artifact.
+
+Two data races were fixed that are visible from the source, both of the shape
+Thread Sanitizer reports:
+
+- **`SocketAckManager` storage.** The timed-ack APIs are documented as
+  `handleQueue`-only, but two public entry points reach the registry from the
+  caller's thread: `SocketIOClient.clearRecoveryState()` snapshots
+  `pendingTimedAckIDs`, and the legacy `emitWithAck` chain registers through
+  `addAck`. The underlying `Set`/`Dictionary` could therefore be mutated
+  concurrently with a `handleQueue` write, which is memory-unsafe rather than
+  merely mis-ordered. Storage is now lock-guarded; callbacks are still invoked
+  **after** the lock is released, so the documented re-entrancy of
+  `cancelTimedAck(_:fireWith:)` cannot deadlock. No ordering changed.
+- **The acknowledgement id allocator.** `SocketIOClient.currentAck` was
+  incremented from `handleQueue` by `allocateAckId()` and from the caller's
+  thread by `createOnAck` (the legacy path), so two registrations could receive
+  the same id. `createOnAck` now goes through `allocateAckId()`, which is
+  lock-guarded.
+
+Tests: `SocketAckManagerTest.testConcurrentAckIdAllocationNeverRepeats` and
+`testConcurrentSnapshotAndRegistrationDoNotCorruptTheRegistry`.
+
+**Still open, and not automatable here.** Device and simulator runs
+(background/foreground transitions, network loss and recovery, Wi-Fi/cellular
+transitions, IPv6, proxy environments, cancellation while suspended), watchOS in
+particular, and independent Swift package / framework / CocoaPods consumer
+integration against a release tag. These remain manual gates; see
+`REMAINING-WORK.md` section 5. The two new CI jobs have not been executed in
+this round — they were written on a Linux box where `swift test` cannot run —
+so their first macOS run is the measurement, including the strict-concurrency
+baseline.
+
+### 9.4 Local verification for this round
+
+`swift build` / `swift test` do not work on the Linux box this round was written
+on (`@objc`). Verification used a scratch harness that copies `Source/` and
+`Tests/TestSocketIO/` outside the repository, strips `@objc`/`@objcMembers`,
+constrains `SocketEngineClient` to `AnyObject`, swaps `Foundation.URLSession`
+for `FoundationNetworking.URLSession` and adds the `FoundationNetworking`
+import, then builds the module, typechecks every test file against it, and runs
+the non-E2E suites through a generated `XCTMain`. Excluded there: the E2E
+suites (real Node fixtures), the two Security-framework suites, and the `async`
+test methods, which swift-corelibs-xctest cannot register through
+`testCase(_:)`. macOS CI remains the only proof for those, and for the two new
+CI jobs.
+
+### 9.5 What round 3 did not do
+
+The 57 unmapped `engine.io-client` rows and the 7 `socket.io-parser` encoder
+rows were untouched in round 3. The package now uses Swift 6 language mode.
+Gates **R2** (full encoder parity and release acceptance), **R3** (one internal acknowledgement record and
+a documented state machine) and **R4** (injectable schedulers, full
+traceability) remain open.

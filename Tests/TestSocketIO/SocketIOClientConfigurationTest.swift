@@ -115,3 +115,16 @@ class TestSocketIOClientConfiguration : XCTestCase {
         super.setUp()
     }
 }
+
+
+extension TestSocketIOClientConfiguration {
+    func testRemovedVersionDictionaryOptionsFailClosed() {
+        for value: Any in [2, 3, 4, "4", true] {
+            let config = ["version": value].toSocketConfiguration()
+            guard let option = config.first, case .invalidConfiguration(let reason) = option else {
+                XCTFail("version must not be silently accepted: \(value)"); continue
+            }
+            XCTAssertTrue(reason.contains("Socket.IO 4"))
+        }
+    }
+}

@@ -130,7 +130,9 @@ final class TestServerProcess {
 
 /// Readability handlers drain both pipes throughout the child's lifetime.
 /// The startup thread waits on a condition, never on FileHandle.availableData.
-private final class FixtureProcessOutput {
+/// All mutable state is guarded by `condition`; the readability and termination
+/// handlers run on Foundation's threads, which is why the class is Sendable.
+private final class FixtureProcessOutput: @unchecked Sendable {
     private let condition = NSCondition()
     private let stdout = Pipe()
     private let stderr = Pipe()

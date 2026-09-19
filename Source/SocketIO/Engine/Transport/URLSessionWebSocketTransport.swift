@@ -58,7 +58,7 @@ internal final class URLSessionWebSocketTransport: EngineWebSocketTransport {
         // Safety net only. Normal lifecycle uses close/abort/finish explicitly.
         let abandoned = connection
         let pending = batches
-        queue.async {
+        queue.socketAsync {
             abandoned?.onEvent = nil
             abandoned?.cancel()
             for batch in pending { batch.completion(.failure(EngineWebSocketError.cancelled)) }
@@ -74,8 +74,9 @@ internal final class URLSessionWebSocketTransport: EngineWebSocketTransport {
         let identity = ObjectIdentifier(newConnection)
         state = .connecting
         connection = newConnection
+        let queue = self.queue
         newConnection.onEvent = { [weak self] event in
-            self?.queue.async { [weak self] in
+            queue.socketAsync { [weak self] in
                 guard let self = self, self.isCurrent(attempt, identity) else { return }
                 switch event {
                 case .opened:
@@ -160,8 +161,9 @@ internal final class URLSessionWebSocketTransport: EngineWebSocketTransport {
         let identity = ObjectIdentifier(connection)
         let token = UUID()
         receiveToken = token
+        let queue = self.queue
         connection.receive { [weak self] result in
-            self?.queue.async { [weak self] in
+            queue.socketAsync { [weak self] in
                 guard let self = self, self.isCurrent(attempt, identity), self.receiveToken == token else { return }
                 self.receiveToken = nil
                 switch result {
@@ -191,8 +193,9 @@ internal final class URLSessionWebSocketTransport: EngineWebSocketTransport {
         guard let batch = batches.first else { return }
         let token = UUID()
         sendToken = token
+        let queue = self.queue
         connection.send(batch.messages[batch.index]) { [weak self] error in
-            self?.queue.async { [weak self] in
+            queue.socketAsync { [weak self] in
                 guard let self = self, self.isCurrent(attempt, identity), self.sendToken == token else { return }
                 self.sendToken = nil
                 if let error = error {
@@ -210,6 +213,8 @@ internal final class URLSessionWebSocketTransport: EngineWebSocketTransport {
         guard state == .connecting || state == .open else { return }
         let previousState = state
         let oldConnection = connection
+        let code = code ?? oldConnection?.closeDetails.code
+        let reason = reason ?? oldConnection?.closeDetails.reason
         let pending = batches
         // Every transport end passes through here: log the native detail before
         // the connection is torn down, so a dropped socket can be diagnosed.

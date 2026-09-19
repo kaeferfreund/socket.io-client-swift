@@ -60,8 +60,8 @@ public protocol SocketIOClientSpec : AnyObject {
     /// The status of this client.
     var status: SocketIOStatus { get }
 
-    /// Whether the connection state was recovered after a temporary disconnection (Socket.IO v3+).
-    /// Always `false` on v2 or before the first successful CONNECT ack.
+    /// Whether the connection state was recovered after a temporary disconnection (Socket.IO 4.6+).
+    /// `false` before a successful recovery CONNECT acknowledgement.
     var recovered: Bool { get }
 
     // MARK: Methods
@@ -347,7 +347,7 @@ public enum SocketClientEvent : String {
 
     /// Emitted when the client connects. This is also called on a successful reconnection.
     ///
-    /// The first data item is always the namespace that was connected to. On `.version(.three)` sockets, a second
+    /// The first data item is always the namespace that was connected to. A second
     /// data item may be present with the CONNECT payload from the server, including `recovered` when Connection State
     /// Recovery is enabled.
     ///
@@ -388,7 +388,7 @@ public enum SocketClientEvent : String {
     /// `socket.io-client/lib/socket.ts` (`onerror`, `onpacket`).
     ///
     /// Fires instead of `.error` for: a server CONNECT_ERROR refusal (namespace middleware rejection),
-    /// a CONNECT packet without `sid` on a `.three` manager (v2.x server), an engine/transport error
+    /// a CONNECT packet without `sid` from an incompatible server, an engine/transport error
     /// while not connected, and the connection timeout. For a middleware refusal the first data item
     /// is the packet payload dictionary with `"message"` and optional `"data"`; for the other cases
     /// the first data item is a String message (`"timeout"` for the connection timeout).

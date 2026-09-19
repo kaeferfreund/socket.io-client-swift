@@ -19,7 +19,7 @@ final class SocketRetryTimeoutValidationTest: XCTestCase {
 
     private func drain() {
         let barrier = expectation(description: "handle queue barrier")
-        manager.handleQueue.async { barrier.fulfill() }
+        manager.handleQueue.socketAsync { barrier.fulfill() }
         wait(for: [barrier], timeout: 3)
     }
 

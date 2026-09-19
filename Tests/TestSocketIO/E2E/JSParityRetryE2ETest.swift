@@ -50,7 +50,7 @@ final class JSParityRetryE2ETest: XCTestCase {
     /// Waits a fixed interval, for assertions that nothing *further* happens.
     private func settle(_ seconds: TimeInterval) {
         let done = expectation(description: "settled")
-        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { done.fulfill() }
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + seconds) { done.fulfill() }
         wait(for: [done], timeout: seconds + 5)
     }
 

@@ -2,10 +2,13 @@ name: Swift
 
 on:
   push:
-    branches: [ "master", "development" ]
+    branches: [ "master", "development", "feat/socketio4-swift6.4" ]
   pull_request:
-    branches: [ "master", "development", "feat/connect-timeout" ]
+    branches: [ "master", "development", "feat/connect-timeout", "feat/socketio4-swift6.4" ]
   workflow_dispatch:
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
 
 permissions:
   contents: read
@@ -17,7 +20,7 @@ concurrency:
 jobs:
   build:
     name: Native library and full Socket.IO regression suite
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -28,6 +31,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 26
+      - name: Verify Swift 6.4 toolchain
+        run: swift --version | grep -E 'Swift version 6\.4'
       - name: Install pinned fixture dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: Tests/TestSocketIO/E2E/Fixtures
@@ -53,9 +58,74 @@ jobs:
             ${{ runner.temp }}/swift-coverage-summary.json
           retention-days: 7
 
+  thread-sanitizer:
+    name: Unit suite under Thread Sanitizer (review gate R5)
+    runs-on: xcode-27
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # The E2E suites need Node fixtures and real sockets; TSan runs the
+      # deterministic unit suites only. Every E2E class is named `*E2ETest`
+      # (plus the two fixture-harness checks), and this step keeps that true so
+      # the skip rule below cannot silently stop covering one.
+      - name: Check the E2E naming rule the skip list relies on
+        run: |
+          set -euo pipefail
+          bad=$(grep -hoE 'class [A-Za-z0-9]+ *: *XCTestCase' Tests/TestSocketIO/E2E/*.swift \
+                  | sed -E 's/class //; s/ *: *XCTestCase//' \
+                  | grep -vE '(E2ETest|HarnessSanityTest|TestServerProcessTest)$' || true)
+          if [ -n "$bad" ]; then
+            echo "E2E test classes must end in E2ETest so the TSan skip list stays complete:"
+            echo "$bad"
+            exit 1
+          fi
+      - name: Run the non-E2E unit suite under Thread Sanitizer
+        run: |
+          set -o pipefail
+          swift test --sanitize=thread \
+            --skip 'E2ETest' --skip 'HarnessSanityTest' --skip 'TestServerProcessTest' \
+            2>&1 | tee "$RUNNER_TEMP/tsan.log"
+      - name: Fail on any Thread Sanitizer report
+        run: |
+          if grep -q "ThreadSanitizer: data race" "$RUNNER_TEMP/tsan.log"; then
+            echo "Thread Sanitizer reported a data race:"
+            grep -n -A 40 "ThreadSanitizer: data race" "$RUNNER_TEMP/tsan.log" | head -200
+            exit 1
+          fi
+          echo "No Thread Sanitizer data race reports."
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: thread-sanitizer-log-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tsan.log
+          retention-days: 7
+
+  strict-concurrency:
+    name: Strict-concurrency warning ratchet (review gate R5)
+    runs-on: xcode-27
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # A ratchet, not a clean build: the recorded per-platform baseline may
+      # only go down. A platform with no baseline yet is reported, not failed,
+      # so the first run measures the number instead of producing a red build.
+      # Mutable classes are never stamped `@unchecked Sendable` to pass this.
+      - name: Build with -strict-concurrency=complete and compare the baseline
+        run: bash scripts/check-strict-concurrency.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: strict-concurrency-log-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/strict-concurrency.log
+          retention-days: 7
+
   apple-frameworks:
     name: Native framework distribution builds (four Apple SDKs)
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -82,7 +152,7 @@ jobs:
         working-directory: Tests/TestSocketIO/E2E/Fixtures
       - name: Verify polling observation never overlaps timed-out GETs
         working-directory: Tests/TestSocketIO/E2E/Fixtures
-        run: node --test polling-proof-observer.test.mjs server-socket-id.test.mjs
+        run: node --test polling-proof-observer.test.mjs server-socket-id.test.mjs engine-parity-observer.test.mjs
       - name: Prove the upgrade must wait for a pending POST
         run: node upgrade-race-proof.mjs
         working-directory: Tests/TestSocketIO/E2E/Fixtures
@@ -92,7 +162,7 @@ jobs:
 
   parser-parity:
     name: Decoder differential and malformed-input regressions
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7

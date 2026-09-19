@@ -30,7 +30,7 @@ class SocketParseErrorTest: XCTestCase {
 
         manager.parseEngineMessage("bad")
 
-        waitForExpectations(timeout: 3, handler: nil)
+        wait(for: [disconnected], timeout: 3)
         XCTAssertEqual(fake.disconnectReasons, ["parse error"])
         XCTAssertEqual(reason, "parse error")
     }
@@ -48,7 +48,7 @@ class SocketParseErrorTest: XCTestCase {
         // No packet is waiting for binary, so `parseBinaryData` rejects this.
         manager.parseEngineBinaryData(Data([0xff, 0x00, 0x13]))
 
-        waitForExpectations(timeout: 3, handler: nil)
+        wait(for: [disconnected], timeout: 3)
         XCTAssertEqual(fake.disconnectReasons, ["parse error"])
         XCTAssertEqual(reason, "parse error")
     }
@@ -61,7 +61,7 @@ class SocketParseErrorTest: XCTestCase {
 
         manager.parseEngineMessage("2[\"hello\"]")
 
-        waitForExpectations(timeout: 3, handler: nil)
+        wait(for: [handled], timeout: 3)
         XCTAssertTrue(fake.disconnectReasons.isEmpty)
     }
 
@@ -72,8 +72,8 @@ class SocketParseErrorTest: XCTestCase {
         manager.parseEngineMessage("bad")
 
         let settled = expectation(description: "settled")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { settled.fulfill() }
-        waitForExpectations(timeout: 3, handler: nil)
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.5) { settled.fulfill() }
+        wait(for: [settled], timeout: 3)
         // Only the explicit disconnect; the late "bad" packet must not close again.
         XCTAssertEqual(fake.disconnectReasons, ["io client disconnect"])
     }
@@ -100,7 +100,6 @@ private class FakeParseErrorEngine: SocketEngineSpec {
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
     private(set) var websocket = false
 
-    private(set) var version = SocketIOVersion.three
 
     private(set) var disconnectReasons = [String]()
 

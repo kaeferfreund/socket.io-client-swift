@@ -136,7 +136,7 @@ final class SocketConnectTimeoutTest: XCTestCase {
     func testNoTimeoutWhenEngineOpensInTime() {
         makeManager(.connectTimeout(1))
         installFake {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.05) {
                 self.manager.engineDidOpen(reason: "Connect")
                 self.manager.parseEngineMessage("0/,{\"sid\":\"fake-sid\"}")
             }
@@ -172,7 +172,7 @@ final class SocketConnectTimeoutTest: XCTestCase {
 
         socket.connect()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.1) {
             self.manager.disconnect()
         }
 
@@ -198,7 +198,7 @@ final class SocketConnectTimeoutTest: XCTestCase {
     func testLateOpenIsIgnored() {
         makeManager(.connectTimeout(0.1), .reconnects(false))
         installFake {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.5) {
                 self.manager.engineDidOpen(reason: "Connect")
             }
         }
@@ -213,7 +213,7 @@ final class SocketConnectTimeoutTest: XCTestCase {
 
         // Wait until the late open has arrived.
         let settled = expectation(description: "settled")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { settled.fulfill() }
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.8) { settled.fulfill() }
         wait(for: [settled], timeout: 3)
 
         XCTAssertNotEqual(manager.status, .connected)
@@ -245,7 +245,6 @@ private final class TimeoutTestEngine: SocketEngineSpec {
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
     private(set) var websocket = false
 
-    private(set) var version = SocketIOVersion.three
 
     var onConnect: (() -> Void)?
 

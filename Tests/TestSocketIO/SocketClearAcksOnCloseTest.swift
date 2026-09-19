@@ -277,27 +277,45 @@ final class SocketClearAcksOnCloseTest: XCTestCase {
     /// The promise form of the same scenario, again on a drop that reconnects.
     /// JS rejects the `emitWithAck` promise from `_clearAcks`; a Swift
     /// continuation has to be resumed exactly once, so it throws `.disconnected`.
+    ///
+    /// Everything here awaits `fulfillment(of:)`: a synchronous `wait(for:)`
+    /// inside a main-actor job cannot drain the main queue the manager runs on.
+    @MainActor
     func testAsyncEmitWithAckThrowsDisconnectedOnATransportDropThatReconnects() async {
-        await MainActor.run { _ = makeConnectedSocket(.ackTimeout(10)) }
-
+        let initial = expectation(description: "initial connect")
+        let registered = expectation(description: "emit reached the fake transport")
+        let rejoined = expectation(description: "namespace re-joined")
         let thrown = expectation(description: "await throws the disconnect error")
-        Task {
+        manager = SocketManager(socketURL: URL(string: "http://localhost/")!,
+            config: [.log(false), .reconnects(true), .reconnectWait(0), .ackTimeout(10)])
+        engine = ClearAcksTestEngine(client: manager, url: manager.socketURL, options: nil)
+        manager.engine = engine
+        socket = manager.defaultSocket
+        socket.once(clientEvent: .connect) { _, _ in initial.fulfill() }
+        engine.onEventWrite = { registered.fulfill() }
+        socket.connect()
+        await fulfillment(of: [initial], timeout: 5)
+
+        let boxed = SocketUncheckedSendableBox(socket!)
+        let task = Task {
             do {
-                _ = try await self.socket.emitWithAck("echo", "a")
+                _ = try await boxed.value.emitWithAck("echo", "a")
                 XCTFail("the acknowledgement must not resolve")
             } catch {
                 XCTAssertEqual(error as? SocketAckError, .disconnected)
             }
             thrown.fulfill()
         }
-
-        await MainActor.run {
-            // Let the emit reach registration before the transport dies.
-            self.drain()
-            self.dropTransportAndWaitForReconnect()
-        }
-        await fulfillment(of: [thrown], timeout: 5)
+        defer { task.cancel() }
+        await fulfillment(of: [registered], timeout: 5)
+        socket.once(clientEvent: .connect) { _, _ in rejoined.fulfill() }
+        engine.dropTransport(reason: "transport close")
+        await fulfillment(of: [thrown, rejoined], timeout: 5)
+        XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty)
+        XCTAssertEqual(socket.status, .connected)
+        _ = await task.value
     }
+
 }
 
 /// Fake transport for the tests above: it opens on demand, answers the
@@ -322,12 +340,12 @@ private final class ClearAcksTestEngine: SocketEngineSpec {
     private(set) var urlPolling = URL(string: "http://localhost/")!
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
     private(set) var websocket = false
-    private(set) var version = SocketIOVersion.three
 
     /// Drives the JS "throttled timer" scenario: an emit made while this is
     /// `true` is buffered instead of written.
     var hasPingExpired = false
 
+    var onEventWrite: (() -> Void)?
     private var sessions = 0
     /// Every non-CONNECT frame handed to the transport.
     private(set) var sent = [String]()
@@ -360,6 +378,7 @@ private final class ClearAcksTestEngine: SocketEngineSpec {
 
         guard msg.hasPrefix("0") else {
             sent.append(msg)
+            onEventWrite?()
             return
         }
 

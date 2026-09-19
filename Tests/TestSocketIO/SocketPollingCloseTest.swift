@@ -93,7 +93,8 @@ private final class PollingCloseFixture {
 
 private final class PollingCloseProtocol: URLProtocol {
     private static let registryLock = NSLock()
-    private static var fixtures = [String: PollingCloseFixture]()
+    // Every access is protected by registryLock, including URLProtocol callbacks.
+    nonisolated(unsafe) private static var fixtures = [String: PollingCloseFixture]()
     private let stateLock = NSLock()
     private var ended = false
 
@@ -172,7 +173,6 @@ private final class PollingCloseClient: NSObject, SocketEngineClient {
     func engineDidError(reason: String) { errors.append(reason) }
     func engineDidReceivePing() {}
     func engineDidReceivePong() {}
-    func engineDidSendPing() {}
     func engineDidSendPong() {}
     func parseEngineMessage(_ msg: String) {}
     func parseEngineBinaryData(_ data: Data) {}
@@ -357,7 +357,7 @@ final class SocketPollingCloseTest: XCTestCase {
         engine.disconnect(reason: "io client disconnect")
         wait(for: [cancelled], timeout: 5)
         let drained = expectation(description: "cancelled POST completion drained")
-        oldGroup.notify(queue: .main) { drained.fulfill() }
+        oldGroup.socketNotify(queue: .main) { drained.fulfill() }
         wait(for: [drained], timeout: 5)
         engine.engineQueue.sync { XCTAssertTrue(engine.closed); XCTAssertEqual(client.closes.count, 1) }
         XCTAssertEqual(fixture.posts.map { $0.body }, ["4stalled"])
@@ -470,17 +470,6 @@ final class SocketPollingCloseTest: XCTestCase {
         XCTAssertTrue(fixture.posts.isEmpty)
     }
 
-    /// Engine.IO 3 uses a length-prefixed close; Engine.IO 4 uses the bare packet.
-    func testCloseRequestRetainsLegacyAndModernWireEncoding() {
-        engine.engineQueue.sync {
-            let modern = engine.createRequestForPost(with: ["1"])
-            XCTAssertEqual(modern.httpBody, Data("1".utf8))
-            engine.setConfigs([.version(.two)])
-            let legacy = engine.createRequestForPost(with: ["1"])
-            XCTAssertEqual(legacy.httpBody, Data("1:1".utf8))
-            XCTAssertEqual(legacy.value(forHTTPHeaderField: "Content-Length"), "3")
-        }
-    }
 
     /// Batch callbacks may clear/repopulate the queue without removing new packets.
     func testPostBatchDetachesBeforeReentrantCompletion() {
@@ -495,6 +484,17 @@ final class SocketPollingCloseTest: XCTestCase {
             XCTAssertEqual(request.httpBody, Data("4first\u{1e}4second".utf8))
             XCTAssertEqual(engine.postWait.map { $0.msg }, ["4replacement"])
             XCTAssertEqual(completions, 2)
+        }
+    }
+}
+
+
+extension SocketPollingCloseTest {
+    func testCloseRequestUsesEngineIO4WireEncoding() {
+        engine.engineQueue.sync {
+            let request = engine.createRequestForPost(with: ["1"])
+            XCTAssertEqual(request.httpBody, Data("1".utf8))
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Length"), "1")
         }
     }
 }

@@ -161,7 +161,6 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         }
     }
 
-    public private(set) var version = SocketIOVersion.three
 
     /// Shared incoming packet and reconstruction limits. Set via `.parserOptions` before connecting.
     public private(set) var parserOptions = SocketParserOptions()
@@ -298,7 +297,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
                 self?.connectDidTimeOut()
             }
             connectTimeoutTimer = timer
-            handleQueue.asyncAfter(deadline: .now() + connectTimeout, execute: timer)
+            handleQueue.socketAsyncAfter(deadline: .now() + connectTimeout, execute: timer)
         }
     }
 
@@ -362,7 +361,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         var payloadStr = ""
         let effective = effectiveConnectPayload(for: socket, explicitPayload: payload)
 
-        if version.rawValue >= 3, let effective = effective {
+        if let effective = effective {
             guard JSONSerialization.isValidJSONObject(effective) else {
                 let message = "connect payload serialization failed: invalid JSON object"
                 DefaultSocketLogger.Logger.error(
@@ -403,7 +402,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     private func effectiveConnectPayload(for socket: SocketIOClient,
                                          explicitPayload payload: [String: Any]?) -> [String: Any]? {
         guard let payload = payload else { return socket.currentConnectPayload() }
-        guard version == .three, let pid = socket._pid else { return payload }
+        guard let pid = socket._pid else { return payload }
 
         var merged: [String: Any] = ["pid": pid]
         if let offset = socket._lastOffset {
@@ -544,12 +543,16 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     ///
     /// - parameter reason: The reason that the engine closed.
     open func engineDidClose(reason: String) {
-        handleQueue.async {
+        handleQueue.socketAsync {
             self._engineDidClose(reason: reason)
         }
     }
 
-    private func _engineDidClose(reason: String) {
+    open func engineDidClose(reason: String, error: SocketTransportError) {
+        handleQueue.socketAsync { self._engineDidClose(reason: reason, error: error) }
+    }
+
+    private func _engineDidClose(reason: String, error: SocketTransportError? = nil) {
         cancelConnectTimeout()
 
         waitingPackets.removeAll()
@@ -563,10 +566,17 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         }
 
         if status == .disconnected || !reconnects {
-            didDisconnect(reason: reason)
+            if let error = error {
+                forAll { socket in
+                    guard socket.status != .notConnected else { return }
+                    socket.handleTransportClose(reason: reason, error: error, reconnecting: false)
+                }
+            } else {
+                didDisconnect(reason: reason)
+            }
         } else if !reconnecting {
             reconnecting = true
-            tryReconnect(reason: reason)
+            tryReconnect(reason: reason, error: error)
         } else if reconnectTimer != nil {
             // JS `reconnect()` returns early while `_reconnecting`: a close that
             // arrives during the backoff wait is not an attempt failure and
@@ -586,12 +596,16 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     ///
     /// - parameter reason: The reason the engine errored.
     open func engineDidError(reason: String) {
-        handleQueue.async {
+        handleQueue.socketAsync {
             self._engineDidError(reason: reason)
         }
     }
 
-    private func _engineDidError(reason: String) {
+    open func engineDidError(reason: String, error: SocketTransportError) {
+        handleQueue.socketAsync { self._engineDidError(reason: reason, error: error) }
+    }
+
+    private func _engineDidError(reason: String, error: SocketTransportError? = nil) {
         cancelConnectTimeout()
 
         DefaultSocketLogger.Logger.error("\(reason)", type: SocketManager.logType)
@@ -606,9 +620,9 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             guard socket.active else { return }
 
             if socket.status == .connected {
-                socket.handleClientEvent(.error, data: [reason])
+                socket.handleClientEvent(.error, data: error.map { [reason, $0] } ?? [reason])
             } else {
-                socket.handleClientEvent(.connectError, data: [reason])
+                socket.handleClientEvent(.connectError, data: error.map { [reason, $0] } ?? [reason])
             }
         }
     }
@@ -617,7 +631,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     ///
     /// - parameter reason: The reason the engine opened.
     open func engineDidOpen(reason: String) {
-        handleQueue.async {
+        handleQueue.socketAsync {
             self._engineDidOpen(reason: reason)
         }
     }
@@ -648,23 +662,6 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             emitManagerEvent(.reconnect, data: [attempt])
         }
 
-        if version.rawValue < 3 {
-            // v2 short-circuits the root namespace via `didConnect` and never
-            // visits `resolveConnectPayload`, so the v2-bypass `.error` guard
-            // there does not fire. Surface it explicitly here so a provider
-            // installed on the root namespace of a v2 manager is observable
-            // per CONNECT attempt (matches the spec contract).
-            if let root = nsps["/"], root.hasAuthProvider {
-                DefaultSocketLogger.Logger.error(
-                    "setAuth provider installed on v2 manager — auth bypassed for this CONNECT",
-                    type: SocketManager.logType
-                )
-                root.handleClientEvent(.error, data: [
-                    "setAuth provider installed on v2 manager — auth bypassed for this CONNECT"
-                ])
-            }
-            nsps["/"]?.didConnect(toNamespace: "/", payload: nil)
-        }
 
         // `active` is what decides whether a socket still wants this namespace.
         // A socket the server refused (CONNECT_ERROR) or that the user
@@ -673,10 +670,8 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         // driving it until an explicit `connect()`. Without this the client
         // re-CONNECTs a namespace the server already rejected, on every single
         // reconnect.
-        for (nsp, socket) in nsps where socket.status == .connecting && socket.active {
-            if version.rawValue < 3 && nsp == "/" {
-                continue
-            }
+        for socket in nsps.values where socket.status == .connecting && socket.active {
+
 
             // Resolve the auth payload, then call `writeConnectPacket` directly
             // (NOT `connectSocket`, which would re-enter `resolveConnectPayload`
@@ -691,7 +686,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
     /// Called when the engine receives a ping message.
     open func engineDidReceivePing() {
-        handleQueue.async {
+        handleQueue.socketAsync {
             self._engineDidReceivePing()
         }
     }
@@ -700,20 +695,9 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         emitAll(clientEvent: .ping, data: [])
     }
 
-    /// Called when the sends a ping to the server.
-    open func engineDidSendPing() {
-        handleQueue.async {
-            self._engineDidSendPing()
-        }
-    }
-
-    private func _engineDidSendPing() {
-        emitAll(clientEvent: .ping, data: [])
-    }
-
     /// Called when the engine receives a pong message.
     open func engineDidReceivePong() {
-        handleQueue.async {
+        handleQueue.socketAsync {
             self._engineDidReceivePong()
         }
     }
@@ -724,7 +708,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
 
     /// Called when the sends a pong to the server.
     open func engineDidSendPong() {
-        handleQueue.async {
+        handleQueue.socketAsync {
             self._engineDidSendPong()
         }
     }
@@ -743,7 +727,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     ///
     /// - parameter headers: The http headers.
     open func engineDidWebsocketUpgrade(headers: [String: String]) {
-        handleQueue.async {
+        handleQueue.socketAsync {
             self._engineDidWebsocketUpgrade(headers: headers)
         }
     }
@@ -758,7 +742,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         let size = msg.utf8.count
         guard reserveReceivePermit(bytes: size) else { return }
 
-        handleQueue.async {
+        handleQueue.socketAsync {
             defer { self.releaseReceivePermit(bytes: size) }
 
             self._parseEngineMessage(msg)
@@ -795,7 +779,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         let size = data.count
         guard reserveReceivePermit(bytes: size) else { return }
 
-        handleQueue.async {
+        handleQueue.socketAsync {
             defer { self.releaseReceivePermit(bytes: size) }
 
             self._parseEngineBinaryData(data)
@@ -964,7 +948,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         return pendingConnectPayloads.removeValue(forKey: socket.nsp)
     }
 
-    private func tryReconnect(reason: String) {
+    private func tryReconnect(reason: String, error: SocketTransportError? = nil) {
         guard reconnecting else { return }
 
         DefaultSocketLogger.Logger.log("Starting reconnect", type: SocketManager.logType)
@@ -976,7 +960,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         forAll {socket in
             guard socket.status == .connected else { return }
 
-            socket.setReconnecting(reason: reason)
+            socket.handleTransportClose(reason: reason, error: error, reconnecting: true)
         }
 
         scheduleReconnectAttempt()
@@ -1029,7 +1013,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             self?.runReconnectAttempt(attempt)
         }
         reconnectTimer = timer
-        handleQueue.asyncAfter(deadline: .now() + interval, execute: timer)
+        handleQueue.socketAsyncAfter(deadline: .now() + interval, execute: timer)
     }
 
     /// The body of JS `Manager.reconnect()`'s timer: `reconnect_attempt`, then
@@ -1111,8 +1095,6 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
                 DefaultSocketLogger.Logger.log = log
             case let .logger(logger):
                 DefaultSocketLogger.Logger = logger
-            case let .version(num):
-                version = num
             case _:
                 continue
             }

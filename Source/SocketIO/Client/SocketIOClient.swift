@@ -105,22 +105,22 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// The id of this socket.io connect. This is different from the sid of the engine.io connection.
     public private(set) var sid: String?
 
-    // MARK: Connection State Recovery (Socket.IO v3+)
+    // MARK: Connection State Recovery (Socket.IO 4.6+)
 
     /// Maximum accepted length (UTF-8 bytes) for a server-provided offset string.
     /// See design spec §3.3 / §6.1 D1.
     public static let socketStateRecoveryMaxOffsetBytes = 256
 
     /// Fired as `.connectError` when a CONNECT packet without a `sid` arrives on a
-    /// `.three` manager: the server speaks the v2 protocol. Message matches JS.
-    static let v2ServerConnectErrorMessage = "It seems you are trying to reach a Socket.IO server in v2.x with a v3.x client, but they are not compatible (more information here: https://socket.io/docs/v3/migrating-from-2-x-to-3-0/)"
+    /// client: the server speaks an incompatible protocol.
+    static let v2ServerConnectErrorMessage = "Incompatible Socket.IO server: CONNECT acknowledgement is missing sid. This client requires Socket.IO 4.x (Engine.IO 4)."
 
     /// Whether the last successful CONNECT ack recovered a prior session.
     /// Matches the `recovered` property on `socket.io-client` JS.
     public private(set) var recovered: Bool = false
 
     /// Private session id assigned by the server. `nil` until the first CONNECT ack.
-    /// Only written on v3 managers.
+    /// Written only after the server advertises a recovery pid.
     var _pid: String?
 
     /// Last observed event offset (server-controlled last-arg string).
@@ -131,6 +131,8 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     var connectPayload: [String: Any]?
 
     private(set) var currentAck = -1
+    /// Guards the `currentAck` allocator; see `allocateAckId()`.
+    private let ackIdLock = NSLock()
 
     private lazy var logType = "SocketIOClient{\(nsp)}"
     private var bufferedRecoveryReplayEvents = [(event: String, data: [Any], ack: Int)]()
@@ -204,12 +206,6 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// Invoked on `manager.handleQueue` for every CONNECT.
     private var authProvider: SocketAuthProvider?
 
-    /// Internal flag for `SocketManager._engineDidOpen` to detect that the v2
-    /// root-namespace short-circuit should still surface the v2-bypass `.error`.
-    /// Without this, the v2 root-nsp path never reaches `resolveConnectPayload`
-    /// (where the bypass guard normally fires).
-    internal var hasAuthProvider: Bool { authProvider != nil }
-
     /// Type-erased cancel handle for the in-flight async auth `Task`. Capturing
     /// `task.cancel` here confines the `Task` reference to the async overload of
     /// `setAuth(_:)`.
@@ -273,21 +269,10 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
 
         joinNamespace(withPayload: payload)
 
-        switch manager.version {
-        case .three:
-            break
-        case .two where manager.status == .connected && nsp == "/":
-            // We might not get a connect event for the default nsp, fire immediately
-            didConnect(toNamespace: nsp, payload: nil)
-
-            return
-        case _:
-            break
-        }
 
         guard timeoutAfter != 0 else { return }
 
-        manager.handleQueue.asyncAfter(deadline: DispatchTime.now() + timeoutAfter) {[weak self] in
+        manager.handleQueue.socketAsyncAfter(deadline: DispatchTime.now() + timeoutAfter) {[weak self] in
             guard let this = self, this.status == .connecting || this.status == .notConnected else { return }
             if this.status == .connecting {
                 DefaultSocketLogger.Logger.log("Timeout: Socket not connected, so setting to disconnected", type: this.logType)
@@ -306,9 +291,8 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     /// Returns the CONNECT payload to send to the server, merging `pid`/`offset` into
     /// a fresh dict if recovery state is present. The user's `connectPayload` wins on
     /// key collisions (matches JS `Object.assign({pid, offset}, data)`).
-    /// Returns `connectPayload` unchanged on v2 or when no pid is stored.
+    /// Returns `connectPayload` unchanged when no pid is stored.
     func currentConnectPayload() -> [String: Any]? {
-        guard manager?.version == .three else { return connectPayload }
         guard let pid = _pid else { return connectPayload }
         var out: [String: Any] = ["pid": pid]
         if let offset = _lastOffset { out["offset"] = offset }
@@ -377,15 +361,15 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // Swift `clearRecoveryState` contract for the send buffer.
         clearRetriableQueue()
 
-        manager?.handleQueue.async { [weak self] in
+        manager?.handleQueue.socketAsync { [weak self] in
             self?.ackHandlers.clearTimedAcks(reason: .disconnected, only: retiringAckIDs)
         }
     }
 
-    /// Records the last arg as `_lastOffset` if this is a v3 socket with a known pid
+    /// Records the last arg as `_lastOffset` if this is a socket with a known pid
     /// and the last arg is a String not exceeding the byte cap.
     private func captureOffsetIfNeeded(from args: [Any]) {
-        guard manager?.version == .three, _pid != nil else { return }
+        guard _pid != nil else { return }
         guard let last = args.last as? String else { return }
         guard last.utf8.count <= SocketIOClient.socketStateRecoveryMaxOffsetBytes else {
             DefaultSocketLogger.Logger.log(
@@ -398,10 +382,10 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     }
 
     /// Recovery replay packets may arrive before the reconnect CONNECT ack. In that
-    /// window the client is still `.connecting`, but v3 reconnect state is already
+    /// window the client is still `.connecting`, but reconnect state is already
     /// present via `_pid` from the previous session.
     private var canProcessRecoveryReplayEvents: Bool {
-        guard manager?.version == .three, _pid != nil else { return false }
+        guard _pid != nil else { return false }
         return status == .connecting
     }
 
@@ -474,9 +458,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     }
 
     func createOnAck(_ items: [Any], binary: Bool = true) -> OnAckCallback {
-        currentAck += 1
-
-        return OnAckCallback(ackNumber: currentAck, items: items, socket: self)
+        return OnAckCallback(ackNumber: allocateAckId(), items: items, socket: self)
     }
 
     /// Called when the client connects to a namespace. If the client was created with a namespace upfront,
@@ -489,23 +471,16 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         DefaultSocketLogger.Logger.log("Socket connected", type: logType)
         sid = payload?["sid"] as? String
 
-        let isV3 = manager?.version == .three
-        if isV3 {
-            let incomingPid = payload?["pid"] as? String
-            recovered = (incomingPid != nil && _pid != nil && _pid == incomingPid)
-            _pid = incomingPid
-        }
+        let incomingPid = payload?["pid"] as? String
+        recovered = (incomingPid != nil && _pid != nil && _pid == incomingPid)
+        _pid = incomingPid
 
         let connectData: [Any]
-        if isV3 {
-            if var payload = payload {
-                payload["recovered"] = recovered
-                connectData = [namespace, payload]
-            } else {
-                connectData = [namespace, ["recovered": recovered]]
-            }
+        if var payload = payload {
+            payload["recovered"] = recovered
+            connectData = [namespace, payload]
         } else {
-            connectData = payload == nil ? [namespace] : [namespace, payload!]
+            connectData = [namespace, ["recovered": recovered]]
         }
 
         status = .connected
@@ -519,6 +494,17 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // from a connect handler queues behind the drain instead of racing it.
         drainRetriableQueueOnConnect()
         handleClientEvent(.connect, data: connectData)
+    }
+
+    private var pendingTransportCloseError: SocketTransportError?
+
+    /// Preserves existing public close overrides while attaching detail only to
+    /// this notification. Consume it before callbacks, so reentrancy cannot leak it.
+    internal func handleTransportClose(reason: String, error: SocketTransportError?, reconnecting: Bool) {
+        pendingTransportCloseError = error
+        defer { pendingTransportCloseError = nil }
+        if reconnecting { setReconnecting(reason: reason) }
+        else { didDisconnect(reason: reason) }
     }
 
     /// Called when the client has disconnected from socket.io.
@@ -542,7 +528,9 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     private func notifyDisconnectAndClearAcks(reason: String) {
         let retiringAckIDs = ackHandlers.pendingTimedAckIDs
         let stillBuffered = bufferedAckIds
-        handleClientEvent(.disconnect, data: [reason])
+        let error = pendingTransportCloseError
+        pendingTransportCloseError = nil
+        handleClientEvent(.disconnect, data: error.map { [reason, $0] } ?? [reason])
         performOnHandleQueue { [weak self] in
             self?.ackHandlers.clearTimedAcks(reason: .disconnected,
                                              keeping: stillBuffered, only: retiringAckIDs)
@@ -814,7 +802,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // wrap the completion handler so it always runs async via handlerQueue
         let wrappedCompletion: (() -> ())? = (completion == nil) ? nil : {[weak self] in
             guard let this = self else { return }
-            this.manager?.handleQueue.async {
+            this.manager?.handleQueue.socketAsync {
                 completion!()
             }
         }
@@ -1061,7 +1049,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
                                   completion: (() -> Void)? = nil) -> Bool {
         guard activeRetries > 0, !data.isEmpty else { return false }
         if failIfReserved(data) {
-            if let completion = completion { manager?.handleQueue.async(execute: completion) }
+            if let completion = completion { manager?.handleQueue.socketAsync(execute: completion) }
             userAck?(NSError(domain: "SocketIO.Emit", code: 1,
                              userInfo: [NSLocalizedDescriptionKey: "Reserved event name"]), [])
             return true
@@ -1077,7 +1065,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
                         "Retried emits without an acknowledgement callback require a finite, non-negative ackTimeout"
                 ])
                 DefaultSocketLogger.Logger.error(error.localizedDescription, type: logType)
-                if let completion = completion { manager?.handleQueue.async(execute: completion) }
+                if let completion = completion { manager?.handleQueue.socketAsync(execute: completion) }
                 handleClientEvent(.error, data: [data[0], Array(data.dropFirst()), error])
                 // Consume the rejected emit so the caller cannot buffer or send it.
                 return true
@@ -1085,7 +1073,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         }
         let writeCompletion: (() -> Void)? = completion.map { callback in
             let queue = manager?.handleQueue
-            let once = SocketOnce<Void> { _ in queue?.async(execute: callback) }
+            let once = SocketOnce<Void> { _ in queue?.socketAsync(execute: callback) }
             return { once.call(()) }
         }
         DefaultSocketLogger.Logger.log("Queueing retriable emit: \(data)", type: logType)
@@ -1110,7 +1098,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
                     measuringBytes: measuringBytes
                 )
                 DefaultSocketLogger.Logger.error(error.description, type: logType)
-                if let completion = completion { manager?.handleQueue.async(execute: completion) }
+                if let completion = completion { manager?.handleQueue.socketAsync(execute: completion) }
                 userAck?(error, [])
                 handleClientEvent(.error, data: [error])
 
@@ -1257,7 +1245,7 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // it before the `clearTimedAcks` dispatch that follows in the callers.
         let cancelIDs = dropped.compactMap { $0.ackID }
         if !cancelIDs.isEmpty {
-            manager?.handleQueue.async { [weak self] in
+            manager?.handleQueue.socketAsync { [weak self] in
                 for id in cancelIDs { self?.ackHandlers.cancelTimedAck(id) }
             }
         }
@@ -1362,10 +1350,10 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
             handleAck(packet.id, data: packet.data)
         case .connect:
             // JS-aligned with `socket.io-client/lib/socket.ts` `onpacket`: a
-            // CONNECT without a `sid` on a v3 client means a v2.x server, so
+            // CONNECT without a `sid` means an incompatible server, so
             // fire `connect_error` instead of connecting. The v2 protocol
             // carries no sid, so `.two` managers keep the old behavior.
-            if manager?.version == .three && (packet.data.isEmpty || (packet.data[0] as? [String: Any])?["sid"] as? String == nil) {
+            if (packet.data.isEmpty || (packet.data[0] as? [String: Any])?["sid"] as? String == nil) {
                 handleClientEvent(.connectError, data: [SocketIOClient.v2ServerConnectErrorMessage])
             } else {
                 didConnect(toNamespace: nsp, payload: packet.data.isEmpty ? nil : packet.data[0] as? [String: Any])
@@ -1720,26 +1708,19 @@ public extension SocketIOClient {
     /// multiple CONNECT packets (mirrors `socket.io-client/lib/socket.ts`
     /// `onopen()` calling `this.auth(cb)` without dedup).
     func setAuth(_ provider: @escaping SocketAuthProvider) {
-        manager?.handleQueue.async { [weak self] in
+        manager?.handleQueue.socketAsync { [weak self] in
             guard let self = self else { return }
             self.pendingAuthTask?()
             self.pendingAuthTask = nil
             self.authProvider = provider
             self.authGeneration &+= 1
-            // Install-time warning so v2 misconfiguration is visible immediately
-            // rather than only on the first CONNECT attempt.
-            if let manager = self.manager, manager.version.rawValue < 3 {
-                DefaultSocketLogger.Logger.error(
-                    "setAuth has no effect on v2 (.connect protocol) managers; install on a .version(.three) manager",
-                    type: self.logType
-                )
-            }
+
         }
     }
 
     /// Remove the installed provider; cancels any in-flight async `Task`.
     func clearAuth() {
-        manager?.handleQueue.async { [weak self] in
+        manager?.handleQueue.socketAsync { [weak self] in
             guard let self = self else { return }
             self.pendingAuthTask?()
             self.pendingAuthTask = nil
@@ -1761,10 +1742,10 @@ public extension SocketIOClient {
     /// Async/throws variant of `setAuth(_:)`. The async closure is invoked on
     /// every CONNECT (initial + reconnect) and its return value is used as the
     /// CONNECT payload. If the closure throws, a `.error` client event fires
-    /// with the localized error description and the CONNECT packet is NOT sent
-    /// (fail-closed). Pure Swift addition — JS callback-form has no
-    /// thrown-error analog.
-    func setAuth(_ provider: @escaping () async throws -> [String: Any]?) {
+    /// with the localized error description, the CONNECT packet is NOT sent,
+    /// and the pending connect is aborted (fail-closed). Pure Swift addition —
+    /// JS callback-form has no thrown-error analog.
+    func setAuth(_ provider: @escaping @Sendable () async throws -> sending [String: Any]?) {
         let wrapped: SocketAuthProvider = { [weak self] cb in
             guard let self = self else { cb(nil); return }
             // Caller is on `handleQueue` (resolveConnectPayload contract). Snapshot
@@ -1772,11 +1753,12 @@ public extension SocketIOClient {
             // socket has reconnected / re-auth'd in the meantime.
             let generation = self.authGeneration
             let box = WeakClientBox(ref: self)
+            guard let queue = self.manager?.handleQueue else { cb(nil); return }
+            let callback = SocketUncheckedSendableBox(cb)
             let task = Task {
                 do {
                     let payload = try await provider()
-                    guard let client = box.ref else { return }
-                    client.manager?.handleQueue.async {
+                    queue.socketAsync {
                         guard let client = box.ref else { return }
                         guard client.authGeneration == generation,
                               client.status == .connecting else {
@@ -1786,16 +1768,18 @@ public extension SocketIOClient {
                             )
                             return
                         }
-                        cb(payload)
+                        callback.value(payload)
                     }
                 } catch {
-                    guard let client = box.ref else { return }
-                    client.manager?.handleQueue.async {
+                    queue.socketAsync {
                         guard let client = box.ref else { return }
                         guard client.authGeneration == generation else { return }
                         client.handleClientEvent(.error, data: [
                             "auth provider failed: \(error.localizedDescription)"
                         ])
+                        // Fail-closed: CONNECT is not sent, so settle the
+                        // in-flight attempt instead of leaving `.connecting`.
+                        client.abortPendingConnect()
                     }
                 }
             }
@@ -1813,9 +1797,6 @@ extension SocketIOClient {
     /// invokes `completion` with `explicit` synchronously. Caller MUST be on
     /// `handleQueue`.
     ///
-    /// On v2 managers with a provider installed: fires `.error` per CONNECT
-    /// attempt and falls back to `nil` payload (the provider is never invoked
-    /// on v2). This makes the silent v2 bypass observable to the caller.
     func resolveConnectPayload(explicit: [String: Any]?,
                                completion: @escaping ([String: Any]?) -> Void) {
         guard let provider = authProvider else {
@@ -1823,27 +1804,14 @@ extension SocketIOClient {
             return
         }
 
-        // v2 manager: the v2 connectSocket path drops payloads, so a provider
-        // would be silently bypassed. Make this observable.
-        if (manager?.version.rawValue ?? 0) < 3 {
-            DefaultSocketLogger.Logger.error(
-                "setAuth provider installed on v2 manager — auth bypassed for this CONNECT",
-                type: logType
-            )
-            handleClientEvent(.error, data: [
-                "setAuth provider installed on v2 manager — auth bypassed for this CONNECT"
-            ])
-            completion(nil)
-            return
-        }
 
-        provider { [weak self] resolved in
-            guard let self = self else { return }
+        guard let queue = manager?.handleQueue else { return }
+        provider { resolved in
             // Always async-hop back. NEVER sync — callers like _engineDidOpen
             // are already on `handleQueue` and a sync re-entry would deadlock
             // on `handleQueue.sync` (and at minimum re-enter the dispatch chain
             // mid-iteration).
-            self.manager?.handleQueue.async {
+            queue.socketAsync {
                 completion(resolved ?? explicit)
             }
         }
@@ -1867,7 +1835,7 @@ public extension SocketIOClient {
     /// - parameter event: The event to send.
     /// - parameter items: The items to send with this event. May be left out.
     /// - returns: The acknowledgement arguments sent back by the server.
-    func emitWithAck(_ event: String, _ items: SocketData...) async throws -> [Any] {
+    nonisolated(nonsending) func emitWithAck(_ event: String, _ items: SocketData...) async throws -> sending [Any] {
         return try await emitWithAck(event, with: items)
     }
 
@@ -1876,7 +1844,7 @@ public extension SocketIOClient {
     /// - parameter event: The event to send.
     /// - parameter items: The items to send with this event.
     /// - returns: The acknowledgement arguments sent back by the server.
-    func emitWithAck(_ event: String, with items: [SocketData]) async throws -> [Any] {
+    nonisolated(nonsending) func emitWithAck(_ event: String, with items: [SocketData]) async throws -> sending [Any] {
         let ackTimeout = (manager as? SocketManager)?.ackTimeout ?? .infinity
 
         return try await timeout(after: ackTimeout).emitWithAck(event, with: items)
@@ -1904,7 +1872,7 @@ extension SocketIOClient {
     private func performOnHandleQueue(_ work: @escaping () -> Void) {
         guard let manager = manager else { return }
         if (manager as? SocketManager)?.isOnHandleQueue == true { work() }
-        else { manager.handleQueue.async(execute: work) }
+        else { manager.handleQueue.socketAsync(execute: work) }
     }
 
     /// Internal — called from `SocketTimedEmitter`. Allocates an ack id,
@@ -1960,7 +1928,16 @@ extension SocketIOClient {
 
     /// Allocate IDs on handleQueue together with acknowledgement registration.
     func allocateAckId() -> Int {
+        // The modern paths call this from `handleQueue`, but the legacy
+        // `emitWithAck` chain allocates through `createOnAck` on the caller's
+        // thread, so the counter itself is lock-guarded. Without that, a legacy
+        // emit on one thread and a modern one on `handleQueue` would race on the
+        // same `Int` — and could hand two registrations the same id.
+        ackIdLock.lock()
+        defer { ackIdLock.unlock() }
+
         currentAck += 1
+
         return currentAck
     }
 }

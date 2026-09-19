@@ -27,7 +27,7 @@ import Foundation
 
 /// The class that handles the engine.io protocol and transports.
 /// See `SocketEnginePollable` and `SocketEngineWebsocket` for transport specific methods.
-open class SocketEngine: NSObject, URLSessionDelegate,
+open class SocketEngine: NSObject,
                          SocketEnginePollable, SocketEngineWebsocket, ConfigSettable {
   
   
@@ -52,6 +52,13 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     /// enforced at this layer. Unlimited by default, like the JS client.
     internal private(set) var bufferLimits = SocketBufferLimits.unlimited
     private var configurationError: String?
+
+    /// Server cookies are opt-in and never use the application's shared cookie store.
+    public private(set) var withCredentials = false
+    public private(set) var forceBase64 = false
+    public private(set) var addTrailingSlash = true
+    /// Kept across reconnects and polling-to-WebSocket upgrades, not across engines.
+    internal let credentialCookieStorage = URLSessionConfiguration.ephemeral.httpCookieStorage
 
     /// The connect parameters sent during a connect.
     public var connectParams: [String: Any]? {
@@ -123,8 +130,8 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     public private(set) var polling = true
 
     /// The maximum number of bytes this server accepts in a single polling POST,
-    /// taken from the handshake. `nil` before the handshake, and on engine.io v3
-    /// where servers do not advertise a limit.
+    /// taken from the handshake. `nil` before the handshake or if the server
+    /// does not advertise a limit.
     public private(set) var maxPayload: Int?
 
     /// If `true`, the engine is currently seeing whether it can upgrade to WebSockets.
@@ -159,8 +166,6 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     @available(*, deprecated, message: "URLSession is always used")
     public private(set) var useCustomEngine = false
 
-    /// The version of engine.io being used. Default is three.
-    public private(set) var version: SocketIOVersion = .three
 
     /// If `true`, then the engine is currently in WebSockets mode.
     @available(*, deprecated, message: "No longer needed, if we're not polling, then we must be doing websockets")
@@ -188,14 +193,8 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     private var heartbeatToken: UInt64 = 0
     private var heartbeatWork: DispatchWorkItem?
     private var pingInterval: Int?
-    private var pingTimeout = 0 {
-        didSet {
-            pongsMissedMax = Int(pingTimeout / max(1, pingInterval ?? 25000))
-        }
-    }
+    private var pingTimeout = 0
 
-    private var pongsMissed = 0
-    private var pongsMissedMax = 0
     /// Set while a graceful close waits for an unfinished upgrade to settle.
     /// Non-nil is JS's `readyState === "closing"`: no new packet may be written.
     private var pendingCloseReason: String?
@@ -240,7 +239,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         heartbeatWork?.cancel()
         session?.invalidateAndCancel()
         let abandoned = webSocketTransport
-        engineQueue.async {
+        engineQueue.socketAsync {
             abandoned?.onEvent = nil
             abandoned?.abort()
         }
@@ -267,7 +266,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     }
 
     private func handleBase64(message: String) {
-        let offset = version.rawValue >= 3 ? 1 : 2
+        let offset = 1
         // binary in base64 string
         let noPrefix = String(message[message.index(message.startIndex, offsetBy: offset)..<message.endIndex])
 
@@ -279,7 +278,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     /// Retires the current attempt once and completes abandoned writes locally.
     /// A graceful polling close owns its old session until the final POST or deadline.
     private func closeOutEngine(reason: String, graceful: Bool = false,
-                                flushPollingQueue: Bool = false) {
+                                flushPollingQueue: Bool = false, error: SocketTransportError? = nil) {
         guard !closed else { return }
         cancelHeartbeat()
         let oldTransport = webSocketTransport
@@ -318,8 +317,8 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             let sender = RetiringPollingSender(session: oldSession, queue: engineQueue,
                                                requests: retiringRequests, timeout: pollingRetirementDeadline)
             retiringSender = sender
-            retiringPostGroup.notify(queue: engineQueue) { sender.start() }
-            engineQueue.asyncAfter(deadline: .now() + pollingRetirementDeadline) {
+            retiringPostGroup.socketNotify(queue: engineQueue) { sender.start() }
+            engineQueue.socketAsyncAfter(deadline: .now() + pollingRetirementDeadline) {
                 // A write stalled at close time must not retain the session
                 // forever or send a close after invalidation when its barrier
                 // eventually drains. Requests this sender starts itself are
@@ -338,11 +337,15 @@ open class SocketEngine: NSObject, URLSessionDelegate,
                 if case .success = result { transport?.close(code: 1000, reason: nil) }
                 else { transport?.abort() }
             }
-            engineQueue.asyncAfter(deadline: .now() + 1) { transport.abort() }
+            engineQueue.socketAsyncAfter(deadline: .now() + 1) { transport.abort() }
         } else {
             oldTransport?.abort()
         }
-        client?.engineDidClose(reason: reason)
+        if let error = error, let callback = client?.engineDidClose(reason:error:) {
+            callback(reason, error)
+        } else {
+            client?.engineDidClose(reason: reason)
+        }
         // The retiring sender owns the queued packets' completions: each fires
         // when its batch reaches the wire, and any batch it gives up on is
         // completed locally there instead.
@@ -382,7 +385,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
 
     /// Starts the connection to the server.
     open func connect() {
-        engineQueue.async {
+        engineQueue.socketAsync {
             self._connect()
         }
     }
@@ -467,7 +470,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             return !reserved.contains(name.removingPercentEncoding ?? name)
         }
         let suffix = parameters.isEmpty ? "" : "&" + parameters.joined(separator: "&")
-        urlWebSocket.percentEncodedQuery = "transport=websocket" + suffix + engineIOParam
+        urlWebSocket.percentEncodedQuery = "transport=websocket" + (forceBase64 ? "&b64=1" : "") + suffix + engineIOParam
         urlPolling.percentEncodedQuery = "transport=polling&b64=1" + suffix + engineIOParam
 
         return (urlPolling.url!, urlWebSocket.url!)
@@ -476,12 +479,13 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     private func createWebSocketAndConnect() {
         var request = URLRequest(url: urlWebSocketWithSid)
         addHeaders(to: &request, includingCookies:
-            session?.configuration.httpCookieStorage?.cookies(for: urlPollingWithSid))
+            withCredentials ? credentialCookieStorage?.cookies(for: urlPollingWithSid) : nil)
         // addHeaders already applies explicit Cookie/extraHeaders precedence.
         request.httpShouldHandleCookies = false
         let options = webSocketOptions
         let transport = webSocketTransportFactory?(request) ?? URLSessionWebSocketTransport(
             request: request, queue: engineQueue,
+            configuration: .ephemeral,
             tlsConfiguration: tlsConfiguration, sessionDelegate: sessionDelegate,
             maximumMessageSize: options.maximumMessageSize,
             maximumPendingBytes: options.maximumPendingBytes,
@@ -489,13 +493,18 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             maximumPendingMessages: options.maximumPendingMessages)
         let attempt = generation
         webSocketTransport = transport
+        let queue = engineQueue
         transport.onEvent = { [weak self, weak transport] event in
-            self?.engineQueue.async { [weak self, weak transport] in
+            queue.socketAsync { [weak self, weak transport] in
                 guard let self = self, let transport = transport,
                       self.generation == attempt, !self.closed,
                       self.webSocketTransport === transport else { return }
                 switch event {
                 case .opened(_, let headers):
+                    if self.withCredentials {
+                        let cookies = HTTPCookie.cookies(withResponseHeaderFields: headers, for: self.urlPolling)
+                        self.credentialCookieStorage?.setCookies(cookies, for: self.urlPolling, mainDocumentURL: nil)
+                    }
                     self.wsConnected = true
                     self.client?.engineDidWebsocketUpgrade(headers: headers)
                     self.websocketDidConnect()
@@ -522,23 +531,45 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         return tlsConfiguration.validationError ?? webSocketOptions.validationError
     }
 
+    // Scoped to the legacy error hook on engineQueue so overrides still observe
+    // structured failures without emitting duplicate client events.
+    private var currentTransportError: SocketTransportError?
+
     /// Called when an error happens during execution. Causes a disconnection.
     open func didError(reason: String) {
         let fail = { [weak self] in
             guard let self = self, !self.closed else { return }
             DefaultSocketLogger.Logger.error(reason, type: SocketEngine.logType)
-            self.client?.engineDidError(reason: reason)
-            self.closeOutEngine(reason: "transport error")
+            let error = self.currentTransportError
+            if let error, let callback = self.client?.engineDidError(reason:error:) {
+                callback(reason, error)
+            } else {
+                self.client?.engineDidError(reason: reason)
+            }
+            self.closeOutEngine(reason: "transport error", error: error)
         }
         if DispatchQueue.getSpecific(key: engineQueueKey) != nil { fail() }
-        else { engineQueue.async(execute: fail) }
+        else { engineQueue.socketAsync(execute: fail) }
+    }
+
+    /// Structured transport failure, reported through `didError(reason:)` before close.
+    open func didError(reason: String, error: SocketTransportError) {
+        let fail = { [weak self] in
+            guard let self = self, !self.closed else { return }
+            let previousError = self.currentTransportError
+            self.currentTransportError = error
+            defer { self.currentTransportError = previousError }
+            self.didError(reason: reason)
+        }
+        if DispatchQueue.getSpecific(key: engineQueueKey) != nil { fail() }
+        else { engineQueue.socketAsync(execute: fail) }
     }
 
     /// Disconnects from the server.
     ///
     /// - parameter reason: The reason for the disconnection. This is communicated up to the client.
     open func disconnect(reason: String) {
-        engineQueue.async {
+        engineQueue.socketAsync {
             self._disconnect(reason: reason)
         }
     }
@@ -635,11 +666,13 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     open func sendWebSocketMessage(_ str: String, withType type: SocketEnginePacketType,
                                    withData data: [Data], completion: (() -> ())?) {
         guard DispatchQueue.getSpecific(key: engineQueueKey) != nil else {
-            engineQueue.async { self.sendWebSocketMessage(str, withType: type, withData: data, completion: completion) }
+            engineQueue.socketAsync { self.sendWebSocketMessage(str, withType: type, withData: data, completion: completion) }
             return
         }
         var messages: [EngineWebSocketMessage] = [.text("\(type.rawValue)\(str)")]
-        messages += data.map { .binary(version.rawValue >= 3 ? $0 : Data([0x4]) + $0) }
+        messages += data.map {
+            forceBase64 ? .text("b" + $0.base64EncodedString()) : .binary($0)
+        }
         sendWebSocketBatch(messages, completion: completion)
     }
 
@@ -709,7 +742,6 @@ open class SocketEngine: NSObject, URLSessionDelegate,
 
         self.sid = sid
         connected = true
-        pongsMissed = 0
 
         if let upgrades = json["upgrades"] as? [String] {
             upgradeWs = upgrades.contains("websocket")
@@ -720,7 +752,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         self.pingInterval = interval
         self.pingTimeout = timeout
 
-        // engine.io v4 only. v3 servers do not advertise a limit, and `nil` means
+        // An omitted limit means
         // we batch without one, which is how this client always behaved.
         maxPayload = json["maxPayload"] as? Int
 
@@ -728,11 +760,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             createWebSocketAndConnect()
         }
 
-        if version.rawValue >= 3 {
-            checkPings()
-        } else {
-            sendPing()
-        }
+        checkPings()
 
         if !forceWebsockets {
             doPoll()
@@ -742,7 +770,6 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     }
 
     private func handlePong(with message: String) {
-        pongsMissed = 0
 
         // We should upgrade
         if message == "3probe" {
@@ -756,10 +783,8 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     }
 
     private func handlePing(with message: String) {
-        if version.rawValue >= 3 {
-            write("", withType: .pong, withData: [])
-            checkPings()
-        }
+        write("", withType: .pong, withData: [])
+        checkPings()
 
         client?.engineDidReceivePing()
     }
@@ -772,7 +797,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     }
 
     private func checkPings() {
-        guard connected, !closed, !heartbeatExpired, version.rawValue >= 3 else { return }
+        guard connected, !closed, !heartbeatExpired else { return }
         cancelHeartbeat()
         let deadline = heartbeatNow() + .milliseconds((pingInterval ?? 25_000) + pingTimeout)
         heartbeatDeadline = deadline.uptimeNanoseconds
@@ -785,12 +810,12 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             self.closeOutEngine(reason: "ping timeout")
         }
         heartbeatWork = work
-        engineQueue.asyncAfter(deadline: deadline, execute: work)
+        engineQueue.socketAsyncAfter(deadline: deadline, execute: work)
     }
 
     public var hasPingExpired: Bool {
         let read = { () -> Bool in
-            guard self.connected, !self.closed, self.version.rawValue >= 3 else { return false }
+            guard self.connected, !self.closed else { return false }
             if self.heartbeatExpired { return true }
             guard let deadline = self.heartbeatDeadline,
                   self.heartbeatNow().uptimeNanoseconds > deadline else { return false }
@@ -798,7 +823,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             let attempt = self.generation
             // `read` already holds `self` strongly for the duration of this
             // call; the close block is bounded by the same attempt/token guards.
-            self.engineQueue.async {
+            self.engineQueue.socketAsync {
                 guard self.generation == attempt, self.heartbeatExpired else { return }
                 self.closeOutEngine(reason: "ping timeout")
             }
@@ -820,11 +845,8 @@ open class SocketEngine: NSObject, URLSessionDelegate,
 
         DefaultSocketLogger.Logger.log("Got binary data: \(data)", type: SocketEngine.logType)
 
-        guard version.rawValue >= 3 || data.first == 0x04 else {
-            didError(reason: "Invalid Engine.IO 3 binary packet")
-            return
-        }
-        client?.parseEngineBinaryData(version.rawValue >= 3 ? data : Data(data.dropFirst()))
+
+        client?.parseEngineBinaryData(data)
     }
 
     /// Parses a raw engine.io packet.
@@ -843,7 +865,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
 
         DefaultSocketLogger.Logger.log("Got message: \(message)", type: SocketEngine.logType)
 
-        if message.hasPrefix(version.rawValue >= 3 ? "b" : "b4") {
+        if message.hasPrefix("b") {
             return handleBase64(message: message)
         }
 
@@ -904,7 +926,6 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         heartbeatExpired = false
         pingInterval = nil
         pingTimeout = 0
-        pongsMissed = 0
         pendingCloseReason = nil
         let proxy = SocketSessionDelegateProxy(tlsConfiguration: tlsConfiguration, forwardingDelegate: sessionDelegate)
         proxy.onInvalidation = { [weak self] invalidSession, error in
@@ -913,37 +934,16 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             self.didError(reason: error.localizedDescription)
         }
         pollingPostGroup = DispatchGroup()
-        session = Foundation.URLSession(configuration: pollingSessionConfigurationFactory(),
+        let configuration = pollingSessionConfigurationFactory()
+        configuration.httpCookieStorage = withCredentials ? credentialCookieStorage : nil
+        configuration.httpShouldSetCookies = withCredentials
+        configuration.httpCookieAcceptPolicy = withCredentials ? .always : .never
+        session = Foundation.URLSession(configuration: configuration,
                                         delegate: proxy, delegateQueue: queue)
         for pending in pendingPosts { pending.completion?() }
         for pending in pendingProbes { pending.completion?() }
     }
 
-    private func sendPing() {
-        guard connected, let pingInterval = pingInterval else {
-            return
-        }
-
-        // Server is not responding
-        if pongsMissed > pongsMissedMax {
-            closeOutEngine(reason: "ping timeout")
-            return
-        }
-
-        pongsMissed += 1
-        write("", withType: .ping, withData: [], completion: nil)
-
-        engineQueue.asyncAfter(deadline: .now() + .milliseconds(pingInterval)) {[weak self, attempt = self.generation] in
-            // Make sure not to ping old connections
-            guard let this = self, this.generation == attempt && !this.closed else {
-                return
-            }
-
-            this.sendPing()
-        }
-
-        client?.engineDidSendPing()
-    }
 
     /// Called when the engine should set/update its configs from a given configuration.
     ///
@@ -956,6 +956,12 @@ open class SocketEngine: NSObject, URLSessionDelegate,
                 connectParams = params
             case let .cookies(cookies):
                 self.cookies = cookies
+            case let .withCredentials(enabled):
+                withCredentials = enabled
+            case let .forceBase64(enabled):
+                forceBase64 = enabled
+            case let .addTrailingSlash(enabled):
+                addTrailingSlash = enabled
             case let .extraHeaders(headers):
                 extraHeaders = headers
             case let .sessionDelegate(delegate):
@@ -966,10 +972,6 @@ open class SocketEngine: NSObject, URLSessionDelegate,
                 forceWebsockets = force
             case let .path(path):
                 socketPath = path
-
-                if !socketPath.hasSuffix("/") {
-                    socketPath += "/"
-                }
             case let .secure(secure):
                 self.secure = secure
             case let .selfSigned(selfSigned):
@@ -992,12 +994,14 @@ open class SocketEngine: NSObject, URLSessionDelegate,
                 self.enableSOCKSProxy = enable
             case .useCustomEngine:
                 self.useCustomEngine = false // Deprecated compatibility option; native is the only backend.
-            case let .version(num):
-                version = num
             default:
                 continue
             }
         }
+        // Normalize after all options: configuration ordering must not matter.
+        if socketPath.hasSuffix("/") { socketPath.removeLast() }
+        if addTrailingSlash { socketPath += "/" }
+        (urlPolling, urlWebSocket) = createURLs()
     }
 
     // Moves from long-polling to websockets
@@ -1030,7 +1034,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     /// - parameter data: Any data that this message has.
     /// - parameter completion: Callback called on transport write completion.
     open func write(_ msg: String, withType type: SocketEnginePacketType, withData data: [Data], completion: (() -> ())? = nil) {
-        engineQueue.async {
+        engineQueue.socketAsync {
             self._write(msg, withType: type, withData: data, completion: completion)
         }
     }
@@ -1057,7 +1061,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         probeWebSocket()
         let attempt = generation
         let candidate = webSocketTransport
-        engineQueue.asyncAfter(deadline: .now() + webSocketProbeTimeout) { [weak self, weak candidate] in
+        engineQueue.socketAsyncAfter(deadline: .now() + webSocketProbeTimeout) { [weak self, weak candidate] in
             guard let self = self, let candidate = candidate,
                   self.generation == attempt, self.webSocketTransport === candidate,
                   self.probing, !self.closed else { return }
@@ -1094,6 +1098,12 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             doPoll()
             return
         }
+        let transportDetail = SocketTransportError(transport: "websocket", operation: "close",
+                                          closeCode: closeCode, closeReason: reason, underlyingError: error)
+        // A received close frame is a transport close, even if URLSession also
+        // completes its outstanding receive with an error. No close frame means
+        // a network/handshake failure (or an unclean 1006 close).
+        let peerClosed = closeCode.map { $0 >= 1000 && $0 != 1006 } ?? false
         let message = error?.localizedDescription ?? reason ?? "Socket Disconnected"
         // The original failure must not be lost behind the close reason: JS
         // engine.io-client `_onError` always emits `error` before
@@ -1101,7 +1111,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         // then decides (`Socket.onerror`) whether that is a `connect_error`.
         // The native close code and reason travel with it, which is what a
         // dropped WebSocket under an established connection otherwise hides.
-        if let error = error {
+        if let error = error, !peerClosed {
             let native = error as NSError
             var details = ["\(native.domain)/\(native.code): \(native.localizedDescription)"]
             if let underlying = native.userInfo[NSUnderlyingErrorKey] as? NSError {
@@ -1111,7 +1121,11 @@ open class SocketEngine: NSObject, URLSessionDelegate,
             if let reason = reason, !reason.isEmpty { details.append("reason \(reason)") }
             let detail = details.joined(separator: "; ")
             DefaultSocketLogger.Logger.error("WebSocket failed: \(detail)", type: SocketEngine.logType)
-            client?.engineDidError(reason: reportSendError ? message : detail)
+            if let callback = client?.engineDidError(reason:error:) {
+                callback(reportSendError ? message : detail, transportDetail)
+            } else {
+                client?.engineDidError(reason: reportSendError ? message : detail)
+            }
         } else if let code = closeCode {
             DefaultSocketLogger.Logger.log("WebSocket closed with code \(code)\(reason.map { ": " + $0 } ?? "")",
                                            type: SocketEngine.logType)
@@ -1120,7 +1134,8 @@ open class SocketEngine: NSObject, URLSessionDelegate,
         // the detail lives in the engineDidError payload above (engine.io-client
         // maps a failed transport to "transport error", a clean close to
         // "transport close").
-        closeOutEngine(reason: error != nil ? "transport error" : "transport close")
+        closeOutEngine(reason: error != nil && !peerClosed ? "transport error" : "transport close",
+                       error: transportDetail)
     }
 
     /// Retires the polling session instead of merely draining it. JS builds a
@@ -1130,7 +1145,7 @@ open class SocketEngine: NSObject, URLSessionDelegate,
     /// retiring session keeps its own POST barrier; the engine takes a new one.
     open func stopPolling() {
         guard DispatchQueue.getSpecific(key: engineQueueKey) != nil else {
-            engineQueue.async { self.stopPolling() }
+            engineQueue.socketAsync { self.stopPolling() }
             return
         }
         invalidated = true
@@ -1235,16 +1250,18 @@ private final class RetiringPollingSender {
         // barrier's notify block has run, nothing else holds it, and the chain
         // has to survive as far as the close packet. The per-request bound below
         // always cancels the task, so the retain is always released.
+        let delivery = SocketQueueWork(queue: queue) {
+            guard !self.finished, self.index == attempt else { return }
+            for completion in entry.completions { completion() }
+            self.index += 1
+            self.sendNext()
+        }
+        let queue = self.queue
         let task = session.dataTask(with: entry.request) { _, _, _ in
-            self.queue.async {
-                guard !self.finished, self.index == attempt else { return }
-                for completion in entry.completions { completion() }
-                self.index += 1
-                self.sendNext()
-            }
+            queue.socketAsync { delivery.run() }
         }
         task.resume()
-        queue.asyncAfter(deadline: .now() + timeout) { [weak task] in
+        queue.socketAsyncAfter(deadline: .now() + timeout) { [weak task] in
             guard !self.finished, self.index == attempt else { return }
             task?.cancel()
             self.finish(cancelling: true)

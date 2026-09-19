@@ -50,8 +50,10 @@ class SocketMangerTest : XCTestCase {
     func testManagerCallsConnect() {
         setUpSockets()
 
-        socket.expectations[ManagerExpectation.didConnectCalled] = expectation(description: "The manager should call connect on the default socket")
-        socket2.expectations[ManagerExpectation.didConnectCalled] = expectation(description: "The manager should call connect on the socket")
+        let managedExpectation1 = expectation(description: "The manager should call connect on the default socket")
+        socket.expectations[ManagerExpectation.didConnectCalled] = managedExpectation1
+        let managedExpectation2 = expectation(description: "The manager should call connect on the socket")
+        socket2.expectations[ManagerExpectation.didConnectCalled] = managedExpectation2
 
         socket.connect()
         socket2.connect()
@@ -59,7 +61,7 @@ class SocketMangerTest : XCTestCase {
         manager.fakeConnecting()
         manager.fakeConnecting(toNamespace: "/swift")
 
-        waitForExpectations(timeout: 0.3)
+        wait(for: [managedExpectation1, managedExpectation2], timeout: 0.3)
     }
 
     func testManagerDoesNotCallConnectWhenConnectingWithLessThanOneReconnect() {
@@ -79,7 +81,7 @@ class SocketMangerTest : XCTestCase {
         
         manager.connect()
 
-        waitForExpectations(timeout: 0.3)
+        wait(for: [expect], timeout: 0.3)
     }
     
     func testManagerCallConnectWhenConnectingAndMoreThanOneReconnect() {
@@ -97,14 +99,16 @@ class SocketMangerTest : XCTestCase {
         
         manager.connect()
 
-        waitForExpectations(timeout: 0.8)
+        wait(for: [expect], timeout: 0.8)
     }
 
     func testManagerCallsDisconnect() {
         setUpSockets()
 
-        socket.expectations[ManagerExpectation.didDisconnectCalled] = expectation(description: "The manager should call disconnect on the default socket")
-        socket2.expectations[ManagerExpectation.didDisconnectCalled] = expectation(description: "The manager should call disconnect on the socket")
+        let managedExpectation3 = expectation(description: "The manager should call disconnect on the default socket")
+        socket.expectations[ManagerExpectation.didDisconnectCalled] = managedExpectation3
+        let managedExpectation4 = expectation(description: "The manager should call disconnect on the socket")
+        socket2.expectations[ManagerExpectation.didDisconnectCalled] = managedExpectation4
 
         socket2.on(clientEvent: .connect) {data, ack in
             self.manager.disconnect()
@@ -117,7 +121,7 @@ class SocketMangerTest : XCTestCase {
         manager.fakeConnecting()
         manager.fakeConnecting(toNamespace: "/swift")
 
-        waitForExpectations(timeout: 0.3)
+        wait(for: [managedExpectation3, managedExpectation4], timeout: 0.3)
     }
 
 //    func testManagerEmitAll() {
@@ -318,11 +322,11 @@ class SocketMangerTest : XCTestCase {
 
         let openHandled = expectation(description: "engine open handled")
         manager.engineDidOpen(reason: "Connect")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.1) {
             openHandled.fulfill()
         }
 
-        waitForExpectations(timeout: 0.5)
+        wait(for: [openHandled], timeout: 0.5)
 
         let sent = try XCTUnwrap(engine.lastSent)
         let jsonStart = sent.index(sent.startIndex, offsetBy: 3)
@@ -378,7 +382,7 @@ public class TestManager: SocketManager {
     }
 
     public func fakeConnecting(toNamespace nsp: String = "/") {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.1) {
             // Fake connecting
             self.parseEngineMessage("0\(nsp),{\"sid\":\"fake-sid\"}")
         }

@@ -24,15 +24,6 @@
 
 import Foundation
 
-/// The socket.io version being used.
-public enum SocketIOVersion: Int {
-    /// socket.io 2, engine.io 3
-    case two = 2
-
-    /// socket.io 3, engine.io 4
-    case three = 3
-}
-
 protocol ClientOption : CustomStringConvertible, Equatable {
     func getSocketIOOptionValue() -> Any
 }
@@ -89,6 +80,16 @@ public enum SocketIOClientOption : ClientOption {
 
     /// An array of cookies that will be sent during the initial connection.
     case cookies([HTTPCookie])
+
+    /// Accept and resend server cookies in an isolated, engine-owned cookie jar.
+    /// Default false, like JS withCredentials. Explicit cookies/headers remain explicit.
+    case withCredentials(Bool)
+
+    /// Encode binary WebSocket messages as Engine.IO base64 text. Polling always does so.
+    case forceBase64(Bool)
+
+    /// Append a trailing slash to the transport path. Default true, like JS.
+    case addTrailingSlash(Bool)
 
     /// Any extra HTTP headers that should be sent during the initial connection.
     case extraHeaders([String: String])
@@ -181,9 +182,6 @@ public enum SocketIOClientOption : ClientOption {
     /// network request is started when this option is present.
     case invalidConfiguration(String)
 
-    /// The version of socket.io being used. This should match the server version. Default is 3.
-    case version(SocketIOVersion)
-
     // MARK: Properties
 
     /// The description of this option.
@@ -211,6 +209,12 @@ public enum SocketIOClientOption : ClientOption {
             description = "connectParams"
         case .connectTimeout:
             description = "connectTimeout"
+        case .withCredentials:
+            description = "withCredentials"
+        case .forceBase64:
+            description = "forceBase64"
+        case .addTrailingSlash:
+            description = "addTrailingSlash"
         case .cookies:
             description = "cookies"
         case .extraHeaders:
@@ -255,8 +259,6 @@ public enum SocketIOClientOption : ClientOption {
             description = "enableSOCKSProxy"
         case .useCustomEngine:
             description = "customEngine"
-        case .version:
-            description = "version"
         }
 
         return description
@@ -286,6 +288,12 @@ public enum SocketIOClientOption : ClientOption {
             value = count
         case let .connectTimeout(timeout):
             value = timeout
+        case let .withCredentials(enabled):
+            value = enabled
+        case let .forceBase64(enabled):
+            value = enabled
+        case let .addTrailingSlash(enabled):
+            value = enabled
         case let .cookies(cookies):
             value = cookies
         case let .extraHeaders(headers):
@@ -330,8 +338,6 @@ public enum SocketIOClientOption : ClientOption {
             value = enable
         case let .useCustomEngine(enable):
             value = enable
-        case let.version(versionNum):
-            value = versionNum
         }
 
         return value

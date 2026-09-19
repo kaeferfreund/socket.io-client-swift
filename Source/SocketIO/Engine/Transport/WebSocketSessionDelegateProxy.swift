@@ -56,6 +56,11 @@ internal final class URLSessionWebSocketConnection: EngineWebSocketConnection {
         self.sessionDelegate = sessionDelegate
     }
 
+    internal var closeDetails: (code: Int?, reason: Data?) {
+        let code = task?.closeCode
+        return (code == .invalid ? nil : code?.rawValue, task?.closeReason)
+    }
+
     internal func start() {
         guard !started else { return }
         started = true
@@ -79,15 +84,16 @@ internal final class URLSessionWebSocketConnection: EngineWebSocketConnection {
         case .text(let text): payload = .string(text)
         case .binary(let data): payload = .data(data)
         }
+        let callback = SocketUncheckedSendableBox(completion)
         #if canImport(FoundationNetworking)
         // swift-corelibs-foundation exposes the async API rather than Apple's
         // completion-handler overload. This branch supports isolated Linux tests.
         Task {
-            do { try await task.send(payload); completion(nil) }
-            catch { completion(error) }
+            do { try await task.send(payload); callback.value(nil) }
+            catch { callback.value(error) }
         }
         #else
-        task.send(payload, completionHandler: completion)
+        task.send(payload) { callback.value($0) }
         #endif
     }
 
@@ -96,8 +102,9 @@ internal final class URLSessionWebSocketConnection: EngineWebSocketConnection {
             completion(.failure(EngineWebSocketError.notOpen))
             return
         }
-        let deliver: (Result<URLSessionWebSocketTask.Message, Error>) -> Void = { result in
-            completion(result.flatMap { message in
+        let callback = SocketUncheckedSendableBox(completion)
+        let deliver: @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void = { result in
+            callback.value(result.flatMap { message in
                 switch message {
                 case .string(let text): return .success(.text(text))
                 case .data(let data): return .success(.binary(data))
@@ -124,7 +131,7 @@ internal final class URLSessionWebSocketConnection: EngineWebSocketConnection {
         let closingSession = session
         closingSession?.finishTasksAndInvalidate()
         // Do not leave a closing session retained indefinitely by Foundation.
-        queue.asyncAfter(deadline: .now() + 1) { closingSession?.invalidateAndCancel() }
+        queue.socketAsyncAfter(deadline: .now() + 1) { closingSession?.invalidateAndCancel() }
         task = nil
         session = nil
     }
@@ -174,16 +181,18 @@ internal final class URLSessionWebSocketConnection: EngineWebSocketConnection {
 /// The shared superclass enforces the same trust policy as HTTP polling.
 internal final class WebSocketSessionDelegateProxy: SocketSessionDelegateProxy, URLSessionWebSocketDelegate {
     private weak var owner: URLSessionWebSocketConnection?
+    private let queue: DispatchQueue
 
     internal init(owner: URLSessionWebSocketConnection, tlsConfiguration: SocketTLSConfiguration,
                   forwardingDelegate: URLSessionDelegate?) {
         self.owner = owner
+        self.queue = owner.queue
         super.init(tlsConfiguration: tlsConfiguration, forwardingDelegate: forwardingDelegate)
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                     didOpenWithProtocol protocolName: String?) {
-        owner?.queue.async { [weak owner] in owner?.opened(session, webSocketTask, protocolName) }
+        queue.socketAsync { [weak owner] in owner?.opened(session, webSocketTask, protocolName) }
         #if canImport(ObjectiveC)
         (forwardingDelegate as? URLSessionWebSocketDelegate)?.urlSession?(session, webSocketTask: webSocketTask,
                                                                         didOpenWithProtocol: protocolName)
@@ -195,7 +204,7 @@ internal final class WebSocketSessionDelegateProxy: SocketSessionDelegateProxy, 
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                     didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        owner?.queue.async { [weak owner] in owner?.closed(session, webSocketTask, closeCode, reason) }
+        queue.socketAsync { [weak owner] in owner?.closed(session, webSocketTask, closeCode, reason) }
         #if canImport(ObjectiveC)
         (forwardingDelegate as? URLSessionWebSocketDelegate)?.urlSession?(session, webSocketTask: webSocketTask,
                                                                         didCloseWith: closeCode, reason: reason)
@@ -207,12 +216,12 @@ internal final class WebSocketSessionDelegateProxy: SocketSessionDelegateProxy, 
 
     override func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         super.urlSession(session, task: task, didCompleteWithError: error)
-        owner?.queue.async { [weak owner] in owner?.completed(session, task, error) }
+        queue.socketAsync { [weak owner] in owner?.completed(session, task, error) }
     }
 
     override func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
         super.urlSession(session, didBecomeInvalidWithError: error)
-        owner?.queue.async { [weak owner] in owner?.invalidated(session, error) }
+        queue.socketAsync { [weak owner] in owner?.invalidated(session, error) }
     }
 }
 

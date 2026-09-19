@@ -1284,6 +1284,314 @@
           "symbol": "JSParityE2ETest.testAuthObjectAndCallbackReachAuthWithoutLeakingIntoQuery"
         }
       ]
+    },
+    {
+      "id": "JS-002",
+      "upstream_ids": [
+        "JS-002"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original pre-connect hi request is buffered, a real localhost server emits hi, the handler runs and the socket disconnects.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testOriginalLocalhostConnectionDeliversAPreconnectEmit"
+        }
+      ]
+    },
+    {
+      "id": "JS-003",
+      "upstream_ids": [
+        "JS-003"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Explicit autoConnect false leaves the engine absent before disconnect; native active flag also remains false.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testExplicitAutoConnectFalseDoesNotCreateAnEngine"
+        }
+      ]
+    },
+    {
+      "id": "JS-007",
+      "upstream_ids": [
+        "JS-007"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "/foo and /bar reference the identical manager, then both disconnect. Native explicit manager construction replaces JS io() lookup; global lookup behavior remains an API boundary.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testDifferentNamespacesShareTheExplicitManager"
+        }
+      ]
+    },
+    {
+      "id": "JS-009",
+      "upstream_ids": [
+        "JS-009"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original pre-connect getAckDate with {test:true} receives a string acknowledgement from the real server; the native legacy NO ACK timeout sentinel is explicitly rejected.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testReceiveDateWithAck"
+        }
+      ]
+    },
+    {
+      "id": "JS-010",
+      "upstream_ids": [
+        "JS-010"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original pre-connect false request receives a server event containing Bool false, neither nil nor a truthy replacement.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testFalseSurvivesTheRoundTrip"
+        }
+      ]
+    },
+    {
+      "id": "JS-012",
+      "upstream_ids": [
+        "JS-012"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Root connects first; /foo is created and joined inside its connect callback; /foo connects while root stays connected, then both close.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testNamespaceCanJoinFromAnotherNamespacesConnectCallback"
+        }
+      ]
+    },
+    {
+      "id": "JS-013",
+      "upstream_ids": [
+        "JS-013"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Root disconnects in its first connect callback; /foo is created and joined inside root disconnect; /foo successfully connects and disconnects.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testNamespaceCanJoinFromAnotherNamespacesDisconnectCallback"
+        }
+      ]
+    },
+    {
+      "id": "JS-015",
+      "upstream_ids": [
+        "JS-015"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Initial connect disconnects; the one-shot disconnect callback reconnects synchronously; the second connect succeeds and disconnects. Exactly two connects.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testManualReconnectInsideTheDisconnectCallback"
+        }
+      ]
+    },
+    {
+      "id": "JS-029",
+      "upstream_ids": [
+        "JS-029"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real /foo and /asd namespaces share a manager. Closing /foo does not disconnect /asd; closing the last namespace then disconnects the manager and releases its engine. Explicit status/engine checks replace the JS manager close event bus.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testDisconnectingOneNamespaceKeepsTheOtherConnected"
+        }
+      ]
+    },
+    {
+      "id": "JS-036",
+      "upstream_ids": [
+        "JS-036"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original getDate request is emitted before connect; takeDate server event carries a String.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testEmitDateAsString"
+        }
+      ]
+    },
+    {
+      "id": "JS-037",
+      "upstream_ids": [
+        "JS-037"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Original getDateObj request is emitted before connect; takeDateObj server event is a dictionary whose date field is a String.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testEmitDateInObject"
+        }
+      ]
+    },
+    {
+      "id": "JS-059",
+      "upstream_ids": [
+        "JS-059"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Default namespace SID is nonempty, equals the independently queried server SID and differs from the Engine.IO SID. The connected socket then disconnects.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testSocketIdIsClearedOnDisconnect"
+        }
+      ]
+    },
+    {
+      "id": "JS-060",
+      "upstream_ids": [
+        "JS-060"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Custom /foo namespace SID is nonempty, equals the independently queried server SID and differs from Engine.IO SID; root and /foo SIDs are distinct.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testSocketIdOnACustomNamespace"
+        }
+      ]
+    },
+    {
+      "id": "JS-061",
+      "upstream_ids": [
+        "JS-061"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "SID is already empty inside the disconnect callback after explicitly disconnecting a connected socket, not merely after waiting for the callback.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testSocketIdIsClearedOnDisconnect"
+        }
+      ]
+    },
+    {
+      "id": "JS-077",
+      "upstream_ids": [
+        "JS-077"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real /no namespace middleware refuses connection; connect_error contains the exact original Auth failed (custom namespace) message. Native payload representation replaces the JS Error instance.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testMiddlewareFailureOnCustomNamespaceIsReported"
+        }
+      ]
+    },
+    {
+      "id": "JS-078",
+      "upstream_ids": [
+        "JS-078"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Real /with-data rejection includes the exact original message and data object with exactly code=401 and details=Invalid token. Native dictionary replaces JS Error.data representation.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testMiddlewareFailureCarriesItsErrorData"
+        }
+      ]
+    },
+    {
+      "id": "JS-079",
+      "upstream_ids": [
+        "JS-079"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "After /no middleware rejection force an Engine.IO reconnect; a sibling root reconnect and server processing barrier prove the new connection is active. Refused namespace reports exactly one connect_error and sends no additional CONNECT; explicit frame count is three.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testNoRejoinAfterAMiddlewareFailure"
+        }
+      ]
+    },
+    {
+      "id": "JS-080",
+      "upstream_ids": [
+        "JS-080"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "WebSocket-only first connect calls disconnect then connect in the same handler; reconnection succeeds and exactly one disconnect occurs before final cleanup.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testDisconnectThenReconnect"
+        }
+      ]
+    },
+    {
+      "id": "JS-083",
+      "upstream_ids": [
+        "JS-083"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Start connection then immediately await echo(123); real server acknowledgement resolves the async result with 123. Explicit connect replaces JS auto-connect, with no wait-for-connect barrier.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testEmitWithAckAwaitsTheAcknowledgement"
+        }
+      ]
+    },
+    {
+      "id": "JS-099",
+      "upstream_ids": [
+        "JS-099"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Start connection then await timed echo(42); real server acknowledgement returns 42 without throwing. Timeout uses native seconds and a CI-safe five-second success budget instead of JS 50ms; no wait-for-connect barrier.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/JSParityE2ETest.swift",
+          "symbol": "JSParityE2ETest.testTimedEmitWithAckDoesNotTimeOutWhenTheServerAcknowledges"
+        }
+      ]
+    },
+    {
+      "id": "JS-001",
+      "upstream_ids": [
+        "JS-001"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Initially recovered is false; receive ordinary events to establish offset; forcibly close the real transport; reconnect preserves namespace SID and sets recovered true (both property and connect payload). Native server-side transport kill replaces direct JS engine.close, and missed-event replay is additionally verified.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/E2E/StateRecoveryE2ETest.swift",
+          "symbol": "StateRecoveryE2ETest.testA1_happyRecoveryDeliversMissedEvents"
+        }
+      ]
+    },
+    {
+      "id": "JS-028",
+      "upstream_ids": [
+        "JS-028"
+      ],
+      "kind": "native-assertion-equivalent",
+      "assertions": "Inject original root CONNECT with no sid/payload into the socket; exactly the incompatible-server connect_error is observed, connect does not fire and status does not become connected. Old protocol rejection remains supported; no old protocol implementation is required.",
+      "tests": [
+        {
+          "path": "Tests/TestSocketIO/JSParityUnitTest.swift",
+          "symbol": "JSParityUnitTest.testConnectPacketWithoutPayloadFiresConnectError"
+        }
+      ]
     }
   ],
   "remaining_review": {

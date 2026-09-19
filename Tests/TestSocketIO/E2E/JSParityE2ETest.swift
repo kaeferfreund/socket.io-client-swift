@@ -141,6 +141,7 @@ final class JSParityE2ETest: XCTestCase {
         XCTAssertEqual(payload?["message"] as? String, "Auth failed (with data)")
 
         let errorData = payload?["data"] as? [String: Any]
+        XCTAssertEqual(Set(errorData?.keys.map { $0 } ?? []), Set(["code", "details"]))
         XCTAssertEqual(errorData?["code"] as? Int, 401,
                        "JS exposes err.data; without it the app cannot tell 401 from any other refusal")
         XCTAssertEqual(errorData?["details"] as? String, "Invalid token")
@@ -258,11 +259,15 @@ final class JSParityE2ETest: XCTestCase {
         socket.connect()
         wait(for: [connected], timeout: 5)
         XCTAssertEqual(try serverSocketId(for: socket), try XCTUnwrap(socket.sid))
+        XCTAssertFalse(socket.sid?.isEmpty ?? true)
         XCTAssertNotEqual(socket.sid, manager.engine?.sid)
 
         let disconnected = expectation(description: "disconnect")
         disconnected.assertForOverFulfill = false
-        socket.on(clientEvent: .disconnect) { _, _ in disconnected.fulfill() }
+        socket.on(clientEvent: .disconnect) { _, _ in
+            XCTAssertTrue(socket.sid?.isEmpty ?? true)
+            disconnected.fulfill()
+        }
         socket.disconnect()
         wait(for: [disconnected], timeout: 5)
 
@@ -331,6 +336,10 @@ final class JSParityE2ETest: XCTestCase {
 
         XCTAssertFalse(asdDisconnected, "Leaving one namespace must not close the shared engine")
         XCTAssertEqual(asd.status, .connected)
+        asd.disconnect()
+        XCTAssertTrue(asdDisconnected)
+        XCTAssertEqual(manager.status, .disconnected)
+        XCTAssertNil(manager.engine)
     }
 
     // MARK: connection.ts — "should work with acks"
@@ -383,7 +392,7 @@ final class JSParityE2ETest: XCTestCase {
     // MARK: connection.ts — "should work with false"
 
     func testFalseSurvivesTheRoundTrip() {
-        let socket = connect(makeManager().socket(forNamespace: "/"))
+        let socket = makeManager().socket(forNamespace: "/")
 
         let received = expectation(description: "false comes back")
         socket.on("false") { data, _ in
@@ -391,6 +400,7 @@ final class JSParityE2ETest: XCTestCase {
             received.fulfill()
         }
         socket.emit("false")
+        socket.connect()
 
         wait(for: [received], timeout: 5)
     }
@@ -465,6 +475,7 @@ final class JSParityE2ETest: XCTestCase {
 
         XCTAssertEqual(try serverSocketId(for: root), try XCTUnwrap(root.sid))
         XCTAssertEqual(try serverSocketId(for: foo), try XCTUnwrap(foo.sid))
+        XCTAssertFalse(foo.sid?.isEmpty ?? true)
         XCTAssertNotEqual(foo.sid, root.sid, "Each namespace gets its own server-side id")
         XCTAssertNotEqual(foo.sid, manager.engine?.sid)
     }
@@ -1236,7 +1247,6 @@ final class JSParityE2ETest: XCTestCase {
 
     func testEmitDateAsString() {
         let socket = makeManager().socket(forNamespace: "/")
-        connect(socket)
 
         let took = expectation(description: "takeDate")
         took.assertForOverFulfill = false
@@ -1246,6 +1256,7 @@ final class JSParityE2ETest: XCTestCase {
             took.fulfill()
         }
         socket.emit("getDate")
+        socket.connect()
         wait(for: [took], timeout: 5)
 
         XCTAssertTrue(received is String, "A Date crosses the wire as a string, got \(String(describing: received))")
@@ -1255,7 +1266,6 @@ final class JSParityE2ETest: XCTestCase {
 
     func testEmitDateInObject() {
         let socket = makeManager().socket(forNamespace: "/")
-        connect(socket)
 
         let took = expectation(description: "takeDateObj")
         took.assertForOverFulfill = false
@@ -1265,6 +1275,7 @@ final class JSParityE2ETest: XCTestCase {
             took.fulfill()
         }
         socket.emit("getDateObj")
+        socket.connect()
         wait(for: [took], timeout: 5)
 
         XCTAssertNotNil(received)
@@ -1275,14 +1286,15 @@ final class JSParityE2ETest: XCTestCase {
 
     func testReceiveDateWithAck() {
         let socket = makeManager().socket(forNamespace: "/")
-        connect(socket)
 
         let acked = expectation(description: "getAckDate")
         var received: Any?
         socket.emitWithAck("getAckDate", ["test": true]).timingOut(after: 5) { data in
+            XCTAssertNotEqual(data.first as? String, SocketAckStatus.noAck.rawValue)
             received = data.first
             acked.fulfill()
         }
+        socket.connect()
         wait(for: [acked], timeout: 5)
 
         XCTAssertTrue(received is String)
@@ -1310,7 +1322,7 @@ final class JSParityE2ETest: XCTestCase {
 
     func testEmitWithAckAwaitsTheAcknowledgement() async throws {
         let socket = makeManager().socket(forNamespace: "/")
-        connect(socket)
+        socket.connect()
 
         let value = try await socket.emitWithAck("echo", 123)
 
@@ -1321,7 +1333,7 @@ final class JSParityE2ETest: XCTestCase {
 
     func testTimedEmitWithAckDoesNotTimeOutWhenTheServerAcknowledges() async throws {
         let socket = makeManager().socket(forNamespace: "/")
-        connect(socket)
+        socket.connect()
 
         let value = try await socket.timeout(after: 5).emitWithAck("echo", 42)
 
@@ -1434,5 +1446,84 @@ extension JSParityE2ETest {
             wait(for: [received], timeout: 5)
             socket.disconnect()
         }
+    }
+}
+
+extension JSParityE2ETest {
+    func testOriginalLocalhostConnectionDeliversAPreconnectEmit() {
+        let socket = makeManager().defaultSocket
+        let received = expectation(description: "original hi event returned")
+        socket.on("hi") { _, _ in received.fulfill() }
+        socket.emit("hi")
+        socket.connect()
+        wait(for: [received], timeout: 5)
+        socket.disconnect()
+    }
+
+    func testExplicitAutoConnectFalseDoesNotCreateAnEngine() {
+        let manager = makeManager(.autoConnect(false))
+        XCTAssertNil(manager.engine)
+        XCTAssertFalse(manager.defaultSocket.active)
+        manager.defaultSocket.disconnect()
+    }
+
+    func testDifferentNamespacesShareTheExplicitManager() {
+        let manager = makeManager()
+        let foo = manager.socket(forNamespace: "/foo")
+        let bar = manager.socket(forNamespace: "/bar")
+        XCTAssertTrue(foo.manager === bar.manager)
+        XCTAssertTrue(foo.manager === manager)
+        foo.disconnect()
+        bar.disconnect()
+    }
+
+    func testNamespaceCanJoinFromAnotherNamespacesConnectCallback() {
+        let manager = makeManager()
+        let root = manager.defaultSocket
+        let done = expectation(description: "namespace joins reentrantly")
+        root.once(clientEvent: .connect) { _, _ in
+            let foo = manager.socket(forNamespace: "/foo")
+            foo.once(clientEvent: .connect) { _, _ in
+                XCTAssertEqual(root.status, .connected)
+                foo.disconnect()
+                root.disconnect()
+                done.fulfill()
+            }
+            foo.connect()
+        }
+        root.connect()
+        wait(for: [done], timeout: 5)
+    }
+
+    func testNamespaceCanJoinFromAnotherNamespacesDisconnectCallback() {
+        let manager = makeManager()
+        let root = manager.defaultSocket
+        let done = expectation(description: "new namespace joins from disconnect")
+        root.once(clientEvent: .connect) { _, _ in root.disconnect() }
+        root.once(clientEvent: .disconnect) { _, _ in
+            let foo = manager.socket(forNamespace: "/foo")
+            foo.once(clientEvent: .connect) { _, _ in
+                foo.disconnect()
+                done.fulfill()
+            }
+            foo.connect()
+        }
+        root.connect()
+        wait(for: [done], timeout: 5)
+    }
+
+    func testManualReconnectInsideTheDisconnectCallback() {
+        let socket = makeManager().defaultSocket
+        let done = expectation(description: "manual reconnect from callback")
+        var connects = 0
+        socket.on(clientEvent: .connect) { _, _ in
+            connects += 1
+            socket.disconnect()
+            if connects == 2 { done.fulfill() }
+        }
+        socket.once(clientEvent: .disconnect) { _, _ in socket.connect() }
+        socket.connect()
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(connects, 2)
     }
 }

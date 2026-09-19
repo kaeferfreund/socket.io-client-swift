@@ -140,6 +140,7 @@ final class StateRecoveryE2ETest: XCTestCase {
     func testA1_happyRecoveryDeliversMissedEvents() throws {
         try startServer()
         let (_, socket) = makeClient()
+        XCTAssertFalse(socket.recovered)
         _ = waitForConnect(socket)
         let originalSid = try XCTUnwrap(socket.sid)
 
@@ -181,6 +182,7 @@ final class StateRecoveryE2ETest: XCTestCase {
 
         wait(for: [recoveredExpect, missed], timeout: 15)
         XCTAssertTrue(sawRecovered)
+        XCTAssertTrue(socket.recovered)
         XCTAssertEqual(socket.sid, originalSid)
         XCTAssertEqual(gotMissed.sorted(), ["missed-0", "missed-1"])
     }

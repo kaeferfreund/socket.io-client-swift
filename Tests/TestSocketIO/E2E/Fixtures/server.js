@@ -268,6 +268,7 @@ io.engine.on("connection", (rawSocket) => {
 });
 
 io.on("connection", (socket) => {
+  socket.on("hi", () => socket.emit("hi"));
   // Read the receiving namespace's identity, never echo a caller-provided ID.
   socket.on("server-socket-id", (...args) => {
     const ack = args[args.length - 1];

@@ -83,7 +83,7 @@ public typealias NormalCallback = ([Any], SocketAckEmitter) -> ()
 public typealias Post = (msg: String, completion: (() -> ())?)
 
 typealias JSON = [String: Any]
-typealias Probe = (msg: String, type: SocketEnginePacketType, data: [Data], completion: (() -> ())?)
+typealias Probe = (msg: String, type: SocketEnginePacketType, data: [Data], rawBinary: Bool, completion: (() -> ())?)
 typealias ProbeWaitQueue = [Probe]
 
 enum Either<E, V> {

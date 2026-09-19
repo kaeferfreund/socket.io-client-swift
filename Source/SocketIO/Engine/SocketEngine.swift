@@ -261,15 +261,6 @@ open class SocketEngine: NSObject,
         didError(reason: reason ?? "parser error")
     }
 
-    private func handleBase64(message: String) {
-        let offset = 1
-        // binary in base64 string
-        let noPrefix = String(message[message.index(message.startIndex, offsetBy: offset)..<message.endIndex])
-
-        if let data = Data(base64Encoded: noPrefix, options: .ignoreUnknownCharacters) {
-            client?.parseEngineBinaryData(data)
-        }
-    }
 
     /// Retires the current attempt once and completes abandoned writes locally.
     /// A graceful polling close owns its old session until the final POST or deadline.
@@ -539,6 +530,11 @@ open class SocketEngine: NSObject,
         transport.connect()
     }
 
+    /// Server order is retained, but only locally configured transports can upgrade.
+    func filterUpgrades(_ advertised: [String]) -> [SocketTransport] {
+        advertised.compactMap(SocketTransport.init(rawValue:)).filter { configuredTransports.contains($0) }
+    }
+
     private func validateConfiguration() -> String? {
         if let error = configurationError { return error }
         if transports.isEmpty { return "No transports available" }
@@ -662,11 +658,8 @@ open class SocketEngine: NSObject,
         probeWait.removeAll(keepingCapacity: false)
         for waiter in waiting {
             guard connected, !closed else { waiter.completion?(); continue }
-            if polling {
-                sendPollMessage(waiter.msg, withType: waiter.type, withData: waiter.data, completion: waiter.completion)
-            } else {
-                sendWebSocketMessage(waiter.msg, withType: waiter.type, withData: waiter.data, completion: waiter.completion)
-            }
+            sendPreparedWrite(waiter.msg, withType: waiter.type, withData: waiter.data,
+                              rawBinary: waiter.rawBinary, completion: waiter.completion)
         }
     }
 
@@ -689,9 +682,9 @@ open class SocketEngine: NSObject,
             engineQueue.socketAsync { self.sendWebSocketMessage(str, withType: type, withData: data, completion: completion) }
             return
         }
-        var messages: [EngineWebSocketMessage] = [.text("\(type.rawValue)\(str)")]
+        var messages: [EngineWebSocketMessage] = [.text(SocketEnginePacketCodec.encodeText(str, type: type))]
         messages += data.map {
-            forceBase64 ? .text("b" + $0.base64EncodedString()) : .binary($0)
+            SocketEnginePacketCodec.encode(.init(type: .message, data: .binary($0)), supportsBinary: !forceBase64)
         }
         sendWebSocketBatch(messages, completion: completion)
     }
@@ -766,7 +759,7 @@ open class SocketEngine: NSObject,
         Self.upgradeMemory.succeeded = !polling
 
         if let upgrades = json["upgrades"] as? [String] {
-            upgradeWs = upgrades.contains("websocket")
+            upgradeWs = filterUpgrades(upgrades).contains(.websocket)
         } else {
             upgradeWs = false
         }
@@ -778,7 +771,7 @@ open class SocketEngine: NSObject,
         // we batch without one, which is how this client always behaved.
         maxPayload = json["maxPayload"] as? Int
 
-        if polling && configuredTransports.contains(.websocket) && upgradeWs {
+        if polling && upgradeWs {
             createWebSocketAndConnect()
         }
 
@@ -887,32 +880,37 @@ open class SocketEngine: NSObject,
 
         DefaultSocketLogger.Logger.log("Got message: \(message)", type: SocketEngine.logType)
 
-        if message.hasPrefix("b") {
-            return handleBase64(message: message)
+        switch SocketEnginePacketCodec.decode(.text(message)) {
+        case .success(let packet): dispatchDecodedPacket(packet)
+        case .failure: checkAndHandleEngineError(message)
         }
+    }
 
-        guard let first = message.utf8.first, first >= 48, first <= 54,
-              let type = SocketEnginePacketType(rawValue: Int(first - 48)) else {
-            checkAndHandleEngineError(message)
-
-            return
-        }
-
-        switch type {
+    /// Called on engineQueue; lifecycle processing deliberately stops at CLOSE.
+    func dispatchDecodedPacket(_ packet: SocketEnginePacket) {
+        guard !closed else { return }
+        let text: String
+        if case .text(let value) = packet.data { text = value } else { text = "" }
+        switch packet.type {
         case .message:
-            handleMessage(String(decoding: message.utf8.dropFirst(), as: UTF8.self))
-        case .noop:
-            handleNOOP()
-        case .ping:
-            handlePing(with: message)
-        case .pong:
-            handlePong(with: message)
-        case .open:
-            handleOpen(openData: String(decoding: message.utf8.dropFirst(), as: UTF8.self))
-        case .close:
-            handleClose(message)
-        default:
-            DefaultSocketLogger.Logger.log("Got unknown packet type", type: SocketEngine.logType)
+            if case .binary(let data) = packet.data { client?.parseEngineBinaryData(data) }
+            else { handleMessage(text) }
+        case .noop: handleNOOP()
+        case .ping: handlePing(with: "2" + text)
+        case .pong: handlePong(with: "3" + text)
+        case .open: handleOpen(openData: text)
+        case .close: handleClose("1" + text)
+        case .upgrade: break
+        }
+    }
+
+    func dispatchPollingPayload(_ payload: String) {
+        for packet in SocketEnginePacketCodec.decodePayload(payload) {
+            guard !closed else { break }
+            switch packet {
+            case .success(let value): dispatchDecodedPacket(value)
+            case .failure: checkAndHandleEngineError(payload)
+            }
         }
     }
 
@@ -1061,16 +1059,38 @@ open class SocketEngine: NSObject,
     }
 
     private func _write(_ msg: String, withType type: SocketEnginePacketType,
-                        withData data: [Data], completion: (() -> Void)?) {
+                        withData data: [Data], rawBinary: Bool = false, completion: (() -> Void)?) {
         // JS `sendPacket` returns early once `readyState` is "closing"/"closed",
         // so a `send()` after `close()` never produces a packet — including
         // while the close is deferred behind an upgrade.
         guard connected, !closed, pendingCloseReason == nil else { completion?(); return }
         guard !probing else {
-            probeWait.append((msg, type, data, completion))
+            probeWait.append((msg, type, data, rawBinary, completion))
             return
         }
-        if polling { sendPollMessage(msg, withType: type, withData: data, completion: completion) }
+        sendPreparedWrite(msg, withType: type, withData: data, rawBinary: rawBinary, completion: completion)
+    }
+
+    /// Sends one raw Engine.IO binary message, without a Socket.IO attachment header.
+    open func send(_ data: Data, completion: (() -> Void)? = nil) {
+        engineQueue.socketAsync {
+            self._write("", withType: .message, withData: [data], rawBinary: true, completion: completion)
+        }
+    }
+
+    private func sendPreparedWrite(_ msg: String, withType type: SocketEnginePacketType,
+                                   withData data: [Data], rawBinary: Bool, completion: (() -> Void)?) {
+        if rawBinary {
+            let frames = data.map {
+                SocketEnginePacketCodec.encode(.init(type: .message, data: .binary($0)), supportsBinary: !polling && !forceBase64)
+            }
+            if polling {
+                for frame in frames {
+                    if case .text(let value) = frame { postWait.append((value, completion)) }
+                }
+                if !waitingForPost { flushWaitingForPost() }
+            } else { sendWebSocketBatch(frames, completion: completion) }
+        } else if polling { sendPollMessage(msg, withType: type, withData: data, completion: completion) }
         else { sendWebSocketMessage(msg, withType: type, withData: data, completion: completion) }
     }
 

@@ -942,6 +942,7 @@ final class JSParityE2ETest: XCTestCase {
         makeManager(.reconnectWait(1))
         let socket = manager.socket(forNamespace: "/")
         connect(socket)
+        let oldEngine = manager.engine
         let oldSid = socket.sid
         XCTAssertNotNil(oldSid)
 
@@ -981,9 +982,8 @@ final class JSParityE2ETest: XCTestCase {
         wait(for: [parseErrorReported, signal, reconnected], timeout: 15)
         XCTAssertTrue(sawSignalBeforeReconnect, "A .reconnect or .reconnectAttempt must be observed before the second .connect")
         XCTAssertNotNil(newSid)
-        // A fresh engine.io session: this client reuses the engine object, so
-        // the new sid (not object identity) is what proves the old engine was
-        // closed and a new one connected.
+        XCTAssertFalse(manager.engine === oldEngine, "A parser failure retires the entire engine")
+        oldEngine?.engineQueue.sync { XCTAssertTrue(oldEngine?.closed == true) }
         XCTAssertNotEqual(newSid, oldSid)
     }
 

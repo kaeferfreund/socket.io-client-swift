@@ -5,14 +5,8 @@
 //  Round 2 of the JavaScript-parity port: `engine.io-parser/test/index.ts` and
 //  `test/node.ts`.
 //
-//  This client has no standalone engine.io codec: encoding lives in
-//  `SocketEngine.sendWebSocketMessage` / `SocketEnginePollable` (the
-//  `"<type><payload>"` frame, the `\u{1e}` payload joiner and
-//  `createBinaryDataForSend`), and decoding in `parseEngineMessage` /
-//  `parsePollingMessage` / `parseEngineData`, which dispatch as they decode.
-//  The assertions below are therefore on the wire strings and on what the
-//  engine hands its client — `decodePacket`/`encodePacket`'s observable
-//  contract — rather than on a parser object that does not exist here.
+//  Packet framing is shared by polling and WebSocket; transport lifecycle
+//  is checked separately from the standalone codec contract.
 //
 
 import Foundation
@@ -135,6 +129,38 @@ final class SocketEnginePacketCodecTest: XCTestCase {
     func testEngineMessagePreservesCombiningScalarAfterTypeDigit() {
         engine.engineQueue.sync { engine.parseEngineMessage("4\u{0301}test") }
         XCTAssertEqual(client.messages, ["\u{0301}test"])
+    }
+
+    func testOriginalAllPacketTypesRoundTripIndependentlyOfLifecycle() throws {
+        let packets: [SocketEnginePacket] = [
+            .init(type: .open), .init(type: .close),
+            .init(type: .ping, data: .text("probe")), .init(type: .pong, data: .text("probe")),
+            .init(type: .message, data: .text("test"))
+        ]
+        let encoded = SocketEnginePacketCodec.encodePayload(packets)
+        XCTAssertEqual(encoded, "0\u{1e}1\u{1e}2probe\u{1e}3probe\u{1e}4test")
+        XCTAssertEqual(try SocketEnginePacketCodec.decodePayload(encoded).map { try $0.get() }, packets)
+    }
+
+    func testPayloadDecoderStopsAtFirstParserError() throws {
+        let decoded = SocketEnginePacketCodec.decodePayload("4first\u{1e}invalid\u{1e}4last")
+        XCTAssertEqual(decoded.count, 2)
+        XCTAssertEqual(try decoded[0].get(), .init(type: .message, data: .text("first")))
+        XCTAssertThrowsError(try decoded[1].get())
+        XCTAssertThrowsError(try SocketEnginePacketCodec.decodePayload("")[0].get())
+    }
+
+    func testBase64DecodingMatchesNodeBufferForPaddingAndIgnoredInput() throws {
+        let cases: [(String, [UInt8])] = [
+            ("", []), ("A", []), ("AQ", [1]), ("AQI", [1, 2]),
+            ("AQIDBA==", [1, 2, 3, 4]), ("AQ ID\nBA", [1, 2, 3, 4]),
+            ("-_8=", [251, 255]), ("AQ!ID", [1, 2, 3]), ("AQ==ignored", [1]),
+            ("ŁQ", [1]) // Node truncates UTF-16 input code units to bytes.
+        ]
+        for (encoded, bytes) in cases {
+            XCTAssertEqual(try SocketEnginePacketCodec.decode(.text("b" + encoded)).get(),
+                           .init(type: .message, data: .binary(Data(bytes))), encoded)
+        }
     }
 
     // MARK: engine.io-parser/test/index.ts > payload — "should encode/decode all packet types"

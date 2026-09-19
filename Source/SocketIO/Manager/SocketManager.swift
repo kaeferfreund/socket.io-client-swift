@@ -284,7 +284,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
             return
         }
 
-        if engine == nil || forceNew {
+        if engine == nil || forceNew || parserFailed {
             addEngine()
         }
 

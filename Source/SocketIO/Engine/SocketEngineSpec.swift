@@ -253,8 +253,10 @@ extension SocketEngineSpec {
     }
 
     func createBinaryDataForSend(using data: Data) -> Either<Data, String> {
-        if polling || forceBase64 { return .right("b" + data.base64EncodedString()) }
-        return .left(data)
+        switch SocketEnginePacketCodec.encode(.init(type: .message, data: .binary(data)), supportsBinary: !polling && !forceBase64) {
+        case .text(let value): return .right(value)
+        case .binary(let value): return .left(value)
+        }
     }
 
     /// Send an engine message (4)

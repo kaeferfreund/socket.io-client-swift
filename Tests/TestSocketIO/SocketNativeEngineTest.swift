@@ -89,9 +89,13 @@ final class SocketNativeEngineTest: XCTestCase {
     func testOnlyPingResetsTheDeadlineAndExpiredChecksCloseOnce() {
         let (engine, client, transport) = make()
         var now = DispatchTime.now()
-        engine.engineQueue.sync { engine.heartbeatNow = { now } }
+        engine.engineQueue.sync {
+            engine.heartbeatNow = { now }
+            XCTAssertFalse(engine.hasPingExpired)
+        }
         open(engine, transport)
         engine.engineQueue.sync {
+            XCTAssertFalse(engine.hasPingExpired)
             now = now + .seconds(30)
             engine.parseEngineMessage("2")
             now = now + .seconds(30)
@@ -99,6 +103,8 @@ final class SocketNativeEngineTest: XCTestCase {
             now = now + .seconds(16)
             XCTAssertTrue(engine.hasPingExpired)
             XCTAssertTrue(engine.hasPingExpired)
+            XCTAssertTrue(engine.hasPingExpired)
+            XCTAssertTrue(client.closes.isEmpty, "Timeout closure is deferred")
         }
         drain(engine)
         engine.engineQueue.sync { XCTAssertEqual(client.closes, ["ping timeout"]) }
@@ -317,18 +323,28 @@ final class SocketNativeEngineTest: XCTestCase {
         engine.engineQueue.sync { engine.parseEngineMessage(upgradeHandshake) }
         candidate.onEvent?(.opened(protocol: nil)); drain(engine)
         engine.write("buffered", withType: .message, withData: []); drain(engine)
+        var binaryCompletion = 0
+        engine.send(Data([0, 1, 2, 3, 4])) { binaryCompletion += 1 }; drain(engine)
         engine.disconnect(reason: "io client disconnect"); drain(engine)
         XCTAssertFalse(engine.closed)
         XCTAssertTrue(engine.connected)
         XCTAssertTrue(client.closes.isEmpty)
-        engine.write("late", withType: .message, withData: []); drain(engine)
+        let held = engine.probeWait.count
+        var refused = 0
+        engine.write("hi", withType: .message, withData: []) { refused += 1 }
+        engine.send(Data([9])) { refused += 1 }; drain(engine)
+        XCTAssertEqual(refused, 2)
+        XCTAssertEqual(engine.probeWait.count, held)
         candidate.onEvent?(.message(.text("3probe"))); drain(engine)
         engine.engineQueue.sync { engine.doFastUpgrade() }
         drain(engine)
         XCTAssertFalse(engine.polling)
         XCTAssertEqual(candidate.batches.flatMap { $0 },
-                       [.text("2probe"), .text("5"), .text("4buffered"), .text("1")])
+                       [.text("2probe"), .text("5"), .text("4buffered"), .binary(Data([0, 1, 2, 3, 4])), .text("1")])
         XCTAssertEqual(client.closes, ["io client disconnect"])
+        XCTAssertTrue(engine.probeWait.isEmpty)
+        XCTAssertTrue(engine.postWait.isEmpty)
+        XCTAssertEqual(binaryCompletion, 1)
         XCTAssertTrue(client.errors.isEmpty)
     }
 

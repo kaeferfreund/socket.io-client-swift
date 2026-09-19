@@ -165,6 +165,38 @@ final class SocketRemainingParityTest: XCTestCase {
                                .extraHeaders(["Cookie": "application=explicit"])])
         XCTAssertEqual(captureWebSocketRequest(instance)?.value(forHTTPHeaderField: "Cookie"), "application=explicit")
     }
+    func testFilterUpgradesReturnsOnlyAvailableTransports() {
+        let instance = engine([.transports([.polling])])
+        XCTAssertEqual(instance.filterUpgrades(["polling", "websocket"]), [.polling])
+    }
+    func testBothOriginalTransportListsRemainUnchanged() {
+        for original: [SocketTransport] in [[.websocket, .polling], [.polling]] {
+            var caller = original
+            let instance = engine([.transports(caller)])
+            XCTAssertEqual(caller, original)
+            XCTAssertEqual(instance.transports, original)
+            caller.removeAll()
+            XCTAssertEqual(instance.transports, original, "The engine owns a value snapshot")
+        }
+    }
+    func testOriginalPollingTimestampURI() throws { try assertTimestampURI(websocket: false, parameter: "t") }
+    func testOriginalWebSocketTimestampURI() throws { try assertTimestampURI(websocket: true, parameter: "woot") }
+    private func assertTimestampURI(websocket: Bool, parameter: String) throws {
+        let instance = SocketEngine(client: client, url: URL(string: "http://localhost")!,
+                                    config: [.path("/engine.io"), .addTrailingSlash(false),
+                                             .timestampRequests(true), .timestampParam(parameter)])
+        let url = websocket ? instance.urlWebSocketWithSid : instance.urlPollingWithSid
+        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        XCTAssertEqual(components.scheme, websocket ? "ws" : "http")
+        XCTAssertEqual(components.host, "localhost")
+        XCTAssertNil(components.port)
+        XCTAssertEqual(components.path, "/engine.io")
+        let timestamps = (components.queryItems ?? []).filter { $0.name == parameter }
+        XCTAssertEqual(timestamps.count, 1)
+        let value = try XCTUnwrap(timestamps.first?.value)
+        XCTAssertNotNil(value.range(of: "^[0-9A-Za-z_-]+$", options: .regularExpression))
+        XCTAssertFalse(value.isEmpty)
+    }
     func testSimpleNativeCookieParsing() throws {
         let value = try XCTUnwrap(HTTPCookie.cookies(withResponseHeaderFields: ["Set-Cookie": "foo=bar"],
                                                   for: URL(string: "https://example.com/")!).first)

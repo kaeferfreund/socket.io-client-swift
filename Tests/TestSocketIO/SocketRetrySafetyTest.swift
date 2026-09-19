@@ -17,7 +17,7 @@ final class SocketRetrySafetyTest: XCTestCase {
     }
     private func drain() {
         let done = expectation(description: "handle queue barrier")
-        manager.handleQueue.async { done.fulfill() }
+        manager.handleQueue.socketAsync { done.fulfill() }
         wait(for: [done], timeout: 3)
     }
     private func ackID(_ position: Int) throws -> Int {

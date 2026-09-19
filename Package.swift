@@ -1,4 +1,4 @@
-// swift-tools-version:5.5
+// swift-tools-version:6.4
 import PackageDescription
 
 let package = Package(
@@ -9,5 +9,6 @@ let package = Package(
     targets: [
         .target(name: "SocketIO", dependencies: [], path: "Source/SocketIO"),
         .testTarget(name: "TestSocketIO", dependencies: ["SocketIO"], exclude: ["E2E/Fixtures"]),
-    ]
+    ],
+    swiftLanguageModes: [.v6]
 )

@@ -427,7 +427,6 @@ private struct UnencodableData : SocketData {
 }
 
 
-
 extension SocketPacketEncoderTest {
     /// The Foundation objects must reach the identity traversal without a Swift
     /// collection bridge; nested native wrappers exercise the same public path.

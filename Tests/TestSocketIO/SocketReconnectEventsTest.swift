@@ -306,7 +306,7 @@ final class SocketReconnectEventsTest: XCTestCase {
         socket.connect()
 
         let settled = expectation(description: "settled")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { settled.fulfill() }
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.5) { settled.fulfill() }
         wait(for: [settled], timeout: 3)
 
         XCTAssertEqual(attempts, 1, "Closing the last socket must stop the loop after the first attempt")
@@ -397,7 +397,6 @@ private final class ReconnectTestEngine: SocketEngineSpec {
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
     private(set) var websocket = false
 
-    private(set) var version = SocketIOVersion.three
 
     /// Fails every handshake while `true`.
     var alwaysFail = false

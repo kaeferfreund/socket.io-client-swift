@@ -35,7 +35,7 @@ final class SocketTimedAckManagerTest: XCTestCase {
                                    },
                                    timeout: 60)
         }
-        queue.async { self.ackManager.executeTimedAck(1, with: ["ok"]) }
+        queue.socketAsync { self.ackManager.executeTimedAck(1, with: ["ok"]) }
         wait(for: [exp], timeout: 1)
     }
 
@@ -60,7 +60,7 @@ final class SocketTimedAckManagerTest: XCTestCase {
                                    callback: { _, _ in exp.fulfill() },
                                    timeout: 0.5)
         }
-        queue.async { self.ackManager.cancelTimedAck(3) }
+        queue.socketAsync { self.ackManager.cancelTimedAck(3) }
         // 1s > 0.5s timeout, but cancel removes it before the timer fires.
         wait(for: [exp], timeout: 1)
     }
@@ -79,7 +79,7 @@ final class SocketTimedAckManagerTest: XCTestCase {
                                    },
                                    timeout: 60)
         }
-        queue.async {
+        queue.socketAsync {
             self.ackManager.cancelTimedAck(7, fireWith: CancellationError())
         }
         wait(for: [exp], timeout: 1)
@@ -96,7 +96,7 @@ final class SocketTimedAckManagerTest: XCTestCase {
                 XCTAssertEqual(err as? SocketAckError, .disconnected); exp.fulfill()
             }, timeout: 60)
         }
-        queue.async { self.ackManager.clearTimedAcks(reason: .disconnected) }
+        queue.socketAsync { self.ackManager.clearTimedAcks(reason: .disconnected) }
         wait(for: [exp], timeout: 1)
     }
 
@@ -111,8 +111,8 @@ final class SocketTimedAckManagerTest: XCTestCase {
                                    },
                                    timeout: 60)
         }
-        queue.async { self.ackManager.executeTimedAck(6, with: ["a"]) }
-        queue.async { self.ackManager.executeTimedAck(6, with: ["b"]) } // duplicate
+        queue.socketAsync { self.ackManager.executeTimedAck(6, with: ["a"]) }
+        queue.socketAsync { self.ackManager.executeTimedAck(6, with: ["b"]) } // duplicate
         wait(for: [exp], timeout: 1)
         queue.sync { } // drain
         XCTAssertEqual(firesBox.count, 1, "duplicate must be silently dropped")
@@ -250,6 +250,7 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
         super.tearDown()
     }
 
+    @MainActor
     func testAsyncTimeoutThrows() async {
         do {
             _ = try await socket.timeout(after: 0.1).emit("ping")
@@ -261,6 +262,7 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
         }
     }
 
+    @MainActor
     func testAsyncCancelThrowsCancellationError() async {
         // Capture the socket locally so the spawned Task does not retain self.
         let socket = self.socket!
@@ -286,6 +288,7 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
         _ = await task.value
     }
 
+    @MainActor
     func testAsyncEmitOnPreCancelledTaskThrowsCancellationError() async {
         // Regression for the pre-cancellation deadlock: when a Task is cancelled
         // before its body runs, withTaskCancellationHandler invokes `onCancel`
@@ -315,13 +318,14 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
     }
 
     /// Observe the actual registration on its owning queue, with a bounded wait.
+    @MainActor
     private func waitForTimedAckRegistration(_ id: Int) async -> Bool {
         let socket = self.socket!
         let queue = manager.handleQueue
         let deadline = DispatchTime.now() + .seconds(5)
         while DispatchTime.now() < deadline {
             let registered: Bool = await withCheckedContinuation { continuation in
-                queue.async {
+                queue.socketAsync {
                     continuation.resume(returning: socket.ackHandlers.pendingTimedAckIDs.contains(id))
                 }
             }
@@ -336,6 +340,7 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
     /// disconnection (promise)": the awaiting Task is rejected instead of being
     /// left waiting. `.infinity` means only the disconnect can resume it, so a
     /// regression hangs rather than passing on a stray timer.
+    @MainActor
     func testAsyncEmitThrowsDisconnectedOnDisconnect() async {
         let socket = self.socket!
         let expectedID = manager.handleQueue.sync { socket.currentAck + 1 }
@@ -352,7 +357,7 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
             task.cancel()
             return
         }
-        manager.handleQueue.async { socket.didDisconnect(reason: "test") }
+        manager.handleQueue.socketAsync { socket.didDisconnect(reason: "test") }
         let error = await task.value
         XCTAssertEqual(error as? SocketAckError, .disconnected)
         manager.handleQueue.sync { XCTAssertTrue(socket.ackHandlers.pendingTimedAckIDs.isEmpty) }
@@ -360,6 +365,7 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
 
     /// socket.io-client/test/socket.ts — "should ack with an error upon
     /// disconnection (promise & timeout)": the disconnect wins over the timer.
+    @MainActor
     func testAsyncEmitWithTimeoutThrowsDisconnectedOnDisconnect() async {
         let socket = self.socket!
         let expectedID = manager.handleQueue.sync { socket.currentAck + 1 }
@@ -375,7 +381,7 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
             task.cancel()
             return
         }
-        manager.handleQueue.async { socket.didDisconnect(reason: "test") }
+        manager.handleQueue.socketAsync { socket.didDisconnect(reason: "test") }
         let error = await task.value
         XCTAssertEqual(error as? SocketAckError, .disconnected)
     }
@@ -384,40 +390,42 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
 
     /// JS `const val = await socket.emitWithAck("echo", 123)`. The ack is
     /// injected here the way the server would deliver it.
+    @MainActor
     func testAsyncEmitWithAckResolvesWithTheServerAck() async {
         let socket = self.socket!
         let manager = self.manager!
 
         let expectedID = manager.handleQueue.sync { socket.currentAck + 1 }
-        let task = Task { try await socket.emitWithAck("echo", 123) }
+        let task = Task { try await socket.emitWithAck("echo", 123).first as? Int }
         // Let the await register the ack on handleQueue before answering it.
         guard await waitForTimedAckRegistration(expectedID) else {
             task.cancel()
             return
         }
-        manager.handleQueue.async { socket.handleAck(expectedID, data: [123]) }
+        manager.handleQueue.socketAsync { socket.handleAck(expectedID, data: [123]) }
 
         let value = try? await task.value
-        XCTAssertEqual(value?.first as? Int, 123)
+        XCTAssertEqual(value, 123)
     }
 
     // MARK: socket.ts > timeout — "should not timeout when the server does acknowledge the event (promise)"
 
+    @MainActor
     func testAsyncTimedEmitWithAckDoesNotTimeOutWhenTheServerAcks() async {
         let socket = self.socket!
         let manager = self.manager!
 
         let expectedID = manager.handleQueue.sync { socket.currentAck + 1 }
-        let task = Task { try await socket.timeout(after: 5).emitWithAck("echo", 42) }
+        let task = Task { try await socket.timeout(after: 5).emitWithAck("echo", 42).first as? Int }
         guard await waitForTimedAckRegistration(expectedID) else {
             task.cancel()
             return
         }
-        manager.handleQueue.async { socket.handleAck(expectedID, data: [42]) }
+        manager.handleQueue.socketAsync { socket.handleAck(expectedID, data: [42]) }
 
         do {
             let value = try await task.value
-            XCTAssertEqual(value.first as? Int, 42)
+            XCTAssertEqual(value, 42)
         } catch {
             XCTFail("should not have thrown: \(error)")
         }
@@ -425,6 +433,7 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
 
     /// The mirror image, JS "should timeout when the server does not
     /// acknowledge the event (promise)", through the JS-named entry point.
+    @MainActor
     func testAsyncTimedEmitWithAckTimesOutWhenNoAckArrives() async {
         do {
             _ = try await socket.timeout(after: 0.1).emitWithAck("unknown")
@@ -436,9 +445,10 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
         }
     }
 
+    @MainActor
     func testAsyncCancelClearsTimedAck() async {
         let socket = self.socket!
-        let task = Task { try? await socket.timeout(after: 60).emit("ping") }
+        let task = Task { _ = try? await socket.timeout(after: 60).emit("ping") }
         try? await Task.sleep(nanoseconds: 100_000_000)
         task.cancel()
         _ = await task.value
@@ -459,7 +469,8 @@ final class SocketTimedEmitterAsyncTest: XCTestCase {
             XCTAssertTrue(data.isEmpty)
             exp.fulfill()
         }
-        await fulfillment(of: [exp], timeout: 1)
+        let result = await XCTWaiter.fulfillment(of: [exp], timeout: 1)
+        XCTAssertEqual(result, .completed)
     }
 }
 
@@ -521,8 +532,8 @@ final class SocketTimedEmitterRaceTest: XCTestCase {
             var ackId = -1
             manager.handleQueue.sync { ackId = self.socket.currentAck }
             // Race: server-ack arrives at ~the same time as the timer.
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.001) { [weak self] in
-                self?.manager.handleQueue.async {
+            DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) { [weak self] in
+                self?.manager.handleQueue.socketAsync {
                     self?.socket.handleAck(ackId, data: ["x"])
                 }
             }
@@ -551,8 +562,8 @@ final class SocketTimedEmitterRaceTest: XCTestCase {
                                                },
                                                timeout: 0.001)
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.001) { [weak self] in
-                self?.manager.handleQueue.async {
+            DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) { [weak self] in
+                self?.manager.handleQueue.socketAsync {
                     self?.socket.ackHandlers.cancelTimedAck(id, fireWith: SocketAckError.disconnected)
                 }
             }
@@ -579,13 +590,13 @@ final class SocketTimedEmitterRaceTest: XCTestCase {
                                                },
                                                timeout: 60)
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.001) { [weak self] in
-                self?.manager.handleQueue.async {
+            DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) { [weak self] in
+                self?.manager.handleQueue.socketAsync {
                     self?.socket.ackHandlers.cancelTimedAck(id, fireWith: SocketAckError.disconnected)
                 }
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.001) { [weak self] in
-                self?.manager.handleQueue.async {
+            DispatchQueue.global().socketAsyncAfter(deadline: .now() + 0.001) { [weak self] in
+                self?.manager.handleQueue.socketAsync {
                     self?.socket.handleAck(id, data: ["x"])
                 }
             }
@@ -610,5 +621,57 @@ final class SocketTimedEmitterRaceTest: XCTestCase {
         Thread.sleep(forTimeInterval: 0.2)
         XCTAssertEqual(counter.count, 0,
                        "legacy emitWithAck.timingOut path is NOT cleared on disconnect (Swift backcompat divergence)")
+    }
+}
+
+
+final class SocketValueSnapshotTest: XCTestCase {
+    func testMutableFoundationContainersAreDetachedFromAsyncAckResults() throws {
+        let array = NSMutableArray(array: ["before"])
+        let bytes = NSMutableData(data: Data([4, 0, 255]))
+        let dictionary = NSMutableDictionary(dictionary: ["nested": array, "binary": bytes])
+        let snapshot = try SocketValueSnapshot(dictionary)
+        array[0] = "after"
+        bytes.setData(Data([99]))
+        dictionary["added"] = true
+        let value = try XCTUnwrap(snapshot.value as? [String: Any])
+        XCTAssertEqual(value["nested"] as? [String], ["before"])
+        XCTAssertEqual(value["binary"] as? Data, Data([4, 0, 255]))
+        XCTAssertNil(value["added"])
+    }
+
+    func testUnsupportedObjectsCannotCrossTheAsyncAckBoundary() {
+        XCTAssertThrowsError(try SocketValueSnapshot(NSObject()))
+    }
+
+    func testWireScalarAndEmptyContainerTypesRoundTrip() throws {
+        XCTAssertEqual(try SocketValueSnapshot(true).value as? Bool, true)
+        XCTAssertEqual(try SocketValueSnapshot(42).value as? Int, 42)
+        XCTAssertTrue(try SocketValueSnapshot(NSNull()).value is NSNull)
+        XCTAssertEqual(try SocketValueSnapshot([String]()).value as? [String], [])
+        XCTAssertNotNil(try SocketValueSnapshot([String: Any]()).value as? [String: Any])
+    }
+}
+
+
+final class SocketMainActorAsyncAPITest: XCTestCase {
+    @MainActor
+    func testMainActorCanAwaitTimedAndDefaultAcknowledgements() async {
+        let manager = SocketManager(socketURL: URL(string: "http://localhost")!,
+                                    config: [.log(false), .ackTimeout(0.01)])
+        let socket = manager.defaultSocket
+        socket.setTestStatus(.connected)
+        do {
+            _ = try await socket.timeout(after: 0.01).emitWithAck("timeout")
+            XCTFail("expected timeout")
+        } catch {
+            XCTAssertEqual(error as? SocketAckError, .timeout)
+        }
+        do {
+            _ = try await socket.emitWithAck("timeout")
+            XCTFail("expected timeout")
+        } catch {
+            XCTAssertEqual(error as? SocketAckError, .timeout)
+        }
     }
 }

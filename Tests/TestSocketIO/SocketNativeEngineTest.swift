@@ -14,7 +14,6 @@ private final class NativeEngineClient: NSObject, SocketEngineClient {
     func engineDidOpen(reason: String) { opens += 1 }
     func engineDidReceivePing() {}
     func engineDidReceivePong() {}
-    func engineDidSendPing() {}
     func engineDidSendPong() {}
     func parseEngineMessage(_ msg: String) { messages.append(msg) }
     func parseEngineBinaryData(_ data: Data) { binary.append(data) }
@@ -153,7 +152,7 @@ final class SocketNativeEngineTest: XCTestCase {
             // The zero-length heartbeat deadline is already in the past, so one
             // later engine-queue block observes the close it scheduled.
             let expired = expectation(description: "heartbeat deadline expired")
-            engine.engineQueue.asyncAfter(deadline: .now() + .milliseconds(100)) { expired.fulfill() }
+            engine.engineQueue.socketAsyncAfter(deadline: .now() + .milliseconds(100)) { expired.fulfill() }
             wait(for: [expired], timeout: 5)
             engine.engineQueue.sync {
                 XCTAssertTrue(engine.closed, handshake)
@@ -163,17 +162,6 @@ final class SocketNativeEngineTest: XCTestCase {
         }
     }
 
-    func testMalformedLegacyPollingLengthsAreRejectedWithoutTrapping() {
-        for message in ["-1:x", "999999999999999999999999:x", "99:x", "1:🦧", "3:ab", "x:abc"] {
-            let (engine, client, _) = make()
-            engine.engineQueue.sync {
-                engine.setConfigs([.version(.two)])
-                engine.parsePollingMessage(message)
-                XCTAssertTrue(engine.closed, message)
-                XCTAssertEqual(client.errors.count, 1, message)
-            }
-        }
-    }
 
     func testWebSocketOpenAloneDoesNotOpenEngineIO() {
         let (engine, client, transport) = make()
@@ -202,13 +190,6 @@ final class SocketNativeEngineTest: XCTestCase {
         XCTAssertEqual(finished, 1)
     }
 
-    func testEngineIO3BinaryKeepsItsMessagePrefix() {
-        let (engine, _, transport) = make([.forceWebsockets(true), .version(.two)])
-        open(engine, transport)
-        defer { engine.disconnect(reason: "test"); drain(engine) }
-        engine.write("packet", withType: .message, withData: [Data([9])]); drain(engine)
-        XCTAssertEqual(transport.batches.last, [.text("4packet"), .binary(Data([4, 9]))])
-    }
 
     func testEngineIOHeartbeatRemainsText() {
         let (engine, _, transport) = make(); open(engine, transport)
@@ -240,26 +221,6 @@ final class SocketNativeEngineTest: XCTestCase {
         XCTAssertEqual(client.opens, 0)
     }
 
-    func testEngineIO3IncomingBinaryStripsExactlyItsPrefix() {
-        let (engine, client, transport) = make([.forceWebsockets(true), .version(.two)])
-        open(engine, transport)
-        defer { engine.disconnect(reason: "test"); drain(engine) }
-        transport.onEvent?(.message(.binary(Data([4, 9]))))
-        transport.onEvent?(.message(.binary(Data([4]))))
-        drain(engine)
-        XCTAssertEqual(client.binary, [Data([9]), Data()])
-    }
-
-    func testMalformedEngineIO3BinaryClosesInsteadOfCrashing() {
-        for data in [Data(), Data([1, 9])] {
-            let (engine, client, transport) = make([.forceWebsockets(true), .version(.two)])
-            open(engine, transport)
-            transport.onEvent?(.message(.binary(data))); drain(engine)
-            XCTAssertTrue(engine.closed)
-            XCTAssertEqual(client.errors.count, 1)
-            XCTAssertTrue(client.binary.isEmpty)
-        }
-    }
 
     func testDuplicateTerminalEventsCloseEngineOnlyOnce() {
         let (engine, client, transport) = make(); open(engine, transport)

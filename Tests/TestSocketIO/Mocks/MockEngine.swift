@@ -31,7 +31,7 @@ final class MockEngine: NSObject, SocketEngineSpec {
     var socketPath: String = "/socket.io/"
     var urlPolling: URL = URL(string: "http://localhost/")!
     var urlWebSocket: URL = URL(string: "ws://localhost/")!
-    var version: SocketIOVersion = .three
+
     var websocket: Bool = true
 
 

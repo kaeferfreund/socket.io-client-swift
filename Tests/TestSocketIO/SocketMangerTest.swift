@@ -318,7 +318,7 @@ class SocketMangerTest : XCTestCase {
 
         let openHandled = expectation(description: "engine open handled")
         manager.engineDidOpen(reason: "Connect")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.1) {
             openHandled.fulfill()
         }
 
@@ -378,7 +378,7 @@ public class TestManager: SocketManager {
     }
 
     public func fakeConnecting(toNamespace nsp: String = "/") {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.1) {
             // Fake connecting
             self.parseEngineMessage("0\(nsp),{\"sid\":\"fake-sid\"}")
         }

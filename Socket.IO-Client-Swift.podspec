@@ -6,7 +6,7 @@ Pod::Spec.new do |s|
   s.description  = <<-DESC
                    Socket.IO-client for iOS and OS X.
                    Supports ws/wss/polling connections and binary.
-                   For socket.io 3.0+ and Swift.
+                   For Socket.IO 4.x and Swift 6.4 (Swift 6 language mode).
                    DESC
   s.homepage     = "https://github.com/kaeferfreund/socket.io-client-swift"
   s.license      = { :type => 'MIT' }
@@ -19,12 +19,12 @@ Pod::Spec.new do |s|
   s.source = {
     :git => "https://github.com/kaeferfreund/socket.io-client-swift.git",
     # Development prerelease. Use an immutable tag before publishing.
-    :branch => 'feat/native-urlsession-transport'
+    :branch => 'master'
   }
 
-  s.swift_version = "5"
+  s.swift_version = "6.0"
   s.pod_target_xcconfig = {
-      'SWIFT_VERSION' => '5'
+      'SWIFT_VERSION' => '6.0'
   }
   s.source_files  = "Source/SocketIO/**/*.swift", "Source/SocketIO/*.swift"
 end

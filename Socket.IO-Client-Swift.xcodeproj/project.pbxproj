@@ -33,7 +33,6 @@
 		BF520F37A86826C29150D487 /* SocketServerTrustEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD645BBEB909F05D4FAB852D /* SocketServerTrustEvaluator.swift */; };
 		D9D003ADC4CED5B53763C569 /* SocketSessionDelegateProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E8D81B6F195AE61B92FBA5D /* SocketSessionDelegateProxy.swift */; };
 		DD52B048C71D724ABBD18C71 /* SocketTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD52BDC9E66AADA2CC5E8246 /* SocketTypes.swift */; };
-		DD52B11AF936352BAE30B2C8 /* SocketStringReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD52BA240D139F72633D4159 /* SocketStringReader.swift */; };
 		DD52B1F8BA0455EBE7C1B93E /* SocketAckEmitter.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD52BFF2E3216CDC364BB8AF /* SocketAckEmitter.swift */; };
 		DD52B1FDEB06B853FF932AC7 /* SocketEnginePacketType.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD52B4EA17D8C3F35C8E2CB4 /* SocketEnginePacketType.swift */; };
 		DD52B2AFE7D46039C7AE4D19 /* SocketIOClientOption.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD52B078DB0A3C3D1BB507CD /* SocketIOClientOption.swift */; };
@@ -120,7 +119,6 @@
 		DD52B7A9779A2E08075E5AAC /* SocketEngine.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SocketEngine.swift; sourceTree = "<group>"; };
 		DD52B8396C7DEE7BFD6A985A /* ManagerObjectiveCTest.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ManagerObjectiveCTest.h; sourceTree = "<group>"; };
 		DD52BA1F41F2E4B3DC20260E /* SocketIOClient.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SocketIOClient.swift; sourceTree = "<group>"; };
-		DD52BA240D139F72633D4159 /* SocketStringReader.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SocketStringReader.swift; sourceTree = "<group>"; };
 		DD52BB5E907D283ACC31E17F /* ManagerObjectiveCTest.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ManagerObjectiveCTest.m; sourceTree = "<group>"; };
 		DD52BBAC5FAA7730D32CD5BF /* SocketMangerTest.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SocketMangerTest.swift; sourceTree = "<group>"; };
 		DD52BCAF915A546288664346 /* SocketIOClientSpec.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SocketIOClientSpec.swift; sourceTree = "<group>"; };
@@ -298,7 +296,6 @@
 				DD52BDC9E66AADA2CC5E8246 /* SocketTypes.swift */,
 				DD52BED81BF312B0E90E92AC /* SocketLogger.swift */,
 				DD52B471D780013E18DF9335 /* SocketExtensions.swift */,
-				DD52BA240D139F72633D4159 /* SocketStringReader.swift */,
 				9432E0061F77F7CA006AF628 /* SSLSecurity.swift */,
 			);
 			name = Util;
@@ -484,7 +481,6 @@
 				DD52B048C71D724ABBD18C71 /* SocketTypes.swift in Sources */,
 				DD52BC3F1F880820E8FDFD0C /* SocketLogger.swift in Sources */,
 				DD52B56DE03CDB4F40BD1A23 /* SocketExtensions.swift in Sources */,
-				DD52B11AF936352BAE30B2C8 /* SocketStringReader.swift in Sources */,
 				DD52B57E7ABC61B57EE2A4B8 /* SocketPacket.swift in Sources */,
 				DD52B9412F660F828B683422 /* SocketParsable.swift in Sources */,
 				1C6572803D7E252A77A86E5F /* SocketManager.swift in Sources */,
@@ -570,7 +566,7 @@
 				PRODUCT_NAME = SocketIO;
 				SUPPORTED_PLATFORMS = "macosx appletvsimulator appletvos iphonesimulator iphoneos watchos watchsimulator xrsimulator xros";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TVOS_DEPLOYMENT_TARGET = 15.0;
 				WATCHOS_DEPLOYMENT_TARGET = 8.0;
 			};
@@ -613,7 +609,7 @@
 				SUPPORTED_PLATFORMS = "macosx appletvsimulator appletvos iphonesimulator iphoneos watchos watchsimulator xrsimulator xros";
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TVOS_DEPLOYMENT_TARGET = 15.0;
 				WATCHOS_DEPLOYMENT_TARGET = 8.0;
 			};
@@ -692,7 +688,7 @@
 				SWIFT_INCLUDE_PATHS = "";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_SWIFT3_OBJC_INFERENCE = Default;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2,3,4,7";
 				TVOS_DEPLOYMENT_TARGET = 15.0;
 				VERSIONING_SYSTEM = "apple-generic";
@@ -767,7 +763,7 @@
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_INCLUDE_PATHS = "";
 				SWIFT_SWIFT3_OBJC_INFERENCE = Default;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2,3,4,7";
 				TVOS_DEPLOYMENT_TARGET = 15.0;
 				VERSIONING_SYSTEM = "apple-generic";
@@ -858,7 +854,7 @@
 				SUPPORTED_PLATFORMS = "$(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_SWIFT3_OBJC_INFERENCE = Default;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TVOS_DEPLOYMENT_TARGET = 15.0;
 				WATCHOS_DEPLOYMENT_TARGET = 8.0;
 			};
@@ -938,7 +934,7 @@
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = "$(inherited)";
 				SWIFT_SWIFT3_OBJC_INFERENCE = Default;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TVOS_DEPLOYMENT_TARGET = 15.0;
 				WATCHOS_DEPLOYMENT_TARGET = 8.0;
 			};

@@ -72,7 +72,7 @@ class SocketParseErrorTest: XCTestCase {
         manager.parseEngineMessage("bad")
 
         let settled = expectation(description: "settled")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { settled.fulfill() }
+        DispatchQueue.main.socketAsyncAfter(deadline: .now() + 0.5) { settled.fulfill() }
         waitForExpectations(timeout: 3, handler: nil)
         // Only the explicit disconnect; the late "bad" packet must not close again.
         XCTAssertEqual(fake.disconnectReasons, ["io client disconnect"])
@@ -100,7 +100,6 @@ private class FakeParseErrorEngine: SocketEngineSpec {
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
     private(set) var websocket = false
 
-    private(set) var version = SocketIOVersion.three
 
     private(set) var disconnectReasons = [String]()
 

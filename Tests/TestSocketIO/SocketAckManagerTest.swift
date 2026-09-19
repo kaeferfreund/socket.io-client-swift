@@ -23,7 +23,7 @@ class SocketAckManagerTest : XCTestCase {
         ackManager.addAck(1, callback: callback)
         ackManager.executeAck(1, with: itemsArray)
 
-        waitForExpectations(timeout: 3.0, handler: nil)
+        wait(for: [callbackExpection], timeout: 3.0)
     }
 
     func testManagerTimeoutAck() {
@@ -45,6 +45,6 @@ class SocketAckManagerTest : XCTestCase {
         ackManager.addAck(1, callback: callback)
         ackManager.timeoutAck(1)
 
-        waitForExpectations(timeout: 0.2, handler: nil)
+        wait(for: [callbackExpection], timeout: 0.2)
     }
 }

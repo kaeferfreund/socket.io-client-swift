@@ -21,21 +21,28 @@ migration changes some 16.x APIs; see [migration notes](Documentation/NativeWebS
 
 | Requirement | Minimum |
 | --- | --- |
-| Swift tools | 5.5, using the package's Swift 5 language mode |
+| Swift tools / compiler | 6.4, using Swift 6 language mode (Xcode 27) |
 | iOS / tvOS | 15 |
 | macOS | 12 |
 | watchOS | 8 |
 
-The public API is intended for Swift. Strict Swift 6 concurrency compatibility
-and an Objective-C integration are not claimed.
+The package and framework targets use **Swift 6 language mode** with complete
+concurrency checking. The public API remains queue-based, not actor-based:
+`SocketManager` and `SocketIOClient` are deliberately **not Sendable**. Configure
+and use a manager and its sockets on its serial `handleQueue` (main by default).
+Do not concurrently mutate callback payloads or change the queue after connecting.
+The public API is intended for Swift; Objective-C integration is not supported.
 
-| Socket.IO server | Client configuration | Engine.IO protocol |
+| Supported Socket.IO server | Client configuration | Engine.IO protocol |
 | --- | --- | --- |
-| 3.x / 4.x | `.version(.three)`, the default | 4 |
-| 2.x | `.version(.two)` | 3 |
+| 4.x | No version option | 4 |
 
-`.three` also selects the mode for Socket.IO 4.x servers; there is no `.four`
-option. This is a **Socket.IO client**, not a client for an arbitrary WebSocket
+Socket.IO below 4 is no longer supported. Remove `.version(.two)`,
+`.version(.three)` and dictionary `"version"` options; no replacement is needed.
+There is deliberately no `.four` selector. Socket.IO 3 shares the modern wire
+protocol, so the handshake cannot distinguish its major version, but it is
+outside this fork's supported/tested server range.
+See [the migration guide](Documentation/SocketIO4Swift6Migration.md). This is a **Socket.IO client**, not a client for an arbitrary WebSocket
 endpoint. Compatibility details and known differences from the JavaScript client
 are recorded in [PARITY.md](PARITY.md).
 
@@ -203,7 +210,7 @@ callback and timeout contract differs from the error-first and async APIs. See
 
 ## Authentication and recovery
 
-For Socket.IO 3.x/4.x servers that accept an authentication payload:
+For Socket.IO 4.x servers that accept an authentication payload:
 
 ```swift
 socket.connect(withPayload: ["token": "your-access-token"])
@@ -217,11 +224,10 @@ production. Auth providers are available through `setAuth(_:)`; see
 
 ### Connection State Recovery
 
-With a `.version(.three)` manager and a Socket.IO server configured for
+With a Socket.IO 4.6+ server configured for
 `connectionStateRecovery`, a reconnect after an abrupt transport loss can resume
 a prior session and replay missed server-to-client events. Recovery depends on
 the server accepting the saved session and offset; it is not guaranteed.
-`.version(.two)` does not use recovery.
 
 ```swift
 socket.on(clientEvent: .connect) { [weak socket] _, _ in

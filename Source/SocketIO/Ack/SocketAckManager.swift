@@ -136,7 +136,7 @@ class SocketAckManager {
         // No queued timer or captured work item is needed for an infinite wait.
         guard timeout != .infinity else { return }
         let bounded = timeout.isFinite ? min(max(0, timeout), 2_147_483.647) : 0
-        queue.asyncAfter(deadline: .now() + bounded, execute: workItem)
+        queue.socketAsyncAfter(deadline: .now() + bounded, execute: workItem)
     }
 
     /// Execute the timed ack with server-supplied data. Caller MUST be on the

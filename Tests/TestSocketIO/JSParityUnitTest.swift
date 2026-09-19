@@ -45,25 +45,5 @@ final class JSParityUnitTest: XCTestCase {
 
     /// The v2 protocol carries no sid, so a bare CONNECT on a `.two` manager
     /// is a normal connect, not a version-mismatch error.
-    func testV2ManagerStillConnectsOnABareConnectPacket() {
-        let manager = SocketManager(socketURL: URL(string: "http://localhost/")!, config: [.log(false), .version(.two)])
-        let socket = manager.socket(forNamespace: "/foo")
-        socket.setTestStatus(.connecting)
 
-        let gotConnect = expectation(description: ".connect fired")
-        socket.on(clientEvent: .connect) { _, _ in gotConnect.fulfill() }
-
-        let gotError = expectation(description: ".error must not fire")
-        gotError.isInverted = true
-        socket.on(clientEvent: .error) { _, _ in gotError.fulfill() }
-
-        let gotConnectError = expectation(description: ".connectError must not fire")
-        gotConnectError.isInverted = true
-        socket.on(clientEvent: .connectError) { _, _ in gotConnectError.fulfill() }
-
-        socket.handlePacket(SocketPacket(type: .connect, nsp: "/foo", placeholders: 0, id: -1, data: []))
-
-        waitForExpectations(timeout: 1)
-        XCTAssertEqual(socket.status, .connected)
-    }
 }

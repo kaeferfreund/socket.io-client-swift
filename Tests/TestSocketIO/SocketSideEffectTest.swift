@@ -111,7 +111,7 @@ class SocketSideEffectTest: XCTestCase {
             expect.fulfill()
         }
 
-        DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 0.1) {
+        DispatchQueue.main.socketAsyncAfter(deadline: DispatchTime.now() + 0.1) {
             // Fake connecting
             self.manager.parseEngineMessage("0/,{\"sid\":\"fake-sid\"}")
         }
@@ -281,7 +281,7 @@ class SocketSideEffectTest: XCTestCase {
             XCTFail("Should not call timeout handler if status is connected")
         })
 
-        DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 0.1) {
+        DispatchQueue.main.socketAsyncAfter(deadline: DispatchTime.now() + 0.1) {
             // Fake connecting
             self.manager.parseEngineMessage("0/,{\"sid\":\"fake-sid\"}")
         }
@@ -335,7 +335,7 @@ class SocketSideEffectTest: XCTestCase {
             XCTFail("Should not call timeout handler if status is connected")
         })
 
-        DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 0.1) {
+        DispatchQueue.main.socketAsyncAfter(deadline: DispatchTime.now() + 0.1) {
             // Fake connecting
             self.manager.parseEngineMessage("0/swift,{\"sid\":\"fake-sid\"}")
         }
@@ -484,7 +484,6 @@ class TestEngine: SocketEngineSpec {
     private(set) var urlWebSocket = URL(string: "http://localhost/")!
     private(set) var websocket = false
 
-    private(set) var version = SocketIOVersion.three
 
     internal var onConnect: (() -> ())?
 

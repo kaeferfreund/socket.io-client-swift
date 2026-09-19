@@ -58,17 +58,17 @@ public struct SocketTimedEmitter {
     }
 
     /// Variadic async/throws overload.
-    public func emit(_ event: String, _ items: SocketData...) async throws -> [Any] {
+    public nonisolated(nonsending) func emit(_ event: String, _ items: SocketData...) async throws -> sending [Any] {
         return try await emit(event, with: items)
     }
 
     /// JS-named alias of the async overload — `socket.timeout(ms).emitWithAck(ev, ...)`.
-    public func emitWithAck(_ event: String, _ items: SocketData...) async throws -> [Any] {
+    public nonisolated(nonsending) func emitWithAck(_ event: String, _ items: SocketData...) async throws -> sending [Any] {
         return try await emit(event, with: items)
     }
 
     /// Array form of `emitWithAck`.
-    public func emitWithAck(_ event: String, with items: [SocketData]) async throws -> [Any] {
+    public nonisolated(nonsending) func emitWithAck(_ event: String, with items: [SocketData]) async throws -> sending [Any] {
         return try await emit(event, with: items)
     }
 
@@ -77,7 +77,7 @@ public struct SocketTimedEmitter {
     /// Throws `SocketAckError.timeout` / `.disconnected` for the corresponding
     /// fire reasons, or `CancellationError` if the awaiting `Task` is cancelled
     /// before the ack arrives.
-    public func emit(_ event: String, with items: [SocketData]) async throws -> [Any] {
+    public nonisolated(nonsending) func emit(_ event: String, with items: [SocketData]) async throws -> sending [Any] {
         // The token is set synchronously by cancellation, even if cancellation
         // arrives before emitTimed's queue block. ID allocation and registration
         // happen together on handleQueue; no actor/executor mutates currentAck.
@@ -87,21 +87,26 @@ public struct SocketTimedEmitter {
         // reference across that boundary, and the socket is only ever touched on
         // its manager's serial handleQueue.
         let boxed = SocketUncheckedSendableBox(socket)
-        return try await withTaskCancellationHandler {
+        let queue = socket.manager?.handleQueue
+        let snapshot: [SocketValueSnapshot] = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 socket.emitTimed(event: event, items: items, timeout: timeout, cancellation: state) { error, data in
                     if let error = error { continuation.resume(throwing: error) }
-                    else { continuation.resume(returning: data) }
+                    else {
+                        do { continuation.resume(returning: try data.map { try SocketValueSnapshot($0) }) }
+                        catch { continuation.resume(throwing: error) }
+                    }
                 }
             }
         } onCancel: {
             state.cancel()
-            boxed.value.manager?.handleQueue.async {
+            queue?.socketAsync {
                 if let id = state.registeredID {
                     boxed.value.ackHandlers.cancelTimedAck(id, fireWith: CancellationError())
                 }
             }
         }
+        return snapshot.map { $0.value }
     }
 }
 
@@ -129,3 +134,44 @@ internal struct SocketUncheckedSendableBox<Value> {
 #if compiler(>=5.5)
 extension SocketUncheckedSendableBox: @unchecked Sendable {}
 #endif
+
+/// The only values an acknowledgement can contain on the wire. Materializing a
+/// snapshot creates fresh containers for the awaiting task, so mutable JSON
+/// containers on handleQueue cannot be aliased across Swift concurrency domains.
+internal indirect enum SocketValueSnapshot: Sendable {
+    case null
+    case string(String)
+    case number(NSNumber)
+    case binary(Data)
+    case array([SocketValueSnapshot])
+    case object([String: SocketValueSnapshot])
+
+    internal init(_ value: Any, depth: Int = 0) throws {
+        guard depth < 1025 else { throw SnapshotError.unsupportedValue }
+        switch value {
+        case is NSNull: self = .null
+        case let value as String: self = .string(value)
+        case let value as NSNumber: self = .number(value.copy() as! NSNumber)
+        case let value as Data:
+            self = .binary(value.withUnsafeBytes { Data($0) })
+        case let value as [Any]:
+            self = .array(try value.map { try Self($0, depth: depth + 1) })
+        case let value as [String: Any]:
+            self = .object(try value.mapValues { try Self($0, depth: depth + 1) })
+        default: throw SnapshotError.unsupportedValue
+        }
+    }
+
+    internal var value: Any {
+        switch self {
+        case .null: return NSNull()
+        case .string(let value): return value
+        case .number(let value): return value
+        case .binary(let value): return value
+        case .array(let value): return value.map { $0.value }
+        case .object(let value): return value.mapValues { $0.value }
+        }
+    }
+
+    private enum SnapshotError: Error { case unsupportedValue }
+}

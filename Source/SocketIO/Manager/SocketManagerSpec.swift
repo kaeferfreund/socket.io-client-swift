@@ -83,8 +83,6 @@ public protocol SocketManagerSpec : SocketEngineClient {
     /// The status of this manager.
     var status: SocketIOStatus { get }
 
-    /// The version of socket.io in use.
-    var version: SocketIOVersion { get }
 
     /// Bounds decoded packets and binary reassembly, independently of transport frame limits.
     var parserOptions: SocketParserOptions { get }

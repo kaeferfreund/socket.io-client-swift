@@ -8,7 +8,7 @@ PARITY_TEMP="$(mktemp -d)"
 export PARITY_TEMP
 trap 'rm -rf "$PARITY_TEMP"' EXIT
 node "$ROOT/scripts/parser-parity/prepare.cjs" "$UPSTREAM"
-swiftc -swift-version 5 "$ROOT/scripts/parser-parity/Shims.swift" \
+swiftc -swift-version 6 "$ROOT/scripts/parser-parity/Shims.swift" \
   "$ROOT/Source/SocketIO/Parse/SocketPacket.swift" \
   "$ROOT/Source/SocketIO/Parse/SocketParsable.swift" \
   "$ROOT/Source/SocketIO/Client/SocketReservedEvent.swift" \

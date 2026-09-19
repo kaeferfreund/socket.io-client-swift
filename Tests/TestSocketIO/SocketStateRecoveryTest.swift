@@ -171,7 +171,7 @@ final class SocketStateRecoveryTest: XCTestCase {
             errors.append(data)
         }
         socket.on("msg") { _, ack in
-            DispatchQueue.main.async {
+            DispatchQueue.main.socketAsync {
                 ack.with("ok")
                 expect.fulfill()
             }
@@ -341,22 +341,6 @@ final class SocketStateRecoveryTest: XCTestCase {
         XCTAssertFalse(socket.recovered)
     }
 
-    // MARK: U8 — v2 manager returns raw connectPayload (no pid/offset injected)
-
-    func testU8_v2ManagerSkipsInjection() {
-        let v2Manager = SocketManager(socketURL: URL(string: "http://localhost/")!, config: [.log(false), .version(.two)])
-        let v2Socket = v2Manager.defaultSocket
-        v2Socket.setTestable()
-        v2Socket._pid = "p1"                   // would be injected on v3
-        v2Socket._lastOffset = "offset-1"
-        v2Socket.connectPayload = ["token": "t"]
-
-        let merged = v2Socket.currentConnectPayload()
-
-        XCTAssertEqual(merged?["pid"] as? String, nil, "v2 must not inject pid")
-        XCTAssertEqual(merged?["offset"] as? String, nil, "v2 must not inject offset")
-        XCTAssertEqual(merged?["token"] as? String, "t")
-    }
 
     // MARK: U11 — clearRecoveryState resets pid, offset, and recovered
 
@@ -484,50 +468,6 @@ final class SocketStateRecoveryTest: XCTestCase {
         XCTAssertEqual(payload?["pid"] as? String, "p1")
     }
 
-    // MARK: U8b — v2, payload=nil → .connect data is exactly [nsp]
-
-    func testU8b_v2ConnectWithoutPayloadPreservesShape() {
-        let m = SocketManager(socketURL: URL(string: "http://localhost/")!, config: [.log(false), .version(.two)])
-        let s = m.defaultSocket
-        s.setTestable()
-        s.setTestStatus(.connecting)
-        let expect = expectation(description: ".connect fired")
-        var captured: [Any] = []
-        s.on(clientEvent: .connect) { data, _ in
-            captured = data
-            expect.fulfill()
-        }
-        s.didConnect(toNamespace: "/", payload: nil)
-
-        waitForExpectations(timeout: 1)
-        XCTAssertEqual(captured.count, 1)
-        XCTAssertEqual(captured.first as? String, "/")
-        XCTAssertNil(s._pid)
-        XCTAssertFalse(s.recovered)
-    }
-
-    // MARK: U8c — v2, payload provided → .connect data is [nsp, payload] (unchanged)
-
-    func testU8c_v2ConnectWithPayloadPreservesShape() {
-        let m = SocketManager(socketURL: URL(string: "http://localhost/")!, config: [.log(false), .version(.two)])
-        let s = m.defaultSocket
-        s.setTestable()
-        s.setTestStatus(.connecting)
-        let expect = expectation(description: ".connect fired")
-        var captured: [Any] = []
-        s.on(clientEvent: .connect) { data, _ in
-            captured = data
-            expect.fulfill()
-        }
-        s.didConnect(toNamespace: "/", payload: ["x": 1])
-
-        waitForExpectations(timeout: 1)
-        XCTAssertEqual(captured.count, 2)
-        XCTAssertEqual(captured.first as? String, "/")
-        let payload = captured.dropFirst().first as? [String: Any]
-        XCTAssertEqual(payload?["x"] as? Int, 1)
-        XCTAssertNil(payload?["recovered"], "v2 must NOT inject recovered key")
-    }
 
     // MARK: U10 — server omits pid → _pid stays nil, recovered=false
 
@@ -742,7 +682,7 @@ final class CaptureEngine: SocketEngineSpec {
     let socketPath = ""
     let urlPolling = URL(string: "http://localhost/")!
     let urlWebSocket = URL(string: "http://localhost/")!
-    let version: SocketIOVersion = .three
+
     let websocket = false
 
     required init(client: SocketEngineClient, url: URL, options: [String: Any]?) {

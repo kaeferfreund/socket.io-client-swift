@@ -79,7 +79,7 @@ internal class SocketSessionDelegateProxy: NSObject, URLSessionTaskDelegate {
         let secureSchemes = ["https", "wss"]
         let secureOrigin = secureSchemes.contains(response.url?.scheme?.lowercased() ?? "") ||
             secureSchemes.contains(task.originalRequest?.url?.scheme?.lowercased() ?? "")
-        let finish: (URLRequest?) -> Void = { candidate in
+        let finish: @Sendable (URLRequest?) -> Void = { candidate in
             guard let candidate = candidate else { once.call(nil); return }
             let secureDestination = ["https", "wss"].contains(candidate.url?.scheme?.lowercased() ?? "")
             once.call(secureOrigin && !secureDestination ? nil : candidate)
@@ -124,7 +124,9 @@ internal class SocketSessionDelegateProxy: NSObject, URLSessionTaskDelegate {
 }
 
 /// Completion gates must tolerate external delegates invoking them more than once.
-internal final class SocketOnce<Value> {
+// The callback is taken exactly once under the lock, then invoked outside it.
+// Callers are responsible for hopping any captured queue-owned state.
+internal final class SocketOnce<Value>: @unchecked Sendable {
     private let lock = NSLock()
     private var callback: ((Value) -> Void)?
     internal init(_ callback: @escaping (Value) -> Void) { self.callback = callback }

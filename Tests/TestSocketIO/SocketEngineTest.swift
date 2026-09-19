@@ -10,18 +10,7 @@ import XCTest
 @testable import SocketIO
 
 class SocketEngineTest: XCTestCase {
-    func testBasicPollingMessageV3() {
-        let expect = expectation(description: "Basic polling test v3")
 
-        socket.on("blankTest") {data, ack in
-            expect.fulfill()
-        }
-
-        engine.setConfigs([.version(.two)])
-        engine.parsePollingMessage("15:42[\"blankTest\"]")
-
-        waitForExpectations(timeout: 3, handler: nil)
-    }
 
     func testBasicPollingMessage() {
         let expect = expectation(description: "Basic polling test")
@@ -359,20 +348,6 @@ class SocketEngineTest: XCTestCase {
         XCTAssertTrue(engine.postWait.isEmpty)
     }
 
-    /// engine.io v3 has neither the handshake field nor this payload format, so
-    /// the v2 path must stay exactly as it was.
-    func testMaxPayloadIsIgnoredOnEngineIOV3() {
-        engine.setConfigs([.version(.two)])
-        engine.setMaxPayload(5)
-        engine.postWait = [
-            (msg: "4aaaaaaaaa", completion: nil),
-            (msg: "4bbbbbbbbb", completion: nil)
-        ]
-
-        _ = engine.createRequestForPostWithPostWait()
-
-        XCTAssertTrue(engine.postWait.isEmpty, "v2 servers advertise no limit and use a different payload format")
-    }
 
     func testOnlyTheSentPacketsGetTheirCompletionCalled() {
         engine.setMaxPayload(20)
@@ -396,7 +371,7 @@ class SocketEngineTest: XCTestCase {
 
         let reset = expectation(description: "engine reset")
         engine.connect()
-        engine.engineQueue.async { reset.fulfill() }
+        engine.engineQueue.socketAsync { reset.fulfill() }
         wait(for: [reset], timeout: 3)
 
         XCTAssertTrue(engine.postWait.isEmpty, "Stale packets would be sent under a sid that never issued their ack ids")
@@ -503,7 +478,7 @@ class SocketEngineTest: XCTestCase {
 
         // Pump handleQueue so a stray engineDidOpen would have run by now.
         let settled = expectation(description: "queues settle")
-        manager.handleQueue.async { settled.fulfill() }
+        manager.handleQueue.socketAsync { settled.fulfill() }
         wait(for: [settled], timeout: 3)
 
         XCTAssertFalse(engine.connected)
@@ -524,7 +499,7 @@ class SocketEngineTest: XCTestCase {
         testEngine.engineQueue.sync {}
 
         let settled = expectation(description: "close notifications settle")
-        countingManager.handleQueue.async { settled.fulfill() }
+        countingManager.handleQueue.socketAsync { settled.fulfill() }
         wait(for: [settled], timeout: 3)
 
         XCTAssertEqual(countingManager.closeCount, 1, "closeOutEngine must notify exactly once per session")
@@ -571,5 +546,27 @@ private class CloseCountingManager: SocketManager {
     override func engineDidClose(reason: String) {
         closeCount += 1
         super.engineDidClose(reason: reason)
+    }
+}
+
+
+extension SocketEngineTest {
+    func testEngineIO4CannotBeOverriddenAndEscapedQueriesStayIntact() {
+        for query in ["EIO=3", "containsEIO=x", "EIO=3&EIO=2", "%45IO=3&value=a%2Bb%2Fc%3Ad"] {
+            let url = URL(string: "http://localhost/?" + query)!
+            let engine = SocketEngine(client: manager, url: url, config: [.timestampRequests(false)])
+            for candidate in [engine.urlPolling, engine.urlWebSocket, engine.urlPollingHandshake,
+                              engine.urlPollingWithSid, engine.urlWebSocketWithSid] {
+                let components = URLComponents(url: candidate, resolvingAgainstBaseURL: false)!
+                XCTAssertEqual(components.queryItems?.filter { $0.name == "EIO" }.map { $0.value }, ["4"])
+                if query.contains("value=") {
+                    XCTAssertTrue(components.percentEncodedQuery!.contains("value=a%2Bb%2Fc%3Ad"))
+                }
+            }
+        }
+        let engine = SocketEngine(client: manager, url: URL(string: "http://localhost")!,
+                                  config: [.connectParams(["EIO": "3"]), .timestampRequests(false)])
+        XCTAssertEqual(URLComponents(url: engine.urlPolling, resolvingAgainstBaseURL: false)!
+            .queryItems?.filter { $0.name == "EIO" }.map { $0.value }, ["4"])
     }
 }

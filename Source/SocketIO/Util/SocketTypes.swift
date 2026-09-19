@@ -90,3 +90,49 @@ enum Either<E, V> {
     case left(E)
     case right(V)
 }
+
+// MARK: - Serial-queue isolation boundary
+
+/// A one-shot handoff to the queue that owns the captured state. This is the
+/// GCD equivalent of an executor hop, not a claim that its captures are safe to
+/// use concurrently. Callers must never touch queue-owned captures before the
+/// hop, and must not share mutable payloads with the producer after submission.
+/// SocketIOClient and SocketManager intentionally remain non-Sendable.
+internal final class SocketQueueWork: @unchecked Sendable {
+    private let queue: DispatchQueue
+    private let body: () -> Void
+
+    internal init(queue: DispatchQueue, body: @escaping () -> Void) {
+        self.queue = queue
+        self.body = body
+    }
+
+    internal func run() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        body()
+    }
+}
+
+internal extension DispatchQueue {
+    func socketAsync(execute body: @escaping () -> Void) {
+        let work = SocketQueueWork(queue: self, body: body)
+        async { work.run() }
+    }
+
+    func socketAsyncAfter(deadline: DispatchTime, execute body: @escaping () -> Void) {
+        let work = SocketQueueWork(queue: self, body: body)
+        asyncAfter(deadline: deadline) { work.run() }
+    }
+
+    func socketAsync(execute work: DispatchWorkItem) { async(execute: work) }
+    func socketAsyncAfter(deadline: DispatchTime, execute work: DispatchWorkItem) {
+        asyncAfter(deadline: deadline, execute: work)
+    }
+}
+
+internal extension DispatchGroup {
+    func socketNotify(queue: DispatchQueue, execute body: @escaping () -> Void) {
+        let work = SocketQueueWork(queue: queue, body: body)
+        notify(queue: queue) { work.run() }
+    }
+}

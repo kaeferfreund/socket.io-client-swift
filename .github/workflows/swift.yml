@@ -7,6 +7,9 @@ on:
     branches: [ "master", "development", "feat/connect-timeout" ]
   workflow_dispatch:
 
+env:
+  DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+
 permissions:
   contents: read
 
@@ -17,7 +20,7 @@ concurrency:
 jobs:
   build:
     name: Native library and full Socket.IO regression suite
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -28,6 +31,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 26
+      - name: Verify Swift 6.4 toolchain
+        run: swift --version | grep -E 'Swift version 6\.4'
       - name: Build without third-party Swift dependencies
         run: swift build -v
       - name: Run complete unit and real-server test suite
@@ -43,7 +48,7 @@ jobs:
 
   apple-frameworks:
     name: Native framework distribution builds (four Apple SDKs)
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -80,7 +85,7 @@ jobs:
 
   parser-parity:
     name: Decoder differential and malformed-input regressions
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7

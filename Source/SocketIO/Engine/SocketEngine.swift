@@ -195,7 +195,7 @@ open class SocketEngine: NSObject,
     /// Set while a graceful close waits for an unfinished upgrade to settle.
     /// Non-nil is JS's `readyState === "closing"`: no new packet may be written.
     private var pendingCloseReason: String?
-    private var probeWait = ProbeWaitQueue()
+    private(set) var probeWait = ProbeWaitQueue()
     private var secure = false
 
     // MARK: Initializers
@@ -271,6 +271,7 @@ open class SocketEngine: NSObject,
         let oldTransport = webSocketTransport
         let wasWebSocketOpen = wsConnected
         let wasPolling = polling
+        let wasUpgrading = polling && (probing || fastUpgrade) && oldTransport != nil
         let pendingPosts = postWait
         let pendingProbes = probeWait
         pendingCloseReason = nil
@@ -327,6 +328,10 @@ open class SocketEngine: NSObject,
             engineQueue.socketAsyncAfter(deadline: .now() + 1) { transport.abort() }
         } else {
             oldTransport?.abort()
+        }
+        if wasUpgrading {
+            client?.engineDidFailUpgrade?(error: error ?? SocketTransportError(
+                transport: "websocket", operation: "upgrade", closeReason: "socket closed"))
         }
         if let error = error, let callback = client?.engineDidClose(reason:error:) {
             callback(reason, error)
@@ -642,6 +647,7 @@ open class SocketEngine: NSObject,
         // Queue the upgrade packet before anything held by the polling transport.
         sendWebSocketMessage("", withType: .upgrade, withData: [], completion: nil)
         guard !closed else { return }
+        client?.engineDidCompleteUpgrade?()
         flushWaitingForPostToWebSocket()
         flushProbeWait()
         // JS `waitForUpgrade()` resumes on `upgrade`, i.e. after the buffered
@@ -1128,6 +1134,10 @@ open class SocketEngine: NSObject,
             // polling connection. Resume both paused write and poll paths.
             probing = false
             fastUpgrade = false
+            client?.engineDidFailUpgrade?(error: SocketTransportError(
+                transport: "websocket", operation: "upgrade", closeCode: closeCode,
+                closeReason: reason, underlyingError: error))
+            guard !closed else { return }
             if pendingCloseReason != nil {
                 // JS `waitForUpgrade()` also resumes on `upgradeError`: the
                 // packets held for the upgrade go out over polling, followed by

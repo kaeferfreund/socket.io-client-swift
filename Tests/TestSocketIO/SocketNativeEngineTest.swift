@@ -6,19 +6,25 @@ private final class NativeEngineClient: NSObject, SocketEngineClient {
     var errors = [String]()
     var closes = [String]()
     var opens = 0
+    var upgradeEvents = [String]()
+    var upgradeFailures = [SocketTransportError]()
     var onOpen: (() -> Void)?
     var onClose: (() -> Void)?
     var headers = [[String: String]]()
     var messages = [String]()
     var binary = [Data]()
     func engineDidError(reason: String) { errors.append(reason) }
-    func engineDidClose(reason: String) { closes.append(reason); onClose?() }
+    func engineDidClose(reason: String) { closes.append(reason); upgradeEvents.append("close"); onClose?() }
     func engineDidOpen(reason: String) { opens += 1; onOpen?() }
     func engineDidReceivePing() {}
     func engineDidReceivePong() {}
     func engineDidSendPong() {}
     func parseEngineMessage(_ msg: String) { messages.append(msg) }
     func parseEngineBinaryData(_ data: Data) { binary.append(data) }
+    func engineDidCompleteUpgrade() { upgradeEvents.append("upgrade") }
+    func engineDidFailUpgrade(error: SocketTransportError) {
+        upgradeEvents.append("upgradeError"); upgradeFailures.append(error)
+    }
     func engineDidWebsocketUpgrade(headers: [String: String]) { self.headers.append(headers) }
 }
 
@@ -322,6 +328,9 @@ final class SocketNativeEngineTest: XCTestCase {
         engine.webSocketTransportFactory = { _ in candidate }
         engine.engineQueue.sync { engine.parseEngineMessage(upgradeHandshake) }
         candidate.onEvent?(.opened(protocol: nil)); drain(engine)
+        engine.engineQueue.sync { engine.waitingForPoll = true }
+        candidate.onEvent?(.message(.text("3probe"))); drain(engine)
+        XCTAssertTrue(engine.fastUpgrade)
         engine.write("buffered", withType: .message, withData: []); drain(engine)
         var binaryCompletion = 0
         engine.send(Data([0, 1, 2, 3, 4])) { binaryCompletion += 1 }; drain(engine)
@@ -335,13 +344,13 @@ final class SocketNativeEngineTest: XCTestCase {
         engine.send(Data([9])) { refused += 1 }; drain(engine)
         XCTAssertEqual(refused, 2)
         XCTAssertEqual(engine.probeWait.count, held)
-        candidate.onEvent?(.message(.text("3probe"))); drain(engine)
-        engine.engineQueue.sync { engine.doFastUpgrade() }
+        engine.engineQueue.sync { engine.waitingForPoll = false; engine.doFastUpgrade() }
         drain(engine)
         XCTAssertFalse(engine.polling)
         XCTAssertEqual(candidate.batches.flatMap { $0 },
                        [.text("2probe"), .text("5"), .text("4buffered"), .binary(Data([0, 1, 2, 3, 4])), .text("1")])
         XCTAssertEqual(client.closes, ["io client disconnect"])
+        XCTAssertEqual(client.upgradeEvents, ["upgrade", "close"])
         XCTAssertTrue(engine.probeWait.isEmpty)
         XCTAssertTrue(engine.postWait.isEmpty)
         XCTAssertEqual(binaryCompletion, 1)
@@ -365,7 +374,32 @@ final class SocketNativeEngineTest: XCTestCase {
         XCTAssertTrue(engine.closed)
         XCTAssertTrue(engine.pollingWrites.contains("4held"))
         XCTAssertEqual(client.closes, ["io client disconnect"])
+        XCTAssertEqual(client.upgradeEvents, ["upgradeError", "close"])
         XCTAssertTrue(client.errors.isEmpty)
+    }
+
+    func testActivePollingFailureReportsUpgradeErrorBeforeDeferredClose() {
+        let client = NativeEngineClient()
+        let engine = NativePollingTestEngine(client: client, url: url, config: [])
+        let candidate = NativeEngineTransport()
+        engine.webSocketTransportFactory = { _ in candidate }
+        engine.engineQueue.sync { engine.parseEngineMessage(upgradeHandshake) }
+        candidate.onEvent?(.opened(protocol: nil)); drain(engine)
+        engine.engineQueue.sync { engine.waitingForPoll = true }
+        candidate.onEvent?(.message(.text("3probe"))); drain(engine)
+        XCTAssertTrue(engine.fastUpgrade)
+        engine.disconnect(reason: "io client disconnect"); drain(engine)
+        XCTAssertTrue(client.closes.isEmpty)
+        engine.didError(reason: "upgrade error"); drain(engine)
+        XCTAssertEqual(client.upgradeEvents, ["upgradeError", "close"])
+        XCTAssertEqual(client.errors, ["upgrade error"])
+        XCTAssertEqual(client.closes, ["transport error"])
+        XCTAssertTrue(engine.closed)
+        XCTAssertTrue(engine.probeWait.isEmpty)
+        XCTAssertEqual(candidate.aborts, 1)
+        // A late candidate failure must not emit another upgradeError or close.
+        candidate.onEvent?(.closed(code: nil, reason: nil, error: EngineWebSocketError.closed)); drain(engine)
+        XCTAssertEqual(client.upgradeEvents, ["upgradeError", "close"])
     }
 
     /// engine.io-client `_onError`: the native failure is reported (`error`)

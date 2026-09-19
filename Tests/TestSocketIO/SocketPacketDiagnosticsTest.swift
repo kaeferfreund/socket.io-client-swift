@@ -35,7 +35,7 @@ final class SocketPacketDiagnosticsTest: XCTestCase {
 
     func testFoundationDictionaryRejectsNonStringKeysWithPayloadPath() {
         let dictionary = NSDictionary(object: "value", forKey: NSNumber(value: 42))
-        XCTAssertThrowsError(try SocketPacket.jsonSafeEmitData([dictionary])) { error in
+        XCTAssertThrowsError(try SocketPacket.jsonSafeEmitData([dictionary], allowBinary: true)) { error in
             guard case SocketPacketError.nonStringKey(let path) = error else {
                 return XCTFail("Unexpected error: \(error)")
             }

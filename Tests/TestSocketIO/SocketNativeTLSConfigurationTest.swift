@@ -145,7 +145,7 @@ private final class DoubleCompletingAuthDelegate: NSObject, URLSessionDelegate {
     }
     func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) { invalidations += 1 }
 }
-private final class NativeChallengeSender: NSObject, URLAuthenticationChallengeSender {
+internal final class NativeChallengeSender: NSObject, URLAuthenticationChallengeSender {
     func use(_ credential: URLCredential, for challenge: URLAuthenticationChallenge) {}
     func continueWithoutCredential(for challenge: URLAuthenticationChallenge) {}
     func cancel(_ challenge: URLAuthenticationChallenge) {}
@@ -246,16 +246,26 @@ extension SocketNativeTLSConfigurationTest {
         let task = session.dataTask(with: URL(string: "https://localhost:8443")!)
         // WSS authenticates through HTTPS. URLProtectionSpace describes the
         // HTTP handshake, not the WebSocket URL scheme.
-        for (originScheme, host, port, proto, failures, accepted) in [
-            ("https", "localhost", 8443, "https", 0, true),
-            ("wss", "LOCALHOST", 8443, "https", 0, true),
-            ("https", "other.test", 8443, "https", 0, false),
-            ("https", "localhost", 443, "https", 0, false),
-            ("https", "localhost", 8443, "http", 0, false),
-            ("https", "localhost", 8443, "https", 1, false)
+        for (originScheme, originHost, host, port, proto, failures, accepted) in [
+            ("https", "localhost", "localhost", 8443, "https", 0, true),
+            ("wss", "localhost", "LOCALHOST", 8443, "https", 0, true),
+            ("https", "localhost", "other.test", 8443, "https", 0, false),
+            ("https", "localhost", "localhost", 443, "https", 0, false),
+            ("https", "localhost", "localhost", 8443, "http", 0, false),
+            ("https", "localhost", "localhost", 8443, "https", 1, false),
+            ("https", "bücher.example", "xn--bcher-kva.example", 8443, "https", 0, true),
+            ("wss", "xn--bcher-kva.example", "BÜCHER.example", 8443, "https", 0, true),
+            ("https", "bücher.example.", "xn--bcher-kva.example", 8443, "https", 0, true),
+            ("https", "xn--bcher-kva.example", "bücher.example.", 8443, "https", 0, true),
+            ("https", "localhost.", "localhost", 8443, "https", 0, true),
+            ("https", "localhost", "localhost.", 8443, "https", 0, true),
+            ("https", "localhost", "localhost..", 8443, "https", 0, false),
+            ("https", "bücher.example", "xn--bcher-kva.example.evil", 8443, "https", 0, false),
+            ("https", "bücher.example", "xn--bcher-kva.example", 443, "https", 0, false),
+            ("https", "bücher.example", "xn--bcher-kva.example", 8443, "http", 0, false)
         ] {
             let proxy = SocketSessionDelegateProxy(tlsConfiguration: .systemDefault, forwardingDelegate: delegate,
-                clientCertificate: credential, credentialOrigin: URL(string: "\(originScheme)://localhost:8443"))
+                clientCertificate: credential, credentialOrigin: URL(string: "\(originScheme)://\(originHost):8443"))
             let space = URLProtectionSpace(host: host, port: port, protocol: proto, realm: nil,
                                            authenticationMethod: NSURLAuthenticationMethodClientCertificate)
             let challenge = URLAuthenticationChallenge(protectionSpace: space, proposedCredential: nil,

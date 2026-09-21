@@ -10,7 +10,7 @@ or `node` explicitly; scripts do not all have executable permission bits.
 | `check-documentation.py` | Offline current-documentation file and anchor checks; Python 3.9+ |
 | `test-documentation.py` | Regression tests for the documentation checker; Python 3.9+ |
 | `test-documentation-examples.sh` | Compile/run the marked README quick start as an independent local SPM consumer; Apple toolchain |
-| `test-spm-consumer.sh` | Independent package import; local checkout on branch runs, exact 17.0.1 GitHub dependency on the expected release-tag run |
+| `test-spm-consumer.sh` | Independent package import; local checkout on branch runs, exact 17.1.0 GitHub dependency on the expected release-tag run |
 | `test-native-distributions.sh` | Check removed Swift dependencies and compile the package for four Apple SDK destinations |
 | `test-native-transport.sh` | Filtered deterministic native transport tests in the actual package |
 | `check-strict-concurrency.sh` | Complete Swift concurrency checking against the recorded warning baseline |

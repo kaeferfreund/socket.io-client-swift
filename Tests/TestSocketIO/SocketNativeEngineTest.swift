@@ -901,6 +901,108 @@ extension SocketNativeEngineTest {
 
 
 extension SocketNativeEngineTest {
+    func testRemovingRequestTimeoutRestoresDefaultsOnReusedEngine() throws {
+        let manager = SocketManager(socketURL: url,
+            config: [.autoConnect(false), .forceWebsockets(true), .requestTimeout(125)])
+        let engine = SocketEngine(client: manager, url: url, config: manager.config)
+        let transport = NativeEngineTransport()
+        engine.webSocketTransportFactory = { _ in transport }
+        manager.engine = engine
+        defer { engine.disconnect(reason: "test"); drain(engine) }
+
+        engine.connect(); drain(engine)
+        let originalSession = try engine.engineQueue.sync { try XCTUnwrap(engine.session) }
+        XCTAssertEqual(originalSession.configuration.timeoutIntervalForRequest, 125)
+        XCTAssertEqual(originalSession.configuration.timeoutIntervalForResource, 125)
+
+        manager.config = [.autoConnect(false), .forceWebsockets(true)]
+        engine.connect(); drain(engine)
+
+        XCTAssertTrue(manager.engine === engine)
+        try engine.engineQueue.sync {
+            XCTAssertNil(engine.requestTimeout)
+            let session = try XCTUnwrap(engine.session)
+            XCTAssertFalse(session === originalSession)
+            let defaults = URLSessionConfiguration.default
+            XCTAssertEqual(session.configuration.timeoutIntervalForRequest, defaults.timeoutIntervalForRequest)
+            XCTAssertEqual(session.configuration.timeoutIntervalForResource, defaults.timeoutIntervalForResource)
+            for request in [engine.createPollingRequest(for: engine.urlPollingHandshake),
+                            engine.createPollingRequest(for: engine.urlPollingWithSid),
+                            engine.createRequestForPost(with: ["4hello"])] {
+                XCTAssertEqual(request.timeoutInterval, URLRequest(url: url).timeoutInterval)
+            }
+        }
+    }
+
+    func testRemovingInvalidClientCertificateAllowsReusedEngineToConnect() {
+        let url = URL(string: "https://localhost:8443")!
+        let manager = SocketManager(socketURL: url, config: [.autoConnect(false), .forceWebsockets(true),
+            .clientCertificate(URLCredential(user: "invalid", password: "identity", persistence: .none))])
+        let client = NativeEngineClient()
+        let engine = SocketEngine(client: client, url: url, config: manager.config)
+        let transport = NativeEngineTransport()
+        engine.webSocketTransportFactory = { _ in transport }
+        manager.engine = engine
+        defer { engine.disconnect(reason: "test"); drain(engine) }
+
+        engine.connect(); drain(engine)
+        XCTAssertTrue(engine.closed)
+        XCTAssertEqual(transport.connects, 0)
+        XCTAssertEqual(client.errors.count, 1)
+
+        manager.config = [.autoConnect(false), .forceWebsockets(true)]
+        engine.connect(); drain(engine)
+
+        XCTAssertTrue(manager.engine === engine)
+        XCTAssertFalse(engine.closed)
+        XCTAssertEqual(transport.connects, 1)
+        XCTAssertEqual(client.errors.count, 1)
+    }
+
+    #if canImport(Security)
+    func testRemovingClientCertificateStopsOfferingIdentityOnReusedEngine() throws {
+        let url = URL(string: "https://localhost:8443")!
+        let credential = try NativeTLSFixtures.clientCredential()
+        let manager = SocketManager(socketURL: url, config: [.autoConnect(false), .forceWebsockets(true)])
+        let engine = SocketEngine(client: manager, url: url, config: manager.config)
+        let transport = NativeEngineTransport()
+        engine.webSocketTransportFactory = { _ in transport }
+        manager.engine = engine
+        defer { engine.disconnect(reason: "test"); drain(engine) }
+
+        var previousSession: URLSession?
+        for configured in [true, false, true, false] {
+            var config: SocketIOClientConfiguration = [.autoConnect(false), .forceWebsockets(true)]
+            if configured { config.insert(.clientCertificate(credential)) }
+            manager.config = config
+            engine.connect(); drain(engine)
+
+            XCTAssertTrue(manager.engine === engine)
+            try engine.engineQueue.sync {
+                let session = try XCTUnwrap(engine.session)
+                XCTAssertFalse(session === previousSession)
+                previousSession = session
+                let proxy = try XCTUnwrap(session.delegate as? SocketSessionDelegateProxy)
+                let space = URLProtectionSpace(host: "localhost", port: 8443, protocol: "https", realm: nil,
+                                               authenticationMethod: NSURLAuthenticationMethodClientCertificate)
+                let challenge = URLAuthenticationChallenge(protectionSpace: space, proposedCredential: nil,
+                    previousFailureCount: 0, failureResponse: nil, error: nil, sender: NativeChallengeSender())
+                var calls = 0
+                let completion: (URLSession.AuthChallengeDisposition, URLCredential?) -> Void = { disposition, result in
+                    XCTAssertEqual(disposition, configured ? .useCredential : .performDefaultHandling)
+                    if configured { XCTAssertTrue(result === credential) }
+                    else { XCTAssertNil(result) }
+                    calls += 1
+                }
+                proxy.urlSession(session, didReceive: challenge, completionHandler: completion)
+                proxy.urlSession(session, task: session.dataTask(with: url), didReceive: challenge,
+                                 completionHandler: completion)
+                XCTAssertEqual(calls, 2)
+            }
+        }
+    }
+    #endif
+
     func testInvalidRequestTimeoutFailsBeforeOpeningTransport() {
         for value in [0.0, -1, .infinity, -.infinity, .nan] {
             let (engine, client, transport) = make([.forceWebsockets(true), .requestTimeout(value)])

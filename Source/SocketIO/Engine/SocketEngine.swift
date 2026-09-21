@@ -997,6 +997,10 @@ open class SocketEngine: NSObject,
     /// parameter config: The `SocketIOClientConfiguration` that should be used to set/update configs.
     open func setConfigs(_ config: SocketIOClientConfiguration) {
         configurationError = nil
+        // The manager passes its complete configuration. Omitted optional
+        // credentials and request deadlines must not survive engine reuse.
+        clientCertificate = nil
+        requestTimeout = nil
         for option in config {
             switch option {
             case let .requestTimeout(timeout):

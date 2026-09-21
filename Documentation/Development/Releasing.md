@@ -11,7 +11,7 @@ branch. Treat published tags as immutable: fix later issues in a new version.
 Review the changelog, migration instructions, supported platform/toolchain values,
 installation examples and parity scope. Preserve explicit unsupported-feature
 reasons. Update version-specific tooling deliberately: `test-spm-consumer.sh`
-currently accepts `v17.0.1` for remote exact-version validation; a future release
+currently accepts `v17.1.0` for remote exact-version validation; a future release
 must update that expected tag/version before using the same check.
 
 Require every CI job in the [workflow](../../.github/workflows/swift.yml) to pass

@@ -1,3 +1,12 @@
+## 17.1.0 — 2026-09-21
+
+- Reset omitted `.clientCertificate` and `.requestTimeout` options when a manager applies a new configuration to a reused engine, so removed credentials and request deadlines do not leak into later sessions.
+- Complete per-socket connect-timeout cleanup: a timed-out namespace now emits `.disconnect`, settles acknowledgements using the normal close rules, preserves unsent buffered acknowledgements, and remains eligible for automatic reconnection.
+- Protect reentrant replacement connects with a connection generation, so a timeout work item that has already started cannot finish by interrupting a newer attempt.
+- Match client-certificate challenge hosts using Foundation's IDNA form, including Unicode/Punycode spellings, case-insensitivity and one trailing DNS root dot, while continuing to reject different or malformed origins.
+- Add regression coverage for configuration removal, timeout cleanup and reentrant reconnects, host canonicalization and client-certificate challenge decisions.
+- See [17.1.0 release notes](Documentation/Release17.1.0.md) for behavior changes and validation scope.
+
 ## 17.0.1 — 2026-09-19
 
 - Fix Foundation URL construction crashes from `<`, `>`, backslash and backtick in connect parameters; encode keys and values with JavaScript `encodeURIComponent` semantics (socketio/socket.io-client-swift#1421).

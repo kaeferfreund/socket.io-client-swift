@@ -66,13 +66,13 @@ and enter:
 https://github.com/kaeferfreund/socket.io-client-swift.git
 ```
 
-Use version **17.0.1** or later within the 17.x series. In Xcode, select
-**Up to Next Major Version** from **17.0.1** and add the **SocketIO** product
+Use version **17.1.0** or later within the 17.x series. In Xcode, select
+**Up to Next Major Version** from **17.1.0** and add the **SocketIO** product
 to your app target.
 
 A version requirement selects a published release, not the development branch
 you are viewing. Select a reviewed branch or commit explicitly to evaluate
-unreleased changes. See the [17.0.1 release notes](../Release17.0.1.md) and
+unreleased changes. See the [17.1.0 release notes](../Release17.1.0.md) and
 [why this fork exists](WhyThisFork.md).
 
 For a Package.swift:
@@ -81,7 +81,7 @@ For a Package.swift:
 dependencies: [
     .package(
         url: "https://github.com/kaeferfreund/socket.io-client-swift.git",
-        from: "17.0.1"
+        from: "17.1.0"
     )
 ]
 ```

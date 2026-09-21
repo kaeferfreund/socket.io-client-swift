@@ -13,9 +13,9 @@ from pathlib import Path
 root = Path(os.environ['SOCKETIO_CONSUMER_DIR'])
 if os.environ.get('GITHUB_REF_TYPE') == 'tag':
     tag = os.environ['GITHUB_REF_NAME']
-    if tag != 'v17.0.1':
-        raise SystemExit('Expected release tag v17.0.1, got ' + tag)
-    dependency = '.package(url: "https://github.com/kaeferfreund/socket.io-client-swift.git", exact: "17.0.1")'
+    if tag != 'v17.1.0':
+        raise SystemExit('Expected release tag v17.1.0, got ' + tag)
+    dependency = '.package(url: "https://github.com/kaeferfreund/socket.io-client-swift.git", exact: "17.1.0")'
 else:
     dependency = '.package(path: ' + json.dumps(os.environ['SOCKETIO_CONSUMER_ROOT']) + ')'
 (root / 'Package.swift').write_text('''// swift-tools-version:6.4
@@ -53,9 +53,9 @@ pins = [pin for pin in resolved['pins'] if pin['identity'] == 'socket.io-client-
 assert len(pins) == 1, 'Expected exactly one SocketIO package pin'
 state = pins[0]['state']
 expected = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-assert state['version'] == '17.0.1', state
+assert state['version'] == '17.1.0', state
 assert state['revision'] == expected, (state, expected)
-print('Verified published SocketIO 17.0.1 at ' + expected)
+print('Verified published SocketIO 17.1.0 at ' + expected)
 print(json.dumps(resolved, indent=2))
 VERIFY
 fi

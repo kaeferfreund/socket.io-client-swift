@@ -42,7 +42,7 @@ internal class SocketSessionDelegateProxy: NSObject, URLSessionDataDelegate {
             guard let origin = credentialOrigin,
                   ["https", "wss"].contains(origin.scheme?.lowercased() ?? ""),
                   ["https", "wss"].contains(space.protocol?.lowercased() ?? ""),
-                  origin.host?.lowercased() == space.host.lowercased(),
+                  SocketCredentialHost.matches(origin.host, space.host),
                   (origin.port ?? 443) == space.port,
                   challenge.previousFailureCount == 0,
                   clientCertificate.identity != nil else {

@@ -296,30 +296,36 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         connectTimeoutWork?.cancel()
         connectTimeoutWork = nil
         self.authGeneration &+= 1
-        let attempt = authGeneration
+        let authAttempt = authGeneration
+        connectGeneration &+= 1
+        let attempt = connectGeneration
 
         // Install before status callbacks or joining: either can connect synchronously.
         if timeoutAfter != 0 {
             let timeout = DispatchWorkItem { [weak self] in
-                guard let this = self, this.status == .connecting || this.status == .notConnected else { return }
+                guard let this = self, this.connectGeneration == attempt,
+                      this.status == .connecting || this.status == .notConnected else { return }
                 this.connectTimeoutWork = nil
                 if this.status == .connecting {
                     DefaultSocketLogger.Logger.log("Timeout: Socket not connected, so setting to disconnected", type: this.logType)
 
-                    this.clearReceiveBuffer()
-                    this.status = .disconnected
+                    // didDisconnect owns the state transition, notification and
+                    // ack cleanup. Leave before it invokes reentrant listeners.
                     this.leaveNamespace()
                 } else {
                     DefaultSocketLogger.Logger.log("Timeout: Socket already reset before connect completed", type: this.logType)
                 }
 
+                // A status/disconnect listener may have started a new attempt
+                // while this work item was running; cancel() cannot stop it now.
+                guard this.connectGeneration == attempt, this.status != .connected else { return }
                 handler?()
             }
             connectTimeoutWork = timeout
             manager.handleQueue.asyncAfter(deadline: .now() + timeoutAfter, execute: timeout)
         }
         status = .connecting
-        guard authGeneration == attempt, active, status == .connecting else { return }
+        guard authGeneration == authAttempt, active, status == .connecting else { return }
         joinNamespace(withPayload: payload)
     }
 
@@ -535,6 +541,9 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     }
 
     private var connectTimeoutWork: DispatchWorkItem?
+    /// Connection identity is independent of provider changes: setAuth/clearAuth
+    /// invalidate auth results, but must not silently disable the connect deadline.
+    private var connectGeneration: UInt64 = 0
 
     private var pendingTransportCloseError: SocketTransportError?
 
@@ -557,21 +566,22 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
 
         DefaultSocketLogger.Logger.log("Disconnected: \(reason)", type: logType)
 
-        clearReceiveBuffer()
-        status = .disconnected
-        sid = ""
-
-        notifyDisconnectAndClearAcks(reason: reason)
+        notifyDisconnectAndClearAcks(reason: reason) {
+            clearReceiveBuffer()
+            sid = ""
+            status = .disconnected
+        }
     }
 
     /// Close notification precedes ack failures, as in JS Socket.onclose().
-    /// Snapshot IDs before reentrant listeners so this close cannot sweep a
-    /// registration created by a listener for a replacement connection.
-    private func notifyDisconnectAndClearAcks(reason: String) {
+    /// Snapshot IDs before status and disconnect listeners so this close cannot
+    /// sweep a registration created by a listener for a replacement connection.
+    private func notifyDisconnectAndClearAcks(reason: String, updatingState: () -> Void) {
         let retiringAckIDs = ackHandlers.pendingTimedAckIDs
         let stillBuffered = bufferedAckIds
         let error = pendingTransportCloseError
         pendingTransportCloseError = nil
+        updatingState()
         handleClientEvent(.disconnect, data: error.map { [reason, $0] } ?? [reason])
         performOnHandleQueue { [weak self] in
             self?.ackHandlers.clearTimedAcks(reason: .disconnected,
@@ -1748,9 +1758,6 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
     ///
     /// - parameter reason: The reason this socket is reconnecting.
     open func setReconnecting(reason: String) {
-        clearReceiveBuffer()
-        status = .connecting
-        sid = ""
         // JS `Socket.onclose` → `_clearAcks()`. The same three rules apply as on
         // the terminal path: an ack whose packet is still in the send buffer is
         // kept (that packet has not reached the server and goes out on the next
@@ -1763,7 +1770,11 @@ open class SocketIOClient: NSObject, SocketIOClientSpec {
         // appended `_addToQueue` callback decides what the disconnect means for
         // the entry: the head stays queued unless its budget is already spent,
         // and `drainRetriableQueueOnConnect` re-sends it under a new id.
-        notifyDisconnectAndClearAcks(reason: reason)
+        notifyDisconnectAndClearAcks(reason: reason) {
+            clearReceiveBuffer()
+            sid = ""
+            status = .connecting
+        }
     }
 
     // Test properties

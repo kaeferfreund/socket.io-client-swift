@@ -98,8 +98,16 @@ an identity and the connection must use HTTPS/WSS. It is supplied only to the
 configured host and port, never a different redirect origin. Rejected identities
 are not repeatedly offered within the same authentication challenge sequence.
 Server trust, hostname validation and optional `.security(...)` pins remain active.
+The client-identity host comparison uses Foundation's IDNA representation, ignores
+letter case and accepts a single trailing DNS root dot. Unicode and Punycode
+spellings of the same host therefore match. Different hosts and ports, malformed
+hostnames and insecure challenges are rejected.
 Without `.clientCertificate`, an external `.sessionDelegate` can still handle
 client-certificate challenges itself.
+
+Removing `.clientCertificate` from `manager.config` clears the configured identity
+for subsequent sessions, including when reconnecting with the same engine.
+Existing sessions retain the credential captured when they were created.
 
 ### URL path and namespace
 
@@ -117,6 +125,11 @@ replaces them and encodes keys and values using `encodeURIComponent` semantics.
 is canceled on success, explicit disconnection, or a replacement `connect()` call,
 so it cannot terminate a later reconnect.
 
+When a connecting namespace times out, it emits `disconnect` and runs the normal
+acknowledgement cleanup, preserving acknowledgements for unsent buffered packets.
+The socket remains active for reconnection. A `connect()` started by a status or
+disconnect listener supersedes the old timeout handler and keeps its own deadline.
+
 
 ### Polling request timeout
 
@@ -125,6 +138,8 @@ request: initial handshake, subsequent GETs, POSTs and retiring-session close
 POSTs. The value must be finite and greater than zero; invalid values produce a
 configuration error before opening a transport. Configure this option before
 connecting; the total timeout is captured when the polling session is created.
+Removing the option from `manager.config` restores native request defaults and,
+on the next connection, native session timeouts even when the engine is reused.
 
 The explicit value sets both Foundation's idle timeout and total resource
 transfer timeout, so receiving occasional bytes cannot extend an HTTP request

@@ -127,6 +127,15 @@ or simulator-runtime tests.
 | `parser-parity` | Malformed-input checks and pinned JS/Swift parser differential |
 | `upstream-clients` | Original pinned Node suites and fresh declaration inventory |
 
+The separate `Security Review` workflow reviews every same-repository pull
+request diff with five models, each through its vendor CLI: Claude Opus 5.5
+(Claude Code), GPT-6.2 Astra and GPT-6.2 Sol (Codex CLI), GLM 5.3 Flash
+(OpenCode Go) and Kimi K3.1 Pro (fx on Vercel AI Gateway Token Pass). Each
+reviewer is its own check, runs read-only with the prompt from the base branch,
+and fails on any finding or error; one shared pull request comment collects the
+reports. It needs the repository secrets `CLAUDE_API_KEY`, `OPENAI_API_KEY`,
+`OPENCODE_API_KEY` and `AI_GATEWAY_API_KEY`. Fork pull requests are skipped.
+
 All jobs matter for their distinct scope. A green reference Node suite alone does
 not test Swift; a green Swift suite alone does not prove universal JS parity.
 Inspect the exact commit, job logs and uploaded artifacts. Historical evidence

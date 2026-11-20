@@ -1,0 +1,280 @@
+# KI-Sicherheitsreview jedes PR-Diffs durch mehrere Modelle, jeweils über die
+# CLI des Anbieters:
+#   claude       Claude Code, claude-opus-5-5          (Secret CLAUDE_API_KEY)
+#   codex-astra  Codex CLI, gpt-6.2-astra              (Secret OPENAI_API_KEY)
+#   codex-sol    Codex CLI, gpt-6.2-sol                (Secret OPENAI_API_KEY)
+#   glm          OpenCode, opencode-go/glm-5.3-flash   (Secret OPENCODE_API_KEY)
+#   kimi         fx über Vercel AI Gateway/Token Pass,
+#                moonshotai/kimi-k3.1-pro              (Secret AI_GATEWAY_API_KEY)
+# Jeder Prüfer ist ein eigener Check und scheitert bei Befunden und bei jedem
+# Fehler. Der Sammeljob schreibt einen gemeinsamen PR-Kommentar. Fork-PRs
+# bekommen keine Secrets und werden übersprungen.
+#
+# Der PR soll seine Reviewer nicht steuern können: Der Prompt kommt aus dem
+# Basis-Branch (nur beim ersten Einführen aus dem PR selbst), Agenten-
+# Anweisungsdateien (AGENTS.md, CLAUDE.md, Agent-Konfigurationen) werden vor
+# dem Lauf auf den Stand des Basis-Branchs gesetzt, und jeder Prüfer läuft nur
+# lesend (Claude --bare/--restricted mit git diff/log/show, Codex in der
+# read-only-Sandbox, OpenCode ohne Edit/Webfetch und mit Bash nur für git,
+# fx mit eigenem FX_HOME, dessen Regeln Edit/Webfetch sperren und die Shell
+# auf git diff/log/show beschränken).
+# Jeder Schritt sieht nur das Secret seines eigenen Anbieters. Grenze: Die
+# Workflow-Datei selbst kommt bei `pull_request` aus dem PR; wer hier Branches
+# pusht, hat Schreibrechte.
+name: Security Review
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  review:
+    name: ${{ matrix.name }}
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: claude
+            name: "Security: Claude Opus 5.5"
+            model: claude-opus-5-5
+          - id: codex-astra
+            name: "Security: GPT-6.2 Astra"
+            model: gpt-6.2-astra
+          - id: codex-sol
+            name: "Security: GPT-6.2 Sol"
+            model: gpt-6.2-sol
+          - id: glm
+            name: "Security: GLM 5.3 Flash"
+            model: opencode-go/glm-5.3-flash
+          - id: kimi
+            name: "Security: Kimi K3.1 Pro"
+            model: moonshotai/kimi-k3.1-pro
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Prompt und Agenten-Dateien vom Basis-Branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git rev-parse --verify --quiet "origin/$BASE_REF" > /dev/null
+          PROMPT_FILE=.github/security-review/prompt.md
+          if git cat-file -e "origin/$BASE_REF:$PROMPT_FILE" 2>/dev/null; then
+            git show "origin/$BASE_REF:$PROMPT_FILE" > "$RUNNER_TEMP/prompt.raw"
+          else
+            cp "$PROMPT_FILE" "$RUNNER_TEMP/prompt.raw"
+          fi
+          # shellcheck disable=SC2016 # envsubst bekommt den Variablennamen wörtlich
+          envsubst '$BASE_REF' < "$RUNNER_TEMP/prompt.raw" > "$RUNNER_TEMP/prompt.md"
+          # Anweisungs- und Konfigurationsdateien der Agenten aus dem PR nicht
+          # übernehmen. git diff origin/$BASE_REF...HEAD vergleicht Commits und
+          # zeigt die Änderungen daran weiterhin.
+          for p in AGENTS.md CLAUDE.md .claude .codex .opencode opencode.json opencode.jsonc .fx .fx.json .agents .mcp.json; do
+            rm -rf -- "$p"
+            if git cat-file -e "origin/$BASE_REF:$p" 2>/dev/null; then
+              git checkout "origin/$BASE_REF" -- "$p"
+            fi
+          done
+
+      - name: Review mit Claude
+        if: matrix.id == 'claude'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          MODEL: ${{ matrix.model }}
+        run: |
+          [ -n "$ANTHROPIC_API_KEY" ] || { echo "::error::Secret CLAUDE_API_KEY fehlt"; exit 1; }
+          npm install --global @anthropic-ai/claude-code@2.1.328
+          claude -p "$(cat "$RUNNER_TEMP/prompt.md")" \
+            --model "$MODEL" \
+            --bare --restricted --strict-mcp-config \
+            --tools Read Grep Glob Bash \
+            --allowedTools "Read" "Grep" "Glob" "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" \
+            --output-format json > "$RUNNER_TEMP/claude.json"
+          jq -e '.is_error == false' "$RUNNER_TEMP/claude.json" > /dev/null || { jq . "$RUNNER_TEMP/claude.json"; exit 1; }
+          jq -r '.result' "$RUNNER_TEMP/claude.json" > review.md
+
+      - name: Review mit Codex
+        if: startsWith(matrix.id, 'codex-')
+        env:
+          CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MODEL: ${{ matrix.model }}
+        run: |
+          [ -n "$CODEX_API_KEY" ] || { echo "::error::Secret OPENAI_API_KEY fehlt"; exit 1; }
+          npm install --global @openai/codex@0.170.0
+          # Ubuntu 24.04 sperrt unprivilegierte User-Namespaces, die die
+          # Codex-Sandbox braucht.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          export CODEX_HOME="$RUNNER_TEMP/codex-home"
+          mkdir -p "$CODEX_HOME"
+          codex exec \
+            --model "$MODEL" \
+            --sandbox read-only \
+            --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check \
+            -c model_reasoning_effort=high \
+            -c project_doc_max_bytes=0 \
+            --output-last-message review.md \
+            - < "$RUNNER_TEMP/prompt.md"
+
+      - name: Review mit GLM (OpenCode)
+        if: matrix.id == 'glm'
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          MODEL: ${{ matrix.model }}
+          OPENCODE_DISABLE_AUTOUPDATE: "1"
+          OPENCODE_CONFIG_CONTENT: >-
+            {"$schema": "https://opencode.ai/config.json", "share": "disabled",
+            "permission": {"edit": "deny", "webfetch": "deny",
+            "bash": {"*": "deny", "git diff*": "allow", "git log*": "allow", "git show*": "allow"}}}
+        run: |
+          [ -n "$OPENCODE_API_KEY" ] || { echo "::error::Secret OPENCODE_API_KEY fehlt"; exit 1; }
+          npm install --global opencode-ai@1.19.6
+          opencode run --model "$MODEL" --variant high --format json \
+            "$(cat "$RUNNER_TEMP/prompt.md")" > "$RUNNER_TEMP/opencode.jsonl"
+          if jq -e -s 'any(.[]; .type == "error")' "$RUNNER_TEMP/opencode.jsonl" > /dev/null; then
+            jq -c 'select(.type == "error")' "$RUNNER_TEMP/opencode.jsonl"; exit 1
+          fi
+          jq -r -s '[.[] | select(.type == "text")] | last | .part.text // empty' "$RUNNER_TEMP/opencode.jsonl" > review.md
+
+      - name: Review mit Kimi (fx, Vercel Token Pass)
+        if: matrix.id == 'kimi'
+        env:
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+          MODEL: ${{ matrix.model }}
+          FX_AUTO_UPGRADE: "0"
+          FX_DISABLE_KEYCHAIN: "1"
+          FX_VERSION: v0.0.17
+          FX_SHA256: 78c155d59fa59e42fd56d93037fd75041868c9c67865e8c7f0ca6dcdfac23e75
+        run: |
+          [ -n "$AI_GATEWAY_API_KEY" ] || { echo "::error::Secret AI_GATEWAY_API_KEY fehlt"; exit 1; }
+          FX_DIR="$RUNNER_TEMP/fx"
+          mkdir -p "$FX_DIR/bin"
+          curl -fsSL "https://releases.fx.sh/$FX_VERSION/fx-linux-x86_64.tar.gz" -o "$FX_DIR/fx.tar.gz"
+          echo "$FX_SHA256  $FX_DIR/fx.tar.gz" | sha256sum -c -
+          tar -xzf "$FX_DIR/fx.tar.gz" -C "$FX_DIR/bin" fx
+          # Eigenes FX_HOME: --auto führt sonst Edits und erkannte
+          # Projektbefehle ohne Rückfrage aus. Die Regeln sperren Edit und
+          # Webfetch und lassen in der Shell nur git diff/log/show zu;
+          # verkettete Befehle werden abgelehnt.
+          export FX_HOME="$FX_DIR/home"
+          mkdir -m 700 "$FX_HOME"
+          (umask 077 && cat > "$FX_HOME/settings.json" <<'JSON'
+          {"auto_upgrade": false, "fast_mode": false,
+           "permission": {"edit": {"*": "deny"}, "web_fetch": {"*": "deny"},
+            "bash": {"*": "deny", "git diff *": "allow", "git log *": "allow", "git show *": "allow"}}}
+          JSON
+          )
+          "$FX_DIR/bin/fx" ask \
+            --provider gateway --model "$MODEL" --effort high --no-fast \
+            --no-save --auto --json \
+            < "$RUNNER_TEMP/prompt.md" > "$RUNNER_TEMP/fx.json"
+          jq -e '.exit_code == 0' "$RUNNER_TEMP/fx.json" > /dev/null || { jq 'del(.output)' "$RUNNER_TEMP/fx.json"; exit 1; }
+          jq -r '.final_output' "$RUNNER_TEMP/fx.json" > review.md
+
+      - name: Ergebnis auswerten
+        id: result
+        run: |
+          [ -s review.md ] || { echo "::error::Leerer Bericht"; exit 1; }
+          cat review.md >> "$GITHUB_STEP_SUMMARY"
+          # Nur die letzte nicht leere Zeile zählt; Fettdruck/Backticks werden toleriert.
+          LAST=$(grep -v '^[[:space:]]*$' review.md | tail -1 | tr -d '*`' || true)
+          COUNT=$(printf '%s\n' "$LAST" | sed -nE 's/^[[:space:]]*BEFUNDE:[[:space:]]*([0-9]+)[[:space:]]*$/\1/p')
+          if [ -z "$COUNT" ]; then echo "::error::Keine BEFUNDE-Zeile im Bericht"; exit 1; fi
+          echo "$COUNT" > count.txt
+
+      - name: Bericht sichern
+        if: always()
+        env:
+          NAME: ${{ matrix.name }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          [ -f review.md ] && cp review.md "$RUNNER_TEMP/out/review.md"
+          if [ -f count.txt ]; then cp count.txt "$RUNNER_TEMP/out/count.txt"; else echo "Fehler" > "$RUNNER_TEMP/out/count.txt"; fi
+          printf '%s\n' "${NAME#Security: }" > "$RUNNER_TEMP/out/name.txt"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: security-review-${{ matrix.id }}
+          path: ${{ runner.temp }}/out
+          retention-days: 7
+
+      - name: Bei Befunden fehlschlagen
+        run: |
+          COUNT=$(cat count.txt)
+          if [ "$COUNT" != "0" ]; then echo "::error::$COUNT Sicherheitsbefund(e), siehe PR-Kommentar"; exit 1; fi
+
+  report:
+    name: "Security: Bericht"
+    needs: review
+    if: always() && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write # gemeinsamer PR-Kommentar
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: security-review-*
+          path: reviews
+
+      - name: PR-Kommentar
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          MARKER='<!-- socketio-swift-security-review -->'
+          {
+            echo "$MARKER"
+            echo "### KI-Sicherheitsreview ($HEAD_SHA)"
+            echo
+            echo "| Prüfer | Befunde |"
+            echo "| --- | --- |"
+            for d in reviews/security-review-*/; do
+              [ -d "$d" ] || continue
+              echo "| $(cat "$d/name.txt") | $(cat "$d/count.txt") |"
+            done
+            echo
+            for d in reviews/security-review-*/; do
+              [ -d "$d" ] || continue
+              COUNT=$(cat "$d/count.txt")
+              OPEN=""; [ "$COUNT" != "0" ] && OPEN=" open"
+              echo "<details$OPEN><summary><b>$(cat "$d/name.txt")</b>: $COUNT</summary>"
+              echo
+              if [ -s "$d/review.md" ]; then cat "$d/review.md"; else echo "Kein Bericht, siehe [Lauf]($RUN_URL)."; fi
+              echo
+              echo "</details>"
+              echo
+            done
+          } > comment.md
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+          ID=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
+            -q ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .id" | tail -1)
+          if [ -n "$ID" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$ID" -F body=@comment.md > /dev/null
+          else
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file comment.md
+          fi

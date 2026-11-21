@@ -124,20 +124,64 @@ internal class SocketSessionDelegateProxy: NSObject, URLSessionDataDelegate {
         return "\(secure ? "https" : "http")://\(host):\(port)"
     }
 
+    /// Whether a redirect of a request with a body must not be followed.
+    ///
+    /// The polling POST carries Engine.IO packets and the CONNECT `auth`
+    /// payload. URLSession turns it into a GET without body on 301, 302 and 303,
+    /// so the packets would be lost while the write looks successful, and it
+    /// resends the body to any host on 307 and 308. Such a request therefore
+    /// follows only 307/308, keeps its method and stays on the host of the
+    /// first request (any scheme or port). GET and HEAD follow every redirect.
+    static func refusesBodyRedirect(status: Int, firstRequest: URLRequest?, candidate: URLRequest) -> Bool {
+        let method = (firstRequest?.httpMethod ?? "GET").uppercased()
+        guard method != "GET" && method != "HEAD" else { return false }
+        guard status == 307 || status == 308,
+              (candidate.httpMethod ?? "GET").uppercased() == method,
+              let host = SocketCookieScope.normalizedHost(candidate.url?.host),
+              host == SocketCookieScope.normalizedHost(firstRequest?.url?.host) else { return true }
+        return false
+    }
+
+    /// Whether a redirect must not be followed because a client certificate is
+    /// configured. The certificate is only presented to the configured origin,
+    /// so a redirect to another scheme, host or port is refused instead of
+    /// connecting there without it.
+    static func refusesCertificateRedirect(_ presentsCertificate: Bool, firstOrigin: String?,
+                                           candidate: URLRequest) -> Bool {
+        guard presentsCertificate else { return false }
+        let destination = origin(of: candidate.url)
+        return destination == nil || destination != firstOrigin
+    }
+
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         let once = SocketOnce<URLRequest?>(completionHandler)
+        // Without a followed redirect URLSession completes the task with the
+        // 3xx response, which the polling transport reports as a write error.
+        let status = response.statusCode
+        let firstRequest = task.originalRequest
+        let firstURL = firstRequest?.url
+        let firstOrigin = SocketSessionDelegateProxy.origin(of: firstURL)
+        let presentsCertificate = clientCertificate != nil
+        if Self.refusesBodyRedirect(status: status, firstRequest: firstRequest, candidate: request) ||
+            Self.refusesCertificateRedirect(presentsCertificate, firstOrigin: firstOrigin, candidate: request) {
+            once.call(nil); return
+        }
         // The redirect response is the current hop. Looking only at the
         // original URL permits http -> https -> http downgrades.
         let secureOrigin = SocketCookieScope.isSecureScheme(response.url?.scheme) ||
             SocketCookieScope.isSecureScheme(task.originalRequest?.url?.scheme)
         let currentOrigin = SocketSessionDelegateProxy.origin(of: response.url)
-        let firstURL = task.originalRequest?.url
-        let firstOrigin = SocketSessionDelegateProxy.origin(of: firstURL)
         let cookies = SocketUncheckedSendableBox(redirectCookies)
         let finish: @Sendable (URLRequest?) -> Void = { candidate in
             guard var candidate = candidate else { once.call(nil); return }
             guard !(secureOrigin && !SocketCookieScope.isSecureScheme(candidate.url?.scheme)) else {
+                once.call(nil); return
+            }
+            // Checked again: an external delegate may return another request.
+            guard !Self.refusesBodyRedirect(status: status, firstRequest: firstRequest, candidate: candidate),
+                  !Self.refusesCertificateRedirect(presentsCertificate, firstOrigin: firstOrigin,
+                                                   candidate: candidate) else {
                 once.call(nil); return
             }
             // URLSession drops Authorization on redirects but copies an explicit
@@ -147,6 +191,12 @@ internal class SocketSessionDelegateProxy: NSObject, URLSessionDataDelegate {
             // (urllib3), CVE-2022-27776 (curl) and in undici (GHSA-q768-x9m6-m9qp).
             let destination = SocketSessionDelegateProxy.origin(of: candidate.url)
             let sameOrigin = destination != nil && destination == currentOrigin && destination == firstOrigin
+            // Credentials of the first origin end with the first change of
+            // origin and do not come back on a later hop to it (A -> B -> A).
+            if !sameOrigin {
+                candidate.setValue(nil, forHTTPHeaderField: "Authorization")
+                candidate.setValue(nil, forHTTPHeaderField: "Proxy-Authorization")
+            }
             if let header = cookies.value.header(for: candidate.url, firstURL: firstURL, sameOrigin: sameOrigin) {
                 candidate.setValue(header, forHTTPHeaderField: "Cookie")
             }

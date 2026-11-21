@@ -815,3 +815,188 @@ extension SocketSecurityHardeningTest {
         }
     }
 }
+
+// MARK: Redirects of a request with a body
+
+private final class RewritingRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    let rewrite: (URLRequest) -> URLRequest
+    var calls = 0
+    init(rewrite: @escaping (URLRequest) -> URLRequest) { self.rewrite = rewrite }
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        calls += 1
+        completionHandler(rewrite(request))
+    }
+}
+
+extension SocketSecurityHardeningTest {
+    /// The proxy's decision for a redirect, built the way URLSession proposes
+    /// it: 301-303 turn a POST into a GET without body, 307/308 keep both.
+    private func bodyRedirect(_ method: String, status: Int, from source: String, to target: String,
+                              delegate: URLSessionDelegate? = nil) -> URLRequest?? {
+        let proxy = SocketSessionDelegateProxy(tlsConfiguration: .systemDefault, forwardingDelegate: delegate)
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        var original = URLRequest(url: URL(string: source)!)
+        original.httpMethod = method
+        if method == "POST" { original.httpBody = Data("40{\"token\":\"secret\"}".utf8) }
+        let task = session.dataTask(with: original)
+        var next = URLRequest(url: URL(string: target)!)
+        if status == 307 || status == 308 {
+            next.httpMethod = method
+            next.httpBody = original.httpBody
+        }
+        let response = HTTPURLResponse(url: URL(string: source)!, statusCode: status, httpVersion: nil,
+                                       headerFields: ["Location": target])!
+        var decided: URLRequest??
+        proxy.urlSession(session, task: task, willPerformHTTPRedirection: response, newRequest: next) {
+            decided = .some($0)
+        }
+        return decided
+    }
+
+    func testAPostFollowsOnly307Or308OnTheFirstHost() throws {
+        let first = "http://chat.example.com/socket.io/?transport=polling"
+        for status in [307, 308] {
+            for target in ["http://chat.example.com/socket.io/?x", "https://CHAT.example.com:8443/socket.io/"] {
+                let followed = try XCTUnwrap(bodyRedirect("POST", status: status, from: first, to: target), "\(status)")
+                XCTAssertEqual(followed?.httpMethod, "POST", "\(status) \(target)")
+                XCTAssertEqual(followed?.httpBody, Data("40{\"token\":\"secret\"}".utf8), "\(status) \(target)")
+            }
+            // The body, and with it the CONNECT auth payload, never reaches another host.
+            for target in ["http://node3.example.com/socket.io/", "http://evil.test/socket.io/"] {
+                XCTAssertEqual(bodyRedirect("POST", status: status, from: first, to: target), .some(nil),
+                               "\(status) \(target)")
+            }
+        }
+    }
+
+    func testAPostIsNeverTurnedIntoAGet() {
+        for status in [300, 301, 302, 303] {
+            XCTAssertEqual(bodyRedirect("POST", status: status, from: "http://chat.example.com/socket.io/",
+                                        to: "http://chat.example.com/socket.io/?x"), .some(nil), "\(status)")
+        }
+    }
+
+    func testAGetFollowsEveryRedirectStatus() {
+        for status in [300, 301, 302, 303, 307, 308] {
+            let decided = bodyRedirect("GET", status: status, from: "http://chat.example.com/socket.io/",
+                                       to: "http://node3.example.com/socket.io/")
+            XCTAssertEqual(decided??.url?.host, "node3.example.com", "\(status)")
+        }
+    }
+
+    func testASessionDelegateCannotWidenARedirectOfAPost() {
+        let first = "http://chat.example.com/socket.io/"
+        // Another host, or a GET instead of the POST, is refused after the delegate too.
+        let otherHost = RewritingRedirectDelegate { request in
+            var changed = request
+            changed.url = URL(string: "http://evil.test/socket.io/")
+            return changed
+        }
+        XCTAssertEqual(bodyRedirect("POST", status: 307, from: first, to: first + "?x", delegate: otherHost), .some(nil))
+        XCTAssertEqual(otherHost.calls, 1)
+        let toGet = RewritingRedirectDelegate { request in
+            var changed = request
+            changed.httpMethod = "GET"
+            changed.httpBody = nil
+            return changed
+        }
+        XCTAssertEqual(bodyRedirect("POST", status: 308, from: first, to: first + "?x", delegate: toGet), .some(nil))
+        // A redirect refused up front is not offered to the delegate at all.
+        let unused = RewritingRedirectDelegate { $0 }
+        XCTAssertEqual(bodyRedirect("POST", status: 302, from: first, to: first + "?x", delegate: unused), .some(nil))
+        XCTAssertEqual(unused.calls, 0)
+    }
+
+    /// The proxy's decision for a GET redirect whose current hop may differ
+    /// from the first request, with credentials set on the request.
+    private func credentialRedirect(first: String, current: String, to target: String,
+                                    clientCertificate: URLCredential? = nil,
+                                    delegate: URLSessionDelegate? = nil) -> URLRequest?? {
+        let proxy = SocketSessionDelegateProxy(tlsConfiguration: .systemDefault, forwardingDelegate: delegate,
+                                               clientCertificate: clientCertificate,
+                                               credentialOrigin: URL(string: first))
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: URLRequest(url: URL(string: first)!))
+        var next = URLRequest(url: URL(string: target)!)
+        next.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
+        next.setValue("Basic proxy-secret", forHTTPHeaderField: "Proxy-Authorization")
+        let response = HTTPURLResponse(url: URL(string: current)!, statusCode: 307, httpVersion: nil,
+                                       headerFields: ["Location": target])!
+        var decided: URLRequest??
+        proxy.urlSession(session, task: task, willPerformHTTPRedirection: response, newRequest: next) {
+            decided = .some($0)
+        }
+        return decided
+    }
+
+    func testCredentialsEndWithTheFirstChangeOfOrigin() throws {
+        let a = "https://chat.example.com/socket.io/"
+        let same = try XCTUnwrap(credentialRedirect(first: a, current: a, to: a + "?x"))
+        XCTAssertEqual(same?.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+        XCTAssertEqual(same?.value(forHTTPHeaderField: "Proxy-Authorization"), "Basic proxy-secret")
+        for target in ["https://node3.example.com/socket.io/", "https://chat.example.com:8443/socket.io/"] {
+            let other = try XCTUnwrap(credentialRedirect(first: a, current: a, to: target))
+            XCTAssertNil(other?.value(forHTTPHeaderField: "Authorization"), target)
+            XCTAssertNil(other?.value(forHTTPHeaderField: "Proxy-Authorization"), target)
+        }
+        // A -> B -> A: the hop back to the first origin does not restore them.
+        let back = try XCTUnwrap(credentialRedirect(first: a, current: "https://node3.example.com/socket.io/", to: a))
+        XCTAssertNil(back?.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertNil(back?.value(forHTTPHeaderField: "Proxy-Authorization"))
+    }
+
+    func testAClientCertificateBlocksRedirectsToAnotherOrigin() throws {
+        // The proxy only checks that a certificate is configured.
+        let certificate = URLCredential(user: "stand-in", password: "identity", persistence: .none)
+        let a = "https://chat.example.com/socket.io/"
+        let same = try XCTUnwrap(credentialRedirect(first: a, current: a, to: a + "?x", clientCertificate: certificate))
+        XCTAssertEqual(same?.url?.absoluteString, a + "?x")
+        for target in ["https://node3.example.com/socket.io/", "https://chat.example.com:8443/socket.io/",
+                       "http://chat.example.com/socket.io/"] {
+            XCTAssertEqual(credentialRedirect(first: a, current: a, to: target, clientCertificate: certificate),
+                           .some(nil), target)
+        }
+        // Without a certificate the same redirect is followed.
+        XCTAssertNotNil(credentialRedirect(first: a, current: a, to: "https://node3.example.com/socket.io/") ?? nil)
+        // Refused up front without asking the delegate, and checked again after it.
+        let unused = RewritingRedirectDelegate { $0 }
+        XCTAssertEqual(credentialRedirect(first: a, current: a, to: "https://node3.example.com/socket.io/",
+                                          clientCertificate: certificate, delegate: unused), .some(nil))
+        XCTAssertEqual(unused.calls, 0)
+        let elsewhere = RewritingRedirectDelegate { request in
+            var changed = request
+            changed.url = URL(string: "https://evil.test/socket.io/")
+            return changed
+        }
+        XCTAssertEqual(credentialRedirect(first: a, current: a, to: a + "?x", clientCertificate: certificate,
+                                          delegate: elsewhere), .some(nil))
+        XCTAssertEqual(elsewhere.calls, 1)
+    }
+
+    func testAWebSocketHandshakeFollowsNoRedirect() {
+        let queue = DispatchQueue(label: "redirect.websocket.unit")
+        let first = URLRequest(url: URL(string: "wss://chat.example.com/socket.io/?transport=websocket")!)
+        let connection = URLSessionWebSocketConnection(request: first, queue: queue, configuration: .ephemeral,
+                                                       maximumMessageSize: 4096)
+        let unused = RewritingRedirectDelegate { $0 }
+        let proxy = WebSocketSessionDelegateProxy(owner: connection, tlsConfiguration: .systemDefault,
+                                                  forwardingDelegate: unused)
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.webSocketTask(with: first)
+        for target in ["wss://chat.example.com/socket.io/?x", "wss://node3.example.com/socket.io/"] {
+            for status in [301, 302, 307, 308] {
+                let response = HTTPURLResponse(url: first.url!, statusCode: status, httpVersion: nil,
+                                               headerFields: ["Location": target])!
+                var decided: URLRequest??
+                proxy.urlSession(session, task: task, willPerformHTTPRedirection: response,
+                                 newRequest: URLRequest(url: URL(string: target)!)) { decided = .some($0) }
+                XCTAssertEqual(decided, .some(nil), "\(status) \(target)")
+            }
+        }
+        XCTAssertEqual(unused.calls, 0)
+    }
+}
